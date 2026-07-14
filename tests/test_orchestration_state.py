@@ -35,6 +35,7 @@ CAPABILITY_PREFLIGHT = {
     "per_thread_receipts": True,
     "worker_profile_enforceable": True,
     "supervisor_profile_enforceable": True,
+    "connector_read_adapter_receipts": True,
 }
 
 
@@ -191,11 +192,10 @@ def set_selection(value, *, umbrella=10, issue=11, base=SHA_A):
         ),
         issue_evidence=issue_evidence,
     )
-    receipt = rs.select_next_task(
+    receipt = select_from_connector(
         value,
         [snapshot],
-        refresh_timestamp=REFRESH_TIME,
-        refresh_manifest=refresh_manifest(value, {source_umbrella: [issue]}, [snapshot]),
+        refresh_manifest(value, {source_umbrella: [issue]}, [snapshot]),
     )
     receipt["selected_umbrella"] = umbrella
     receipt["base_sha"] = base
@@ -251,6 +251,69 @@ def refresh_manifest(value, discovered, snapshots=None):
             for umbrella in value["activation"]["umbrella_issues"]
         ],
     }
+
+
+def raw_snapshot_document(snapshot):
+    return {
+        "issue": snapshot.issue,
+        "umbrella": snapshot.umbrella,
+        "repository": snapshot.repository,
+        "open": snapshot.open,
+        "completion_verified": snapshot.completion_verified,
+        "dependencies": list(snapshot.dependencies),
+        "external_blockers": list(snapshot.external_blockers),
+        "membership_evidence": copy.deepcopy(list(snapshot.membership_evidence)),
+        "issue_evidence": copy.deepcopy(snapshot.issue_evidence),
+        "completion_evidence": copy.deepcopy(snapshot.completion_evidence),
+        "required_order_index": snapshot.required_order_index,
+        "ambiguous_active_implementation": snapshot.ambiguous_active_implementation,
+        "owner_priority": snapshot.owner_priority,
+        "unlocks": snapshot.unlocks,
+        "overlap_risk": snapshot.overlap_risk,
+    }
+
+
+def select_from_connector(value, snapshots, manifest):
+    snapshot_evidence = [raw_snapshot_document(snapshot) for snapshot in snapshots]
+    adapter_core = {
+        "verified_by_service": True,
+        "connector": "github",
+        "operation": rs.CONNECTOR_REFRESH_OPERATION,
+        "adapter_id": "github-adapter:roundlet-test",
+        "activation_id": value["activation"]["id"],
+        "repository": "owner/project",
+        "repository_id": 123,
+        "orchestrator_thread_id": value["activation"]["orchestrator_thread_id"],
+        "project_identity": value["activation"]["orchestrator_creation_receipt"][
+            "project_identity"
+        ],
+        "created_at": "2026-07-14T00:00:00Z",
+    }
+
+    def read_connector(request):
+        core = {
+            "verified_by_connector": True,
+            "connector": "github",
+            "operation": rs.CONNECTOR_REFRESH_OPERATION,
+            "adapter_id": request["adapter_id"],
+            "request_digest": rs.digest_json(request),
+            "service_receipt_id": f"github-read:{rs.digest_json(request)[:16]}",
+            "refresh_manifest": copy.deepcopy(manifest),
+            "snapshot_evidence": copy.deepcopy(snapshot_evidence),
+        }
+        return {**core, "response_digest": rs.digest_json(core)}
+
+    adapter = rs.bind_github_connector_read_adapter(
+        value,
+        service_receipt={**adapter_core, "receipt_digest": rs.digest_json(adapter_core)},
+        read_connector=read_connector,
+    )
+    sealed = rs.execute_connector_refresh(
+        value,
+        refresh_timestamp=REFRESH_TIME,
+        adapter=adapter,
+    )
+    return rs.select_next_task(value, sealed)
 
 
 def assigned_state(*, umbrellas=None):
@@ -419,11 +482,10 @@ def complete_scope(value):
         issue_evidence=issue_evidence,
         completion_evidence=merged_completion_evidence(11, issue_evidence["revision"]),
     )
-    rs.select_next_task(
+    select_from_connector(
         value,
         [snapshot],
-        refresh_timestamp=REFRESH_TIME,
-        refresh_manifest=refresh_manifest(
+        refresh_manifest(
             value,
             {value["activation"]["umbrella_issues"][0]: [11]},
             [snapshot],
@@ -584,18 +646,20 @@ class ActivationTests(unittest.TestCase):
             rs.assert_repository_target(repo, "owner/project")
 
     def test_activation_blocks_when_service_cannot_prove_child_isolation(self):
-        unverifiable = {**CAPABILITY_PREFLIGHT, "supervisor_profile_enforceable": False}
-        with self.assertRaises(rs.ScopeError):
-            rs.new_state(
-                activation_request(),
-                identity(),
-                activation_id="activation-0001",
-                orchestrator_thread_id="orchestrator-1",
-                installed_roundlet_digest=DIGEST,
-                owner_actor=OWNER_ACTOR,
-                capability_preflight=unverifiable,
-                orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
-            )
+        for key in ("supervisor_profile_enforceable", "connector_read_adapter_receipts"):
+            with self.subTest(key=key):
+                unverifiable = {**CAPABILITY_PREFLIGHT, key: False}
+                with self.assertRaises(rs.ScopeError):
+                    rs.new_state(
+                        activation_request(),
+                        identity(),
+                        activation_id="activation-0001",
+                        orchestrator_thread_id="orchestrator-1",
+                        installed_roundlet_digest=DIGEST,
+                        owner_actor=OWNER_ACTOR,
+                        capability_preflight=unverifiable,
+                        orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
+                    )
 
     def test_activation_binds_verified_numeric_owner_actor(self):
         spoofed = {**OWNER_ACTOR, "verified_by_connector": False}
@@ -1447,6 +1511,17 @@ class MaintenanceTests(unittest.TestCase):
         with self.assertRaises(rs.MigrationError):
             rs._migrate_state_document(old)
 
+    def test_schema_three_migration_rejects_missing_connector_origin_proof(self):
+        old = state()
+        old["versions"].update(
+            {"schema": 3, "protocol": "2", "review_contract": "2", "policy": "2"}
+        )
+        old["activation"]["capability_preflight"].pop(
+            "connector_read_adapter_receipts"
+        )
+        with self.assertRaisesRegex(rs.MigrationError, "connector adapter receipt"):
+            rs._migrate_state_document(old)
+
     def test_paused_schema_migration_can_resume_and_failure_is_atomic(self):
         with tempfile.TemporaryDirectory() as temporary:
             paused = self._paused()
@@ -1774,11 +1849,10 @@ class SelectionTests(unittest.TestCase):
         for snapshot in snapshots:
             if snapshot.umbrella in discovered:
                 discovered[snapshot.umbrella].append(snapshot.issue)
-        return rs.select_next_task(
+        return select_from_connector(
             value,
             snapshots,
-            refresh_timestamp=REFRESH_TIME,
-            refresh_manifest=refresh_manifest(value, discovered, snapshots),
+            refresh_manifest(value, discovered, snapshots),
         )
 
     def test_selects_only_candidate(self):
@@ -1872,11 +1946,52 @@ class SelectionTests(unittest.TestCase):
             issue_evidence=issue_evidence,
         )
         with self.assertRaisesRegex(rs.ValidationError, "supported connector receipt"):
-            rs.select_next_task(
+            select_from_connector(
                 value,
                 [snapshot],
-                refresh_timestamp=REFRESH_TIME,
-                refresh_manifest=refresh_manifest(value, {10: [999]}),
+                refresh_manifest(value, {10: [999]}),
+            )
+
+    def test_schema_valid_caller_mappings_lack_connector_origin_capability(self):
+        for snapshot in (snap(999), snap(11, completed=True, open=False)):
+            value = state()
+            fabricated = {
+                "refresh_manifest": refresh_manifest(
+                    value, {10: [snapshot.issue]}, [snapshot]
+                ),
+                "snapshot_evidence": [raw_snapshot_document(snapshot)],
+                "verified_by_connector": True,
+            }
+            with self.assertRaisesRegex(rs.ScopeError, "opaque connector refresh"):
+                rs.select_next_task(value, fabricated)
+            with self.assertRaisesRegex(rs.ScopeError, "service-issued GitHub adapter"):
+                rs.execute_connector_refresh(
+                    value,
+                    refresh_timestamp=REFRESH_TIME,
+                    adapter=lambda request: fabricated,
+                )
+
+    def test_connector_adapter_binding_rejects_unverified_service_metadata(self):
+        value = state()
+        core = {
+            "verified_by_service": False,
+            "connector": "github",
+            "operation": rs.CONNECTOR_REFRESH_OPERATION,
+            "adapter_id": "github-adapter:forged",
+            "activation_id": value["activation"]["id"],
+            "repository": "owner/project",
+            "repository_id": 123,
+            "orchestrator_thread_id": value["activation"]["orchestrator_thread_id"],
+            "project_identity": value["activation"]["orchestrator_creation_receipt"][
+                "project_identity"
+            ],
+            "created_at": "2026-07-14T00:00:00Z",
+        }
+        with self.assertRaisesRegex(rs.ScopeError, "did not verify"):
+            rs.bind_github_connector_read_adapter(
+                value,
+                service_receipt={**core, "receipt_digest": rs.digest_json(core)},
+                read_connector=lambda request: {},
             )
 
     def test_manifest_digest_and_revisions_are_recomputed(self):
@@ -1885,11 +2000,10 @@ class SelectionTests(unittest.TestCase):
         manifest = refresh_manifest(value, {10: [11]}, [snapshot])
         manifest["umbrellas"][0]["membership_evidence_digest"] = "f" * 64
         with self.assertRaisesRegex(rs.ScopeError, "not derived from canonical connector evidence"):
-            rs.select_next_task(
+            select_from_connector(
                 value,
                 [snapshot],
-                refresh_timestamp=REFRESH_TIME,
-                refresh_manifest=manifest,
+                manifest,
             )
 
         value = state()
@@ -1897,11 +2011,10 @@ class SelectionTests(unittest.TestCase):
         manifest = refresh_manifest(value, {10: [11]}, [snapshot])
         manifest["umbrellas"][0]["umbrella_revision"] = "f" * 64
         with self.assertRaisesRegex(rs.ScopeError, "umbrella revision was not derived"):
-            rs.select_next_task(
+            select_from_connector(
                 value,
                 [snapshot],
-                refresh_timestamp=REFRESH_TIME,
-                refresh_manifest=manifest,
+                manifest,
             )
 
         value = state()
@@ -1917,11 +2030,10 @@ class SelectionTests(unittest.TestCase):
             issue_evidence=issue_evidence,
         )
         with self.assertRaisesRegex(rs.ScopeError, "issue evidence revision was not derived"):
-            rs.select_next_task(
+            select_from_connector(
                 value,
                 [snapshot],
-                refresh_timestamp=REFRESH_TIME,
-                refresh_manifest=refresh_manifest(value, {10: [11]}, [snapshot]),
+                refresh_manifest(value, {10: [11]}, [snapshot]),
             )
 
     def test_snapshot_boolean_fields_are_strict(self):
@@ -1965,11 +2077,10 @@ class SelectionTests(unittest.TestCase):
             completion_evidence=completion,
         )
         with self.assertRaisesRegex(rs.ScopeError, "closed and merged PR"):
-            rs.select_next_task(
+            select_from_connector(
                 value,
                 [snapshot],
-                refresh_timestamp=REFRESH_TIME,
-                refresh_manifest=refresh_manifest(value, {10: [11]}, [snapshot]),
+                refresh_manifest(value, {10: [11]}, [snapshot]),
             )
 
     def test_hand_built_selection_cannot_dispatch_arbitrary_issue(self):
@@ -2001,30 +2112,27 @@ class SelectionTests(unittest.TestCase):
         incomplete = refresh_manifest(value, {10: [11], 20: []})
         incomplete["umbrellas"] = incomplete["umbrellas"][:1]
         with self.assertRaises(rs.ScopeError):
-            rs.select_next_task(
+            select_from_connector(
                 value,
                 [snap(11, umbrella=10)],
-                refresh_timestamp="2026-07-14T01:00:00Z",
-                refresh_manifest=incomplete,
+                incomplete,
             )
         empty = refresh_manifest(value, {10: [11], 20: []})
         empty["umbrellas"] = []
         with self.assertRaises(rs.ScopeError):
-            rs.select_next_task(
+            select_from_connector(
                 value,
                 [snap(11, umbrella=10)],
-                refresh_timestamp="2026-07-14T01:00:00Z",
-                refresh_manifest=empty,
+                empty,
             )
 
     def test_umbrella_as_task_and_completion_without_receipt_are_blocked(self):
         value = state()
         with self.assertRaises(rs.ScopeError):
-            rs.select_next_task(
+            select_from_connector(
                 value,
                 [snap(10, umbrella=10)],
-                refresh_timestamp="2026-07-14T01:00:00Z",
-                refresh_manifest=refresh_manifest(value, {10: [10]}),
+                refresh_manifest(value, {10: [10]}),
             )
         value = state()
         rs.transition_state(value, "selecting-task")
@@ -2377,11 +2485,10 @@ class PersistenceAndMailboxTests(unittest.TestCase):
                 ),
                 issue_evidence=issue_evidence,
             )
-            value["selection"] = rs.select_next_task(
+            value["selection"] = select_from_connector(
                 value,
                 [snapshot],
-                refresh_timestamp=REFRESH_TIME,
-                refresh_manifest=refresh_manifest(value, {10: [11]}, [snapshot]),
+                refresh_manifest(value, {10: [11]}, [snapshot]),
             )
             payload = {
                 "protocol_version": value["versions"]["protocol"],
@@ -2445,11 +2552,10 @@ class PersistenceAndMailboxTests(unittest.TestCase):
                 ),
                 issue_evidence=issue_evidence,
             )
-            value["selection"] = rs.select_next_task(
+            value["selection"] = select_from_connector(
                 value,
                 [snapshot],
-                refresh_timestamp=REFRESH_TIME,
-                refresh_manifest=refresh_manifest(value, {10: [11]}, [snapshot]),
+                refresh_manifest(value, {10: [11]}, [snapshot]),
             )
             payload = {
                 "protocol_version": value["versions"]["protocol"],

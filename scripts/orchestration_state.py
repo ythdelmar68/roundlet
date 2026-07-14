@@ -80,10 +80,10 @@ ROLE_CAPABILITY_PROFILES = {
     },
 }
 
-SCHEMA_VERSION = 3
-PROTOCOL_VERSION = "2"
-REVIEW_CONTRACT_VERSION = "2"
-POLICY_VERSION = "2"
+SCHEMA_VERSION = 4
+PROTOCOL_VERSION = "3"
+REVIEW_CONTRACT_VERSION = "3"
+POLICY_VERSION = "3"
 VERSION_KEYS = {"schema", "protocol", "review_contract", "policy"}
 LOCAL_CLEANUP_KEYS = {
     "worktree_removed",
@@ -300,6 +300,7 @@ def validate_capability_preflight(preflight: Mapping[str, Any]) -> dict[str, Any
         "per_thread_receipts": True,
         "worker_profile_enforceable": True,
         "supervisor_profile_enforceable": True,
+        "connector_read_adapter_receipts": True,
     }
     if not isinstance(preflight, Mapping) or set(preflight) != set(required):
         raise ValidationError("capability preflight must contain the exact isolation proof fields")
@@ -2698,6 +2699,42 @@ def _migrate_state_document(document: Mapping[str, Any], target_version: int = S
                 "migrated_at": utc_now(),
             }
         current = 3
+    if current == 3 and target_version >= 4:
+        activation = result.get("activation")
+        preflight = activation.get("capability_preflight", {}) if isinstance(activation, Mapping) else {}
+        if preflight.get("connector_read_adapter_receipts") is not True:
+            raise MigrationError(
+                "schema-3 state lacks service proof for connector adapter receipt enforcement"
+            )
+        selection = result.get("selection")
+        if isinstance(selection, Mapping) and "connector_refresh_receipt" not in selection:
+            raise MigrationError(
+                "schema-3 selection lacks connector-origin proof and cannot be migrated"
+            )
+        maintenance = result.setdefault("maintenance", {})
+        if result.get("phase") == "paused-maintenance":
+            if maintenance.get("stored_versions") != versions:
+                raise MigrationError("paused checkpoint versions do not match schema-3 input")
+            if maintenance.get("schedule_state") != "paused":
+                raise MigrationError("schema-3 checkpoint lacks paused schedule evidence")
+        versions.update(
+            {
+                "schema": 4,
+                "protocol": PROTOCOL_VERSION,
+                "review_contract": REVIEW_CONTRACT_VERSION,
+                "policy": POLICY_VERSION,
+            }
+        )
+        if result.get("phase") == "paused-maintenance":
+            maintenance["migrated_from_versions"] = original_versions
+            maintenance["stored_versions"] = copy.deepcopy(dict(versions))
+            maintenance["migration_receipt"] = {
+                "from_schema": original_versions.get("schema"),
+                "to_schema": 4,
+                "input_digest": digest_json(document),
+                "migrated_at": utc_now(),
+            }
+        current = 4
     if current != target_version:
         raise MigrationError(f"no supported migration from schema {current} to {target_version}")
     return result
@@ -2972,6 +3009,169 @@ class IssueSnapshot:
             raise ValidationError("snapshot completion flag must exactly match completion evidence presence")
         if self.completion_verified and self.open:
             raise ScopeError("completed snapshot cannot remain open")
+
+
+_CONNECTOR_ADAPTER_SEAL = object()
+_CONNECTOR_REFRESH_SEAL = object()
+CONNECTOR_REFRESH_OPERATION = "complete-scope-refresh"
+
+
+class _GitHubConnectorReadAdapter:
+    """Process-local capability bound to service-returned adapter metadata and one callback."""
+
+    __slots__ = ("_seal", "adapter_id", "activation_id", "read")
+
+    def __init__(
+        self,
+        *,
+        seal: object,
+        adapter_id: str,
+        activation_id: str,
+        read: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    ) -> None:
+        if seal is not _CONNECTOR_ADAPTER_SEAL:
+            raise ScopeError("GitHub connector adapters require a service-issued capability")
+        self._seal = seal
+        self.adapter_id = adapter_id
+        self.activation_id = activation_id
+        self.read = read
+
+
+def bind_github_connector_read_adapter(
+    state: Mapping[str, Any],
+    *,
+    service_receipt: Mapping[str, Any],
+    read_connector: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+) -> _GitHubConnectorReadAdapter:
+    """Bind the installed connector callback to exact service-returned capability metadata."""
+    required = {
+        "verified_by_service",
+        "connector",
+        "operation",
+        "adapter_id",
+        "activation_id",
+        "repository",
+        "repository_id",
+        "orchestrator_thread_id",
+        "project_identity",
+        "created_at",
+        "receipt_digest",
+    }
+    if not isinstance(service_receipt, Mapping) or set(service_receipt) != required:
+        raise ValidationError("connector adapter requires exact service capability metadata")
+    core = {
+        key: copy.deepcopy(value)
+        for key, value in service_receipt.items()
+        if key != "receipt_digest"
+    }
+    if require_content_digest(service_receipt.get("receipt_digest"), "connector adapter receipt digest") != digest_json(core):
+        raise ScopeError("connector adapter capability receipt digest is invalid")
+    if (
+        service_receipt.get("verified_by_service") is not True
+        or service_receipt.get("connector") != "github"
+        or service_receipt.get("operation") != CONNECTOR_REFRESH_OPERATION
+    ):
+        raise ScopeError("service did not verify the required GitHub connector read adapter")
+    activation = state.get("activation", {})
+    if activation.get("capability_preflight", {}).get("connector_read_adapter_receipts") is not True:
+        raise ScopeError("activation cannot prove connector adapter receipt enforcement")
+    if service_receipt.get("activation_id") != activation.get("id"):
+        raise ScopeError("connector adapter capability belongs to another activation")
+    assert_repository_target(
+        activation.get("repository", {}),
+        str(service_receipt.get("repository", "")),
+        target_repository_id=service_receipt.get("repository_id"),
+    )
+    orchestrator = activation.get("orchestrator_creation_receipt", {})
+    if (
+        service_receipt.get("orchestrator_thread_id") != activation.get("orchestrator_thread_id")
+        or service_receipt.get("project_identity") != orchestrator.get("project_identity")
+    ):
+        raise ScopeError("connector adapter capability is not bound to the active Orchestrator project")
+    adapter_id = service_receipt.get("adapter_id")
+    if not isinstance(adapter_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}", adapter_id
+    ):
+        raise ValidationError("connector adapter ID is malformed")
+    parse_utc_timestamp(service_receipt.get("created_at"), "connector adapter creation time")
+    if not callable(read_connector):
+        raise ValidationError("connector adapter callback is unavailable")
+    return _GitHubConnectorReadAdapter(
+        seal=_CONNECTOR_ADAPTER_SEAL,
+        adapter_id=adapter_id,
+        activation_id=str(activation["id"]),
+        read=read_connector,
+    )
+
+
+class _ConnectorRefreshReceipt:
+    """Process-local capability issued only after the connector read gateway validates a response."""
+
+    __slots__ = (
+        "_seal",
+        "request",
+        "service_receipt_id",
+        "response_digest",
+        "manifest",
+        "snapshots",
+        "snapshot_evidence",
+    )
+
+    def __init__(
+        self,
+        *,
+        seal: object,
+        request: Mapping[str, Any],
+        service_receipt_id: str,
+        response_digest: str,
+        manifest: Mapping[str, Any],
+        snapshots: Sequence[IssueSnapshot],
+        snapshot_evidence: Sequence[Mapping[str, Any]],
+    ) -> None:
+        if seal is not _CONNECTOR_REFRESH_SEAL:
+            raise ScopeError("connector refresh receipts can only be issued by the read gateway")
+        self._seal = seal
+        self.request = copy.deepcopy(dict(request))
+        self.service_receipt_id = service_receipt_id
+        self.response_digest = response_digest
+        self.manifest = copy.deepcopy(dict(manifest))
+        self.snapshots = tuple(snapshots)
+        self.snapshot_evidence = copy.deepcopy(list(snapshot_evidence))
+
+
+def _connector_refresh_request(
+    state: Mapping[str, Any],
+    *,
+    refresh_timestamp: str,
+    base_sha: str,
+    adapter_id: str,
+) -> dict[str, Any]:
+    activation = state.get("activation", {})
+    repository = activation.get("repository", {})
+    request = {
+        "operation": CONNECTOR_REFRESH_OPERATION,
+        "adapter_id": adapter_id,
+        "activation_id": activation.get("id"),
+        "repository": repository.get("owner_name"),
+        "repository_id": repository.get("repository_id"),
+        "base_sha": require_full_sha(base_sha, "connector refresh base SHA"),
+        "umbrella_issues": list(activation.get("umbrella_issues", [])),
+        "refresh_timestamp": refresh_timestamp,
+    }
+    parse_utc_timestamp(refresh_timestamp, "selection refresh timestamp")
+    if not isinstance(adapter_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}", adapter_id
+    ):
+        raise ValidationError("connector refresh adapter ID is malformed")
+    if not isinstance(request["activation_id"], str) or not request["activation_id"]:
+        raise ValidationError("connector refresh requires an active activation identity")
+    normalize_owner_name(str(request["repository"]))
+    require_positive_issue(request["repository_id"], "connector refresh repository ID")
+    if not request["umbrella_issues"]:
+        raise ValidationError("connector refresh requires an authorized umbrella scope")
+    for umbrella in request["umbrella_issues"]:
+        require_positive_issue(umbrella, "connector refresh umbrella")
+    return request
 
 
 def _require_connector_timestamp(value: Any, label: str, refresh_timestamp: str) -> str:
@@ -3472,10 +3672,115 @@ def normalize_refresh_manifest(
     }
 
 
+def execute_connector_refresh(
+    state: Mapping[str, Any],
+    *,
+    refresh_timestamp: str,
+    adapter: _GitHubConnectorReadAdapter,
+) -> _ConnectorRefreshReceipt:
+    """Invoke the trusted connector-read adapter once and seal its exact response for selection."""
+    if state.get("task") is not None:
+        raise TransitionError("do not refresh selection while one task remains active")
+    if state.get("phase") not in {"selecting-task", "scope-preflight", "waiting-dependency", "task-done"}:
+        raise TransitionError("connector selection refresh is not allowed in the current phase")
+    if (
+        not isinstance(adapter, _GitHubConnectorReadAdapter)
+        or adapter._seal is not _CONNECTOR_ADAPTER_SEAL
+    ):
+        raise ScopeError("connector refresh requires a service-issued GitHub adapter capability")
+    activation = state.get("activation", {})
+    if adapter.activation_id != activation.get("id"):
+        raise ScopeError("connector read adapter belongs to another activation")
+    request = _connector_refresh_request(
+        state,
+        refresh_timestamp=refresh_timestamp,
+        base_sha=activation.get("base_sha"),
+        adapter_id=adapter.adapter_id,
+    )
+    request_digest = digest_json(request)
+    response = adapter.read(copy.deepcopy(request))
+    required = {
+        "verified_by_connector",
+        "connector",
+        "operation",
+        "adapter_id",
+        "request_digest",
+        "service_receipt_id",
+        "refresh_manifest",
+        "snapshot_evidence",
+        "response_digest",
+    }
+    if not isinstance(response, Mapping) or set(response) != required:
+        raise ValidationError("connector refresh response requires exact service-returned fields")
+    if response.get("verified_by_connector") is not True or response.get("connector") != "github":
+        raise ScopeError("selection refresh did not originate from the GitHub connector adapter")
+    if response.get("operation") != CONNECTOR_REFRESH_OPERATION:
+        raise ScopeError("connector refresh response belongs to another operation")
+    if response.get("adapter_id") != adapter.adapter_id:
+        raise ScopeError("connector refresh response belongs to another service adapter")
+    if response.get("request_digest") != request_digest:
+        raise ScopeError("connector refresh response is not bound to the activation request")
+    service_receipt_id = response.get("service_receipt_id")
+    if not isinstance(service_receipt_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}", service_receipt_id
+    ):
+        raise ValidationError("connector refresh requires a bounded service receipt ID")
+    evidence = response.get("snapshot_evidence")
+    if not isinstance(evidence, list):
+        raise ValidationError("connector refresh snapshot evidence must be an ordered list")
+    snapshots = [_snapshot_from_document(item) for item in evidence]
+    normalized_manifest = normalize_refresh_manifest(
+        state,
+        snapshots,
+        response.get("refresh_manifest", {}),
+        refresh_timestamp=refresh_timestamp,
+    )
+    umbrella_revisions = {
+        entry["umbrella_issue"]: entry["umbrella_revision"]
+        for entry in normalized_manifest["umbrellas"]
+    }
+    canonical_evidence = [
+        snapshot_document(
+            state,
+            snapshot,
+            umbrella_revision=umbrella_revisions[snapshot.umbrella],
+            refresh_timestamp=refresh_timestamp,
+        )
+        for snapshot in snapshots
+    ]
+    if evidence != canonical_evidence:
+        raise ScopeError("connector refresh response is not canonical")
+    response_core = {
+        "verified_by_connector": True,
+        "connector": "github",
+        "operation": CONNECTOR_REFRESH_OPERATION,
+        "adapter_id": adapter.adapter_id,
+        "request_digest": request_digest,
+        "service_receipt_id": service_receipt_id,
+        "refresh_manifest": normalized_manifest,
+        "snapshot_evidence": canonical_evidence,
+    }
+    response_digest = require_content_digest(
+        response.get("response_digest"), "connector refresh response digest"
+    )
+    if response_digest != digest_json(response_core):
+        raise ScopeError("connector refresh response digest is invalid")
+    return _ConnectorRefreshReceipt(
+        seal=_CONNECTOR_REFRESH_SEAL,
+        request=request,
+        service_receipt_id=service_receipt_id,
+        response_digest=response_digest,
+        manifest=normalized_manifest,
+        snapshots=snapshots,
+        snapshot_evidence=canonical_evidence,
+    )
+
+
 def validate_selection_receipt(state: Mapping[str, Any], receipt: Mapping[str, Any]) -> None:
     required = {
         "refresh_timestamp",
         "refresh_manifest",
+        "connector_refresh_receipt",
         "snapshot_evidence",
         "source_revisions",
         "eligible_candidates",
@@ -3508,12 +3813,64 @@ def validate_selection_receipt(state: Mapping[str, Any], receipt: Mapping[str, A
     snapshots: list[IssueSnapshot] = []
     for item in evidence:
         snapshots.append(_snapshot_from_document(item))
-    normalize_refresh_manifest(
+    normalized_manifest = normalize_refresh_manifest(
         state,
         snapshots,
         receipt.get("refresh_manifest", {}),
         refresh_timestamp=str(receipt.get("refresh_timestamp", "")),
     )
+    connector_receipt = receipt.get("connector_refresh_receipt")
+    connector_required = {
+        "verified_by_connector",
+        "connector",
+        "operation",
+        "adapter_id",
+        "request_digest",
+        "service_receipt_id",
+        "response_digest",
+    }
+    if not isinstance(connector_receipt, Mapping) or set(connector_receipt) != connector_required:
+        raise ValidationError("selection receipt lacks exact connector-origin proof")
+    if (
+        connector_receipt.get("verified_by_connector") is not True
+        or connector_receipt.get("connector") != "github"
+        or connector_receipt.get("operation") != CONNECTOR_REFRESH_OPERATION
+    ):
+        raise ScopeError("selection receipt was not produced by the GitHub connector refresh gateway")
+    service_receipt_id = connector_receipt.get("service_receipt_id")
+    if not isinstance(service_receipt_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}", service_receipt_id
+    ):
+        raise ValidationError("selection connector service receipt ID is malformed")
+    adapter_id = connector_receipt.get("adapter_id")
+    if not isinstance(adapter_id, str) or not re.fullmatch(
+        r"[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}", adapter_id
+    ):
+        raise ValidationError("selection connector adapter ID is malformed")
+    expected_request = _connector_refresh_request(
+        state,
+        refresh_timestamp=str(receipt.get("refresh_timestamp", "")),
+        base_sha=expected_base,
+        adapter_id=adapter_id,
+    )
+    request_digest = digest_json(expected_request)
+    if connector_receipt.get("request_digest") != request_digest:
+        raise ScopeError("selection connector receipt is not bound to the activation request")
+    response_core = {
+        "verified_by_connector": True,
+        "connector": "github",
+        "operation": CONNECTOR_REFRESH_OPERATION,
+        "adapter_id": adapter_id,
+        "request_digest": request_digest,
+        "service_receipt_id": service_receipt_id,
+        "refresh_manifest": normalized_manifest,
+        "snapshot_evidence": evidence,
+    }
+    response_digest = require_content_digest(
+        connector_receipt.get("response_digest"), "selection connector response digest"
+    )
+    if response_digest != digest_json(response_core):
+        raise ScopeError("selection connector response digest is invalid")
     expected_revisions = {
         str(item.issue): item.issue_evidence["revision"] for item in snapshots
     }
@@ -3691,17 +4048,30 @@ def _recompute_selection_fields(
 
 def select_next_task(
     state: MutableMapping[str, Any],
-    snapshots: Sequence[IssueSnapshot],
-    *,
-    refresh_timestamp: str,
-    refresh_manifest: Mapping[str, Any],
+    refresh_receipt: _ConnectorRefreshReceipt,
 ) -> dict[str, Any]:
-    """Atomically bind one complete refresh decision into the active state."""
+    """Atomically bind one connector-gateway-sealed refresh decision into active state."""
     if state.get("task") is not None:
         raise TransitionError("do not select another task while one task remains active")
     if state.get("phase") not in {"selecting-task", "scope-preflight", "waiting-dependency", "task-done"}:
         raise TransitionError("task selection is not allowed in the current phase")
     activation = state.get("activation", {})
+    if (
+        not isinstance(refresh_receipt, _ConnectorRefreshReceipt)
+        or refresh_receipt._seal is not _CONNECTOR_REFRESH_SEAL
+    ):
+        raise ScopeError("task selection requires an opaque connector refresh gateway receipt")
+    refresh_timestamp = str(refresh_receipt.request.get("refresh_timestamp", ""))
+    expected_request = _connector_refresh_request(
+        state,
+        refresh_timestamp=refresh_timestamp,
+        base_sha=activation.get("base_sha"),
+        adapter_id=str(refresh_receipt.request.get("adapter_id", "")),
+    )
+    if refresh_receipt.request != expected_request:
+        raise ScopeError("connector refresh receipt is stale for the active selection request")
+    snapshots = refresh_receipt.snapshots
+    refresh_manifest = refresh_receipt.manifest
     current_repo = normalize_owner_name(activation.get("repository", {}).get("owner_name", ""))
     umbrella_order = list(activation.get("umbrella_issues", []))
     if not umbrella_order:
@@ -3712,6 +4082,8 @@ def select_next_task(
         refresh_manifest,
         refresh_timestamp=refresh_timestamp,
     )
+    if normalized_manifest != refresh_receipt.manifest:
+        raise ScopeError("connector refresh manifest changed after gateway validation")
     by_issue: dict[int, IssueSnapshot] = {}
     for snapshot in snapshots:
         if normalize_owner_name(snapshot.repository) != current_repo:
@@ -3830,9 +4202,33 @@ def select_next_task(
         )
         for item in snapshots
     ]
+    if snapshot_evidence != refresh_receipt.snapshot_evidence:
+        raise ScopeError("connector snapshot evidence changed after gateway validation")
+    request_digest = digest_json(expected_request)
+    connector_response_core = {
+        "verified_by_connector": True,
+        "connector": "github",
+        "operation": CONNECTOR_REFRESH_OPERATION,
+        "adapter_id": expected_request["adapter_id"],
+        "request_digest": request_digest,
+        "service_receipt_id": refresh_receipt.service_receipt_id,
+        "refresh_manifest": normalized_manifest,
+        "snapshot_evidence": snapshot_evidence,
+    }
+    if refresh_receipt.response_digest != digest_json(connector_response_core):
+        raise ScopeError("connector refresh receipt lost its response binding")
     receipt = {
         "refresh_timestamp": refresh_timestamp,
         "refresh_manifest": normalized_manifest,
+        "connector_refresh_receipt": {
+            "verified_by_connector": True,
+            "connector": "github",
+            "operation": CONNECTOR_REFRESH_OPERATION,
+            "adapter_id": expected_request["adapter_id"],
+            "request_digest": request_digest,
+            "service_receipt_id": refresh_receipt.service_receipt_id,
+            "response_digest": refresh_receipt.response_digest,
+        },
         "snapshot_evidence": snapshot_evidence,
         "source_revisions": {
             str(item.issue): item.issue_evidence["revision"] for item in snapshots
