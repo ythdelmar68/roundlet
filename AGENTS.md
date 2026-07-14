@@ -1,28 +1,18 @@
-# Roundlet repository policy
+# Roundlet source repository policy
 
-## Scope and authority
+## Repository work
 
-- Treat this repository as the sole source, test, review, and maintenance history for Roundlet.
-- Keep Roundlet operationally and artifact-wise independent from any other orchestration runtime.
-- Never infer authority over a target repository from changes or approvals in this source repository.
-- Develop setup and maintenance changes in an isolated worktree and merge them only through a reviewed pull request with explicit owner approval.
-- Do not use a target-repository Roundlet activation to modify, install, approve, merge, release, or activate Roundlet itself.
+- Treat this repository as the source, test, review, and maintenance history for Roundlet.
+- Preserve unrelated changes and worktrees. Develop changes in an isolated worktree and merge them only through a reviewed pull request with explicit owner approval.
+- Never force-push, reset, rebase, bypass branch protection, publish releases, create tags, or delete unique work while performing ordinary repository work.
 
-## GitHub mutations
+## Source layout
 
-- Before any mutation, verify the exact repository, issue or pull request, expected head SHA, branch, activation, and authorization.
-- Use the Codex-native GitHub connector for GitHub issue, comment, pull request, ready, merge, close, and remote-branch operations.
-- Keep public comments curated. Never publish raw prompts, transcripts, hidden reasoning, credentials, private paths, or unbounded state.
-- Never force-push, reset, rebase, bypass branch protection, delete issues, publish releases, create tags, or delete unique work.
-
-## Implementation
-
-- Keep the repository root as the canonical skill root.
-- Keep deterministic runtime logic dependency-free in `scripts/orchestration_state.py`.
-- Keep detailed operator and role contracts one level below `references/`; keep `SKILL.md` concise and imperative.
-- Keep runtime state under `.codex-log/roundlet/` and out of version control.
+- Keep the repository root as the canonical skill source root.
+- Keep deterministic Python implementation dependency-free in `scripts/orchestration_state.py`.
+- Keep detailed operator and role documentation one level below `references/`; keep `SKILL.md` concise and imperative.
 - Do not add a README, changelog, installation guide, quick reference, transcript archive, duplicate operator guide, unnecessary icon, or empty optional directory.
-- Do not introduce provider credentials, `.env` files, cross-repository selectors, organization scans, or alternate authority surfaces.
+- Do not commit credentials, `.env` files, runtime state, test caches, or generated build artifacts.
 
 ## Verification
 

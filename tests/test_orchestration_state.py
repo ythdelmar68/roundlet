@@ -3,6 +3,8 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import unittest
 
@@ -57,9 +59,9 @@ def activation_request(*, umbrellas=None, base="main", operations=None):
     }
 
 
-def state(*, umbrellas=None, digest=DIGEST):
+def state(*, umbrellas=None, digest=DIGEST, operations=None):
     return rs.new_state(
-        activation_request(umbrellas=umbrellas),
+        activation_request(umbrellas=umbrellas, operations=operations),
         identity(),
         activation_id="activation-0001",
         orchestrator_thread_id="orchestrator-1",
@@ -139,6 +141,8 @@ def premerge_state():
         issue=11,
         pr_number=22,
         pr_url="https://github.com/owner/project/pull/22",
+        pr_state="open",
+        draft=True,
         base_sha=SHA_A,
         head_sha=SHA_B,
         branch="codex/issue-11",
@@ -336,6 +340,24 @@ class StateMachineTests(unittest.TestCase):
                 base_sha=SHA_A,
             )
 
+    def test_assign_rejects_unauthorized_worker_resource_creation(self):
+        operations = activation_request()["authorize"]
+        operations["create_task_branches"] = False
+        value = state(operations=operations)
+        rs.transition_state(value, "selecting-task")
+        set_selection(value)
+        with self.assertRaises(rs.ScopeError):
+            rs.assign_task(
+                value,
+                umbrella_issue=10,
+                issue=11,
+                branch="codex/issue-11",
+                worktree="/tmp/11",
+                worker_thread_id="worker-11",
+                base_sha=SHA_A,
+            )
+        self.assertIsNone(value["task"])
+
     def test_assign_binds_exact_selection_issue_and_base(self):
         value = state()
         rs.transition_state(value, "selecting-task")
@@ -378,12 +400,36 @@ class StateMachineTests(unittest.TestCase):
             issue=11,
             pr_number=22,
             pr_url="https://github.com/owner/project/pull/22",
+            pr_state="open",
+            draft=True,
             base_sha=SHA_A,
             head_sha=SHA_B,
             branch="codex/issue-11",
         )
         self.assertEqual(value["phase"], "draft-pr")
         self.assertEqual(value["task"]["pr_number"], 22)
+
+    def test_draft_pr_receipt_requires_live_open_draft_readback(self):
+        for pr_state, draft in (("closed", True), ("open", False)):
+            with self.subTest(pr_state=pr_state, draft=draft):
+                value = assigned_state()
+                rs.set_candidate(value, SHA_B, clean=True)
+                with self.assertRaises(rs.GuardError):
+                    rs.record_draft_pr(
+                        value,
+                        repository="owner/project",
+                        repository_id=123,
+                        issue=11,
+                        pr_number=22,
+                        pr_url="https://github.com/owner/project/pull/22",
+                        pr_state=pr_state,
+                        draft=draft,
+                        base_sha=SHA_A,
+                        head_sha=SHA_B,
+                        branch="codex/issue-11",
+                    )
+                self.assertEqual(value["phase"], "worker-running")
+                self.assertIsNone(value["task"]["draft_pr_receipt"])
 
     def test_draft_pr_rejects_wrong_repository(self):
         value = assigned_state()
@@ -396,6 +442,8 @@ class StateMachineTests(unittest.TestCase):
                 issue=11,
                 pr_number=22,
                 pr_url="https://github.com/other/project/pull/22",
+                pr_state="open",
+                draft=True,
                 base_sha=SHA_A,
                 head_sha=SHA_B,
                 branch="codex/issue-11",
@@ -411,6 +459,8 @@ class StateMachineTests(unittest.TestCase):
             issue=11,
             pr_number=22,
             pr_url="https://github.com/owner/project/pull/22",
+            pr_state="open",
+            draft=True,
             base_sha=SHA_A,
             head_sha=SHA_B,
             branch="codex/issue-11",
@@ -1209,9 +1259,12 @@ class SelectionTests(unittest.TestCase):
         with self.assertRaises(rs.SelectionBlocked):
             self.receipt([snap(11, deps=(12,)), snap(12, deps=(11,))])
 
-    def test_ambiguous_active_pr_waits(self):
-        receipt = self.receipt([snap(11, ambiguous=True)])
-        self.assertIsNone(receipt["selected_issue"])
+    def test_ambiguous_active_pr_permanently_blocks_scope(self):
+        with self.assertRaisesRegex(rs.SelectionBlocked, "ambiguous active implementation"):
+            self.receipt([snap(11, ambiguous=True)])
+        value = state()
+        rs.transition_state(value, "blocked")
+        self.assertIn(value["phase"], rs.TERMINAL_PHASES)
 
     def test_cross_repository_snapshot_rejected(self):
         with self.assertRaises(rs.ScopeError):
@@ -1332,6 +1385,8 @@ class PersistenceAndMailboxTests(unittest.TestCase):
             issue=11,
             pr_number=22,
             pr_url="https://github.com/owner/project/pull/22",
+            pr_state="open",
+            draft=True,
             base_sha=SHA_A,
             head_sha=SHA_B,
             branch="codex/issue-11",
@@ -1648,6 +1703,53 @@ class PersistenceAndMailboxTests(unittest.TestCase):
             self.assertEqual(receipt["worker_thread_id"], "worker-11")
             self.assertEqual(store.load()["phase"], "worker-running")
             self.assertFalse(mailboxes.path("github-context").exists())
+
+    def test_unauthorized_github_context_never_invokes_worker_creation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            operations = activation_request()["authorize"]
+            operations["create_task_branches"] = False
+            value = state(operations=operations)
+            rs.transition_state(value, "selecting-task")
+            value["selection"] = rs.select_next_task(
+                value,
+                [
+                    rs.IssueSnapshot(
+                        issue=11,
+                        umbrella=10,
+                        repository="owner/project",
+                        membership_sources=("formal-sub-issue",),
+                    )
+                ],
+                refresh_timestamp="2026-07-14T01:00:00Z",
+            )
+            payload = {
+                "protocol_version": value["versions"]["protocol"],
+                "review_contract_version": value["versions"]["review_contract"],
+                "activation_id": value["activation"]["id"],
+                "repository": "owner/project",
+                "repository_id": 123,
+                "selected_issue": 11,
+                "source_role": "orchestrator",
+                "source_thread_id": "orchestrator-1",
+                "phase": "selecting-task",
+                "base_sha": SHA_A,
+                "candidate_sha": None,
+                "idempotency_key": "context-key-0001",
+                "timestamp": "2026-07-14T02:00:00Z",
+            }
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            mailboxes = rs.MailboxStore(temporary)
+            rs.atomic_write_json(mailboxes.path("github-context"), payload)
+            calls = []
+            with self.assertRaises(rs.MailboxError):
+                mailboxes.consume(
+                    "github-context",
+                    store,
+                    mutate=lambda item: calls.append(item) or {"worker_thread_id": "forbidden"},
+                )
+            self.assertEqual(calls, [])
+            self.assertEqual(store.load()["mailbox_high_water"]["github-context"], 0)
 
 
 class CompactionTests(unittest.TestCase):
@@ -2114,6 +2216,39 @@ class GuardTests(unittest.TestCase):
                 guard.remove_task_worktree()
             self.assertFalse(any(call[0][:3] == ["git", "branch", "-d"] for call in runner.calls))
 
+    def test_cleanup_rejects_worktree_switched_to_unrelated_branch(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store, digest = self.cleanup_state(temporary)
+
+            class SwitchedBranchRunner(CleanupRunner):
+                def run(self, args, cwd=None):
+                    args = list(args)
+                    location = str(cwd) if cwd else None
+                    if args[:3] == ["git", "worktree", "list"]:
+                        self.calls.append((args, location))
+                        return (
+                            "worktree /repo\nHEAD " + SHA_A + "\nbranch refs/heads/main\n\n"
+                            "worktree /repo-worktrees/issue-11\nHEAD "
+                            + SHA_B
+                            + "\nbranch refs/heads/owner/unrelated"
+                        )
+                    if args[:3] == ["git", "branch", "--show-current"] and location == "/repo-worktrees/issue-11":
+                        self.calls.append((args, location))
+                        return "owner/unrelated"
+                    return super().run(args, cwd)
+
+            runner = SwitchedBranchRunner()
+            guard = rs.GuardedGit(
+                store,
+                activation_id="activation-0001",
+                installed_digest=digest,
+                skill_root=ROOT,
+                runner=runner,
+            )
+            with self.assertRaisesRegex(rs.GuardError, "porcelain branch differs"):
+                guard.remove_task_worktree()
+            self.assertFalse(any(call[0][:3] == ["git", "worktree", "remove"] for call in runner.calls))
+
 
 class StaticSkillTests(unittest.TestCase):
     def test_canonical_skeleton(self):
@@ -2174,6 +2309,17 @@ class StaticSkillTests(unittest.TestCase):
         self.assertFalse(any((ROOT / name).exists() for name in forbidden))
         self.assertFalse(any(path.suffix.lower() in {".png", ".jpg", ".jpeg", ".svg", ".ico"} for path in ROOT.rglob("*")))
 
+    def test_agents_policy_stays_source_repository_only(self):
+        text = (ROOT / "AGENTS.md").read_text().casefold()
+        for runtime_protocol in (
+            "github connector",
+            ".codex-log/roundlet",
+            "activation id",
+            "mailbox",
+            "target repository",
+        ):
+            self.assertNotIn(runtime_protocol, text)
+
     def test_runtime_has_no_prohibited_dependency_markers(self):
         text = (ROOT / "scripts/orchestration_state.py").read_text().casefold()
         for marker in (
@@ -2208,6 +2354,58 @@ class StaticSkillTests(unittest.TestCase):
             "<SKILL_ROOT>",
         ):
             self.assertIn(placeholder, text)
+
+    def test_guarded_rule_prefix_cannot_override_exact_cli_identity(self):
+        codex = shutil.which("codex")
+        if codex is None:
+            self.skipTest("codex CLI is unavailable for execpolicy regression")
+        template_values = {
+            "--state-dir": "<STATE_DIR>",
+            "--activation-id": "<ACTIVATION_ID>",
+            "--installed-digest": "<INSTALLED_DIGEST>",
+            "--skill-root": "<SKILL_ROOT>",
+        }
+        runtime_values = {
+            "--state-dir": "/tmp/roundlet-state",
+            "--activation-id": "activation-0001",
+            "--installed-digest": "a" * 64,
+            "--skill-root": str(ROOT),
+        }
+        for command in rs.GUARDED_CLI_COMMANDS:
+            template = ["<PYTHON>", "<ROUNDLET_SCRIPT>", command]
+            runtime = [sys.executable, str(ROOT / "scripts/orchestration_state.py"), command]
+            for option in rs.GUARDED_CLI_OPTIONS:
+                template.extend([option, template_values[option]])
+                runtime.extend([option, runtime_values[option]])
+            rs.validate_guarded_cli_shape(runtime[2:])
+            for option in rs.GUARDED_CLI_OPTIONS:
+                with self.subTest(command=command, repeated=option):
+                    policy = subprocess.run(
+                        [
+                            codex,
+                            "execpolicy",
+                            "check",
+                            "--rules",
+                            str(ROOT / "assets/roundlet.rules"),
+                            *template,
+                            option,
+                            "<OVERRIDE>",
+                        ],
+                        check=True,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    self.assertEqual(json.loads(policy.stdout)["decision"], "allow")
+                    blocked = subprocess.run(
+                        [*runtime, option, "override"],
+                        check=False,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    self.assertEqual(blocked.returncode, 2)
+                    self.assertIn("exact immutable argument order", blocked.stderr)
 
 
 if __name__ == "__main__":

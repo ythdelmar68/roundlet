@@ -174,6 +174,8 @@ Keep each rule's `match` and `not_match` examples and test it with `codex execpo
 - worktree removal and local branch deletion call the guarded script and prove ownership;
 - arbitrary Python, shell, repository, branch, worktree, remote, `git push`, force, reset, rebase, and remote deletion do not match.
 
+These are prefix rules: a recognized duplicate option appended to an allowed prefix can still receive an `allow` decision. The reviewed guarded CLI is the second boundary and must reject duplicate, reordered, or trailing tokens before it loads state or constructs a Git guard. Forward-test every guarded command with every repeated identity option after any parser or rules change.
+
 Restart/reload Codex as required for the trusted project rules layer. Re-test after installation-path, digest, activation, base, or state-directory changes. Never install this template globally or let Roundlet self-modify the rule.
 
 Remote task-branch deletion remains a GitHub connector action; do not add a Git rule for it.
@@ -267,11 +269,11 @@ select -> Worker -> draft PR -> fresh Supervisor
   -> merge commit -> exact issue close -> proven cleanup -> sync -> select
 ```
 
-Every candidate change invalidates PASS. Every Supervisor uses a new task. Immediately read that task back from the task service and durably bind the exact returned task ID and UTC creation time to the next review generation; this is external creation evidence, not a value the Orchestrator may invent. Archive and record each Supervisor immediately after consuming its result, before creating the next one. A bounded recent-ID ledger and rolling archive digest retain freshness evidence without imposing a review-round limit. The Worker task persists until merge/cleanup. The root Orchestrator alone mediates connector reads and writes.
+Every candidate change invalidates PASS. Every Supervisor uses a new task. Immediately read that task back from the task service and durably bind the exact returned task ID and UTC creation time to the next review generation; this is external creation evidence, not a value the Orchestrator may invent. Archive and record each Supervisor immediately after consuming its result, before creating the next one. A bounded recent-ID ledger and rolling archive digest retain freshness evidence without imposing a review-round limit. Before creating any Worker branch, worktree, or task, verify `create_task_branches` both at the external callback boundary and in durable assignment. After draft PR creation or recovery, connector read-back must prove the exact PR is open and still draft before recording it. The Worker task persists until merge/cleanup. The root Orchestrator alone mediates connector reads and writes.
 
 Use curated GitHub comments. Keep raw child prompts, raw transcripts, hidden reasoning, credentials, local paths, checkpoint internals, and internal ranking chains local and bounded.
 
-After the exact merge and issue-close receipts, clean up in this order: archive every remaining Supervisor and the task-owned Worker and call `record_children_archived`; run the guarded recorded-worktree removal and save `worktree_removed`; run guarded safe local-branch deletion and save `local_branch_deleted`; then delete only the exact recorded remote task branch through the connector and save `record_remote_branch_deleted`. Do not enter `sync-base` until all five durable cleanup flags are true. An already absent local resource is success only when the guard independently proves the same task ownership and merged reachability; ambiguous or unique work blocks cleanup.
+After the exact merge and issue-close receipts, clean up in this order: archive every remaining Supervisor and the task-owned Worker and call `record_children_archived`; require the recorded worktree's live current branch and exact porcelain branch entry to equal the task branch, then run guarded removal and save `worktree_removed`; run guarded safe local-branch deletion and save `local_branch_deleted`; then delete only the exact recorded remote task branch through the connector and save `record_remote_branch_deleted`. Detached, switched, ambiguous, or uniquely owned work blocks cleanup. Do not enter `sync-base` until all five durable cleanup flags are true. An already absent local resource is success only when the guard independently proves the same task ownership and merged reachability.
 
 ## Pause for Roundlet maintenance
 

@@ -83,7 +83,7 @@ Enter `waiting-dependency` when prerequisites are incomplete. Enter permanent `b
 
 ## Run one Worker and fresh Supervisors
 
-Create one Worker worktree/task for the selected issue:
+Only when `create_task_branches` is true, create one Worker worktree/task for the selected issue. Validate that authorization before invoking any external Worker/worktree creation callback and again when recording assignment:
 
 - model `gpt-5.5`, reasoning `xhigh`;
 - a current-repository `codex/` branch from the recorded synchronized base;
@@ -93,7 +93,7 @@ Create one Worker worktree/task for the selected issue:
 
 Delete `github-context.json` after successful dispatch. Require the Worker to test, make Conventional Commits, leave a clean worktree, and return the fixed handoff contract. The root Orchestrator validates that response, wraps it in the mailbox envelope, and writes `worker-handoff.json` in its own state directory.
 
-After the initial handoff, independently verify branch, commit, clean status, and head. Use the guarded push path, post a curated issue comment, and create a draft PR through the connector. Record all receipts durably.
+After the initial handoff, independently verify branch, commit, clean status, and head. Use the guarded push path, post a curated issue comment, and create a draft PR through the connector. Read the exact PR back and require it to be open and still draft at the recorded repository/base/head/branch before calling `record_draft_pr`.
 
 Create a completely fresh read-only Supervisor task for every round:
 
@@ -126,7 +126,7 @@ Immediately before merge, refresh live state and call `assert_premerge_gates`. R
 
 Merge through the GitHub connector with method `merge` and `expected_head_sha` equal to the full candidate SHA. Close only the exact selected sub-issue after confirmed merge.
 
-Prove task ownership, merged reachability, clean state, no unique work, no active owner, and no maintenance request. Archive child tasks, use guarded commands to remove only the recorded worktree and safely delete only the recorded local branch, then use the connector to delete only the recorded remote branch.
+Prove task ownership, merged reachability, clean state, no unique work, no active owner, and no maintenance request. Require both worktree porcelain and live identity to show the exact recorded task branch and candidate immediately before removal; detached or switched worktrees block cleanup. Archive child tasks, use guarded commands to remove only the recorded worktree and safely delete only the recorded local branch, then use the connector to delete only the recorded remote branch.
 
 Fetch and fast-forward the dedicated checkout without reset or rebase. Require a clean checked-out base with `HEAD == <base> == origin/<base>`, or a clean detached `HEAD == origin/<base>` while another worktree owns the local base ref. Mark `task-done`, compact with `compact_completed_task`, and only then refresh scope and select again.
 

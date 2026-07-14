@@ -1095,6 +1095,8 @@ def assign_task(
     selected = require_positive_issue(issue, "selected issue")
     selection = state.get("selection")
     activation = state.get("activation", {})
+    if activation.get("allowed_operations", {}).get("create_task_branches") is not True:
+        raise ScopeError("Worker branch and task creation were not authorized")
     if not isinstance(selection, Mapping) or selection.get("status") != "selected":
         raise TransitionError("task assignment requires one durable selected receipt")
     if selection.get("activation_id") != activation.get("id"):
@@ -1387,6 +1389,8 @@ def record_draft_pr(
     issue: int,
     pr_number: int,
     pr_url: str,
+    pr_state: str,
+    draft: bool,
     base_sha: str,
     head_sha: str,
     branch: str,
@@ -1409,6 +1413,10 @@ def record_draft_pr(
     expected_url = f"https://github.com/{normalize_owner_name(repository)}/pull/{number}"
     if pr_url.casefold() != expected_url.casefold():
         raise ValidationError("draft PR URL does not match the exact repository and PR")
+    if not isinstance(pr_state, str) or pr_state.casefold() != "open":
+        raise GuardError("draft PR receipt requires connector read-back proving the PR is open")
+    if draft is not True:
+        raise GuardError("draft PR receipt requires connector read-back proving draft state")
     if require_full_sha(base_sha, "PR base_sha") != task.get("base_sha"):
         raise ScopeError("draft PR base differs from the selected task")
     if require_full_sha(head_sha, "PR head_sha") != task.get("candidate_sha"):
@@ -1429,7 +1437,8 @@ def record_draft_pr(
                 "base_sha": base_sha,
                 "head_sha": head_sha,
                 "branch": branch,
-                "draft": True,
+                "state": "open",
+                "draft": draft,
             },
         }
     )
@@ -2328,6 +2337,16 @@ def select_next_task(
                 )
 
     completed = {issue for issue, item in by_issue.items() if item.completion_verified}
+    ambiguous = sorted(
+        item.issue
+        for item in by_issue.values()
+        if item.ambiguous_active_implementation and item.issue not in completed
+    )
+    if ambiguous:
+        raise SelectionBlocked(
+            "ambiguous active implementation or PR ownership: "
+            + ", ".join(f"#{issue}" for issue in ambiguous)
+        )
     excluded: dict[str, list[str]] = {}
     eligible_heads: list[IssueSnapshot] = []
 
@@ -2348,8 +2367,6 @@ def select_next_task(
                 reasons.append("not the first incomplete required-order entry")
             if not item.open and not item.completion_verified:
                 reasons.append("closed state lacks verified completion evidence")
-            if item.ambiguous_active_implementation:
-                reasons.append("ambiguous active implementation or PR ownership")
             missing = [dependency for dependency in item.dependencies if dependency not in completed]
             if missing:
                 reasons.append("waiting for dependencies " + ", ".join(f"#{number}" for number in sorted(missing)))
@@ -2471,6 +2488,8 @@ def validate_mailbox_envelope(payload: Mapping[str, Any], state: Mapping[str, An
         raise MailboxError(str(exc)) from exc
     if kind == "github-context":
         selection = state.get("selection")
+        if state["activation"]["allowed_operations"].get("create_task_branches") is not True:
+            raise MailboxError("Worker branch and task creation were not authorized")
         if state.get("phase") != "selecting-task" or not isinstance(selection, Mapping):
             raise MailboxError("GitHub context requires a durable pre-dispatch selection")
         if payload["phase"] != "selecting-task":
@@ -2780,6 +2799,24 @@ def skill_content_digest(skill_root: str | os.PathLike[str]) -> str:
     return hasher.hexdigest()
 
 
+def exact_worktree_branch_from_porcelain(porcelain: str, worktree: Path) -> str | None:
+    """Return one exact branch ref for a listed worktree, rejecting ambiguous records."""
+    expected = f"worktree {worktree.resolve()}"
+    matches: list[list[str]] = []
+    for record in re.split(r"\n\s*\n", porcelain.strip()):
+        lines = [line for line in record.splitlines() if line]
+        if lines and lines[0] == expected:
+            matches.append(lines)
+    if len(matches) > 1:
+        raise GuardError("recorded worktree appears more than once in porcelain identity")
+    if not matches:
+        return None
+    branches = [line.removeprefix("branch ") for line in matches[0] if line.startswith("branch ")]
+    if len(branches) != 1:
+        return None
+    return branches[0]
+
+
 class GuardedGit:
     def __init__(
         self,
@@ -3002,7 +3039,7 @@ class GuardedGit:
         return task, worktree, branch, head
 
     def remove_task_worktree(self) -> None:
-        task, worktree, _, head = self._cleanup_metadata_proof()
+        task, worktree, branch, head = self._cleanup_metadata_proof()
         root = Path(self.identity.git_root)
         listed = self.runner.run(["git", "worktree", "list", "--porcelain"], root)
         if f"worktree {worktree}" not in listed.splitlines():
@@ -3011,6 +3048,8 @@ class GuardedGit:
                 self.store.save(self.state)
                 return
             raise GuardError("recorded worktree ownership is ambiguous")
+        if exact_worktree_branch_from_porcelain(listed, worktree) != f"refs/heads/{branch}":
+            raise GuardError("cleanup worktree porcelain branch differs from the recorded task branch")
         repo = self.state["activation"]["repository"]
         worktree_identity = resolve_repository_identity(
             worktree,
@@ -3021,6 +3060,8 @@ class GuardedGit:
         )
         if worktree_identity.git_common_dir_fingerprint != repo["git_common_dir_fingerprint"]:
             raise GuardError("cleanup worktree belongs to another Git common directory")
+        if worktree_identity.current_branch != branch:
+            raise GuardError("cleanup worktree is not on the recorded task branch")
         if worktree_identity.head_sha != head:
             raise GuardError("cleanup worktree HEAD differs from the merged candidate")
         self.runner.run(["git", "worktree", "remove", str(worktree)], root)
@@ -3062,6 +3103,30 @@ def _guard_from_args(args: argparse.Namespace) -> GuardedGit:
     )
 
 
+GUARDED_CLI_COMMANDS = (
+    "guarded-refresh",
+    "guarded-push",
+    "guarded-sync",
+    "guarded-remove-worktree",
+    "guarded-delete-branch",
+)
+GUARDED_CLI_OPTIONS = (
+    "--state-dir",
+    "--activation-id",
+    "--installed-digest",
+    "--skill-root",
+)
+
+
+def validate_guarded_cli_shape(argv: Sequence[str]) -> None:
+    if not argv or argv[0] not in GUARDED_CLI_COMMANDS:
+        return
+    if len(argv) != 1 + 2 * len(GUARDED_CLI_OPTIONS) or tuple(argv[1::2]) != GUARDED_CLI_OPTIONS:
+        raise ValidationError(
+            "guarded command must use the exact immutable argument order with no duplicate or trailing tokens"
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Roundlet deterministic state and guarded Git helper")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -3075,13 +3140,7 @@ def build_parser() -> argparse.ArgumentParser:
     digest = sub.add_parser("skill-digest", help="Print the deterministic installed skill content digest")
     digest.add_argument("--skill-root", required=True)
 
-    for name in (
-        "guarded-refresh",
-        "guarded-push",
-        "guarded-sync",
-        "guarded-remove-worktree",
-        "guarded-delete-branch",
-    ):
+    for name in GUARDED_CLI_COMMANDS:
         guarded = sub.add_parser(name)
         guarded.add_argument("--state-dir", required=True)
         guarded.add_argument("--activation-id", required=True)
@@ -3091,7 +3150,13 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    raw_argv = list(argv) if argv is not None else sys.argv[1:]
+    try:
+        validate_guarded_cli_shape(raw_argv)
+    except RoundletError as exc:
+        print(f"BLOCKED: {exc}", file=sys.stderr)
+        return 2
+    args = build_parser().parse_args(raw_argv)
     try:
         if args.command == "validate-state":
             StateStore(args.state_dir).load()

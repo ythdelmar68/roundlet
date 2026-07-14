@@ -1,5 +1,7 @@
 # INERT TEMPLATE — replace every <PLACEHOLDER>, review, and test before install.
 # Install only in the trusted project config layer for the single target repo.
+# Prefix rules cannot forbid recognized suffix options. The guarded CLI therefore
+# rejects any duplicate, reordered, or trailing token before loading state.
 
 prefix_rule(
     pattern = [
