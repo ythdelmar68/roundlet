@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import threading
 import unittest
 
 
@@ -22,6 +23,18 @@ SHA_B = "b" * 40
 SHA_C = "c" * 40
 SHA_D = "d" * 40
 DIGEST = "d" * 64
+OWNER_ACTOR = {
+    "id": 7,
+    "login": "owner",
+    "account_type": "User",
+    "verified_by_connector": True,
+}
+CAPABILITY_PREFLIGHT = {
+    "verified_by_service": True,
+    "per_thread_receipts": True,
+    "worker_profile_enforceable": True,
+    "supervisor_profile_enforceable": True,
+}
 
 
 def identity(*, base: str = "main", digest_root: str = "/repo/.git") -> rs.RepositoryIdentity:
@@ -40,6 +53,33 @@ def identity(*, base: str = "main", digest_root: str = "/repo/.git") -> rs.Repos
         remote_base_sha=SHA_A,
         current_branch=base,
     )
+
+
+def role_receipt(role, thread_id, *, created_at="2026-07-14T00:00:00Z", parent="orchestrator-1"):
+    profiles = {
+        "orchestrator": ("gpt-5.6-sol", True, True, "workspace-write"),
+        "worker": ("gpt-5.5", True, False, "worktree-write"),
+        "supervisor": ("gpt-5.6-sol", False, False, "read-only"),
+    }
+    model, filesystem_write, github_connector, permission = profiles[role]
+    return {
+        "verified_by_service": True,
+        "role": role,
+        "thread_id": thread_id,
+        "model": model,
+        "reasoning_effort": "xhigh",
+        "environment_type": "worktree" if role == "worker" else "local",
+        "project_identity": identity().git_common_dir_fingerprint,
+        "parent_thread_id": None if role == "orchestrator" else parent,
+        "forked": False,
+        "permission_profile": permission,
+        "filesystem_write": filesystem_write,
+        "github_connector": github_connector,
+        "shell_network": role == "orchestrator",
+        "web_access": role == "orchestrator",
+        "gh_access": role == "orchestrator",
+        "created_at": created_at,
+    }
 
 
 def activation_request(*, umbrellas=None, base="main", operations=None):
@@ -66,23 +106,59 @@ def state(*, umbrellas=None, digest=DIGEST, operations=None):
         activation_id="activation-0001",
         orchestrator_thread_id="orchestrator-1",
         installed_roundlet_digest=digest,
+        owner_actor=OWNER_ACTOR,
+        capability_preflight=CAPABILITY_PREFLIGHT,
+        orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
         now="2026-07-14T00:00:00Z",
     )
 
 
 def set_selection(value, *, umbrella=10, issue=11, base=SHA_A):
-    value["selection"] = {
-        "status": "selected",
-        "activation_id": value["activation"]["id"],
-        "selected_umbrella": umbrella,
-        "selected_issue": issue,
-        "base_sha": base,
+    source_umbrella = value["activation"]["umbrella_issues"][0]
+    snapshot = rs.IssueSnapshot(
+        issue=issue,
+        umbrella=source_umbrella,
+        repository="owner/project",
+        membership_sources=("formal-sub-issue",),
+        revision=f"r{issue}",
+    )
+    receipt = rs.select_next_task(
+        value,
+        [snapshot],
+        refresh_timestamp="2026-07-14T01:00:00Z",
+        refresh_manifest=refresh_manifest(value, {source_umbrella: [issue]}),
+    )
+    receipt["selected_umbrella"] = umbrella
+    receipt["base_sha"] = base
+    receipt["receipt_digest"] = rs.digest_json(
+        {key: item for key, item in receipt.items() if key != "receipt_digest"}
+    )
+    value["selection"] = receipt
+
+
+def refresh_manifest(value, discovered):
+    return {
+        "repository": "owner/project",
+        "repository_id": 123,
+        "base_sha": value["activation"]["base_sha"],
+        "refresh_timestamp": "2026-07-14T01:00:00Z",
+        "umbrellas": [
+            {
+                "umbrella_issue": umbrella,
+                "umbrella_revision": f"umbrella-r{umbrella}",
+                "membership_evidence_digest": rs.digest_json(
+                    {"umbrella": umbrella, "issues": discovered.get(umbrella, [])}
+                ),
+                "discovered_issues": discovered.get(umbrella, []),
+                "complete": True,
+            }
+            for umbrella in value["activation"]["umbrella_issues"]
+        ],
     }
 
 
 def assigned_state(*, umbrellas=None):
     value = state(umbrellas=umbrellas)
-    rs.transition_state(value, "selecting-task")
     set_selection(value, umbrella=(umbrellas or [10])[0])
     rs.assign_task(
         value,
@@ -91,6 +167,7 @@ def assigned_state(*, umbrellas=None):
         branch="codex/issue-11",
         worktree="/repo-worktrees/issue-11",
         worker_thread_id="worker-11",
+        worker_creation_receipt=role_receipt("worker", "worker-11"),
         base_sha=SHA_A,
     )
     return value
@@ -123,30 +200,151 @@ def begin_review(value, thread_id, *, final=False):
         creation_receipt={
             "activation_id": value["activation"]["id"],
             "issue": value["task"]["issue"],
-            "thread_id": thread_id,
             "generation": generation,
             "created": True,
-            "created_at": f"2026-07-14T00:00:00.{generation:06d}Z",
+            "service_receipt": role_receipt(
+                "supervisor",
+                thread_id,
+                created_at=f"2026-07-14T00:00:00.{generation:06d}Z",
+            ),
         },
+    )
+
+
+def pr_identity(value):
+    return {
+        "repository": "owner/project",
+        "repository_id": 123,
+        "base_repository": "owner/project",
+        "base_repository_id": 123,
+        "base_branch": "main",
+        "base_sha": value["task"]["base_sha"],
+        "head_repository": "owner/project",
+        "head_repository_id": 123,
+        "head_ref": value["task"]["branch"],
+        "head_sha": value["task"]["candidate_sha"],
+    }
+
+
+def apply_github(value, operation, target, receipt, *, key=None):
+    intent_key = key or f"{operation}-0001"
+    rs.begin_github_mutation_intent(
+        value,
+        operation=operation,
+        idempotency_key=intent_key,
+        target=target,
+    )
+    rs.complete_github_mutation_intent(value, idempotency_key=intent_key, receipt=receipt)
+
+
+def record_draft(value, *, overrides=None):
+    live = {
+        **pr_identity(value),
+        "issue": value["task"]["issue"],
+        "pr_number": 22,
+        "pr_url": "https://github.com/owner/project/pull/22",
+        "pr_state": "open",
+        "draft": True,
+    }
+    live.update(overrides or {})
+    apply_github(value, "create-draft-pr", pr_identity(value), live)
+
+
+def record_ready(value, *, overrides=None):
+    live = {
+        **pr_identity(value),
+        "pr_number": 22,
+        "pr_url": "https://github.com/owner/project/pull/22",
+        "pr_state": "open",
+        "draft": False,
+    }
+    live.update(overrides or {})
+    apply_github(value, "mark-ready", live, live)
+
+
+def premerge_live(value):
+    return {
+        **pr_identity(value),
+        "scope_valid": True,
+        "membership_valid": True,
+        "worktree_clean": True,
+        "tests_passed": True,
+        "checks_passed": True,
+        "pr_ready": True,
+        "mergeable": True,
+        "no_conflict": True,
+        "no_new_blocker": True,
+        "no_maintenance_request": True,
+        "issue": value["task"]["issue"],
+        "pr_number": value["task"]["pr_number"],
+        "pr_url": value["task"]["pr_url"],
+        "pr_state": "open",
+        "draft": False,
+        "merge_method": "merge",
+    }
+
+
+def record_merge(value, *, overrides=None):
+    receipt = {
+        **pr_identity(value),
+        "pr_number": value["task"]["pr_number"],
+        "pr_url": value["task"]["pr_url"],
+        "pr_state": "closed",
+        "merged": True,
+        "expected_head_sha": value["task"]["candidate_sha"],
+        "merge_sha": SHA_C,
+        "merge_method": "merge",
+    }
+    receipt.update(overrides or {})
+    apply_github(value, "merge-pr", premerge_live(value), receipt)
+
+
+def record_close(value, *, issue=11, issue_state="closed"):
+    target = {"repository": "owner/project", "repository_id": 123, "issue": issue}
+    receipt = {**target, "issue_state": issue_state, "state_reason": "completed"}
+    apply_github(value, "close-issue", target, receipt)
+
+
+def complete_scope(value):
+    rs.select_next_task(
+        value,
+        [
+            rs.IssueSnapshot(
+                issue=11,
+                umbrella=value["activation"]["umbrella_issues"][0],
+                repository="owner/project",
+                open=False,
+                completion_verified=True,
+                membership_sources=("formal-sub-issue",),
+                revision="r11-closed",
+            )
+        ],
+        refresh_timestamp="2026-07-14T01:00:00Z",
+        refresh_manifest=refresh_manifest(
+            value,
+            {value["activation"]["umbrella_issues"][0]: [11]},
+        ),
+    )
+
+
+def set_operation(value, operation, enabled):
+    value["activation"]["allowed_operations"][operation] = enabled
+    value["activation"]["scope_digest"] = rs.compute_scope_digest(
+        value["activation"]["repository"],
+        value["activation"]["base_branch"],
+        value["activation"]["umbrella_issues"],
+        value["activation"]["allowed_operations"],
+        value["skill"]["content_digest"],
+        owner_actor=value["activation"]["owner_actor"],
+        capability_preflight=value["activation"]["capability_preflight"],
+        orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
     )
 
 
 def premerge_state():
     value = assigned_state()
     rs.set_candidate(value, SHA_B, clean=True)
-    rs.record_draft_pr(
-        value,
-        repository="owner/project",
-        repository_id=123,
-        issue=11,
-        pr_number=22,
-        pr_url="https://github.com/owner/project/pull/22",
-        pr_state="open",
-        draft=True,
-        base_sha=SHA_A,
-        head_sha=SHA_B,
-        branch="codex/issue-11",
-    )
+    record_draft(value)
     begin_review(value, "supervisor-initial")
     rs.accept_supervisor_result(
         value,
@@ -156,13 +354,7 @@ def premerge_state():
     )
     rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-initial")
     rs.set_candidate(value, SHA_B, clean=True)
-    rs.record_pr_ready(
-        value,
-        repository="owner/project",
-        repository_id=123,
-        pr_number=22,
-        head_sha=SHA_B,
-    )
+    record_ready(value)
     begin_review(value, "supervisor-final", final=True)
     rs.accept_supervisor_result(
         value,
@@ -241,7 +433,7 @@ class ActivationTests(unittest.TestCase):
     def test_issue_text_is_not_in_scope_digest(self):
         value = state()
         before = value["activation"]["scope_digest"]
-        value["selection"] = {"source_body_digest": "changed"}
+        value["retry"] = {"mutable_issue_body_digest": "changed"}
         rs.validate_state(value)
         self.assertEqual(value["activation"]["scope_digest"], before)
 
@@ -258,6 +450,9 @@ class ActivationTests(unittest.TestCase):
                 activation_id="activation-0001",
                 orchestrator_thread_id="orchestrator-1",
                 installed_roundlet_digest=DIGEST,
+                owner_actor=OWNER_ACTOR,
+                capability_preflight=CAPABILITY_PREFLIGHT,
+                orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
             )
 
     def test_unsynchronized_identity_blocks(self):
@@ -269,6 +464,9 @@ class ActivationTests(unittest.TestCase):
                 activation_id="activation-0001",
                 orchestrator_thread_id="orchestrator-1",
                 installed_roundlet_digest=DIGEST,
+                owner_actor=OWNER_ACTOR,
+                capability_preflight=CAPABILITY_PREFLIGHT,
+                orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
             )
 
     def test_repository_target_validation(self):
@@ -280,6 +478,34 @@ class ActivationTests(unittest.TestCase):
             rs.assert_repository_target(repo, "owner/project", target_repository_id=999)
         with self.assertRaises(rs.ScopeError):
             rs.assert_repository_target(repo, "owner/project")
+
+    def test_activation_blocks_when_service_cannot_prove_child_isolation(self):
+        unverifiable = {**CAPABILITY_PREFLIGHT, "supervisor_profile_enforceable": False}
+        with self.assertRaises(rs.ScopeError):
+            rs.new_state(
+                activation_request(),
+                identity(),
+                activation_id="activation-0001",
+                orchestrator_thread_id="orchestrator-1",
+                installed_roundlet_digest=DIGEST,
+                owner_actor=OWNER_ACTOR,
+                capability_preflight=unverifiable,
+                orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
+            )
+
+    def test_activation_binds_verified_numeric_owner_actor(self):
+        spoofed = {**OWNER_ACTOR, "verified_by_connector": False}
+        with self.assertRaises(rs.ScopeError):
+            rs.new_state(
+                activation_request(),
+                identity(),
+                activation_id="activation-0001",
+                orchestrator_thread_id="orchestrator-1",
+                installed_roundlet_digest=DIGEST,
+                owner_actor=spoofed,
+                capability_preflight=CAPABILITY_PREFLIGHT,
+                orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
+            )
 
 
 class StateMachineTests(unittest.TestCase):
@@ -307,6 +533,7 @@ class StateMachineTests(unittest.TestCase):
                 branch="codex/issue-12",
                 worktree="/tmp/12",
                 worker_thread_id="worker-12",
+                worker_creation_receipt=role_receipt("worker", "worker-12"),
                 base_sha=SHA_A,
             )
 
@@ -322,6 +549,7 @@ class StateMachineTests(unittest.TestCase):
                 branch="codex/issue-11",
                 worktree="/tmp/11",
                 worker_thread_id="worker-11",
+                worker_creation_receipt=role_receipt("worker", "worker-11"),
                 base_sha=SHA_A,
             )
 
@@ -337,6 +565,7 @@ class StateMachineTests(unittest.TestCase):
                 branch="feat/issue-11",
                 worktree="/tmp/11",
                 worker_thread_id="worker-11",
+                worker_creation_receipt=role_receipt("worker", "worker-11"),
                 base_sha=SHA_A,
             )
 
@@ -354,6 +583,7 @@ class StateMachineTests(unittest.TestCase):
                 branch="codex/issue-11",
                 worktree="/tmp/11",
                 worker_thread_id="worker-11",
+                worker_creation_receipt=role_receipt("worker", "worker-11"),
                 base_sha=SHA_A,
             )
         self.assertIsNone(value["task"])
@@ -370,6 +600,7 @@ class StateMachineTests(unittest.TestCase):
                 branch="codex/issue-12",
                 worktree="/tmp/12",
                 worker_thread_id="worker-12",
+                worker_creation_receipt=role_receipt("worker", "worker-12"),
                 base_sha=SHA_A,
             )
         stale = state()
@@ -383,6 +614,7 @@ class StateMachineTests(unittest.TestCase):
                 branch="codex/issue-11",
                 worktree="/tmp/11",
                 worker_thread_id="worker-11",
+                worker_creation_receipt=role_receipt("worker", "worker-11"),
                 base_sha=SHA_B,
             )
 
@@ -393,19 +625,7 @@ class StateMachineTests(unittest.TestCase):
     def test_draft_pr_receipt_binds_exact_task(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
-        rs.record_draft_pr(
-            value,
-            repository="owner/project",
-            repository_id=123,
-            issue=11,
-            pr_number=22,
-            pr_url="https://github.com/owner/project/pull/22",
-            pr_state="open",
-            draft=True,
-            base_sha=SHA_A,
-            head_sha=SHA_B,
-            branch="codex/issue-11",
-        )
+        record_draft(value)
         self.assertEqual(value["phase"], "draft-pr")
         self.assertEqual(value["task"]["pr_number"], 22)
 
@@ -415,19 +635,7 @@ class StateMachineTests(unittest.TestCase):
                 value = assigned_state()
                 rs.set_candidate(value, SHA_B, clean=True)
                 with self.assertRaises(rs.GuardError):
-                    rs.record_draft_pr(
-                        value,
-                        repository="owner/project",
-                        repository_id=123,
-                        issue=11,
-                        pr_number=22,
-                        pr_url="https://github.com/owner/project/pull/22",
-                        pr_state=pr_state,
-                        draft=draft,
-                        base_sha=SHA_A,
-                        head_sha=SHA_B,
-                        branch="codex/issue-11",
-                    )
+                    record_draft(value, overrides={"pr_state": pr_state, "draft": draft})
                 self.assertEqual(value["phase"], "worker-running")
                 self.assertIsNone(value["task"]["draft_pr_receipt"])
 
@@ -435,71 +643,243 @@ class StateMachineTests(unittest.TestCase):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
         with self.assertRaises(rs.ScopeError):
-            rs.record_draft_pr(
-                value,
-                repository="other/project",
-                repository_id=123,
-                issue=11,
-                pr_number=22,
-                pr_url="https://github.com/other/project/pull/22",
-                pr_state="open",
-                draft=True,
-                base_sha=SHA_A,
-                head_sha=SHA_B,
-                branch="codex/issue-11",
-            )
+            record_draft(value, overrides={"repository": "other/project"})
 
-    def test_merge_then_exact_issue_close_receipts(self):
+    def test_draft_and_premerge_reject_fork_head_or_wrong_base(self):
+        for overrides in (
+            {"base_branch": "release"},
+            {"head_repository": "attacker/fork", "head_repository_id": 999},
+        ):
+            with self.subTest(overrides=overrides):
+                value = assigned_state()
+                rs.set_candidate(value, SHA_B, clean=True)
+                with self.assertRaises(rs.ScopeError):
+                    record_draft(value, overrides=overrides)
+        value = premerge_state()
+        live = premerge_live(value)
+        live.update({"head_repository": "attacker/fork", "head_repository_id": 999})
+        self.assertTrue(any("cross-repository" in error for error in rs.verify_premerge_gates(value, live)))
+
+    def test_ready_merge_and_close_require_live_state_readback(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
-        rs.record_draft_pr(
+        record_draft(value)
+        begin_review(value, "supervisor-initial")
+        rs.accept_supervisor_result(
             value,
-            repository="owner/project",
-            repository_id=123,
-            issue=11,
-            pr_number=22,
-            pr_url="https://github.com/owner/project/pull/22",
-            pr_state="open",
-            draft=True,
-            base_sha=SHA_A,
-            head_sha=SHA_B,
-            branch="codex/issue-11",
+            thread_id="supervisor-initial",
+            candidate_sha=SHA_B,
+            result="PASS",
         )
-        value["phase"] = "merging"
-        rs.record_merge_receipt(
-            value,
-            repository="owner/project",
-            repository_id=123,
-            pr_number=22,
-            expected_head_sha=SHA_B,
-            merge_sha=SHA_C,
-            merge_method="merge",
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-initial")
+        rs.set_candidate(value, SHA_B, clean=True)
+        with self.assertRaises(rs.GuardError):
+            record_ready(value, overrides={"draft": True})
+
+        value = premerge_state()
+        with self.assertRaises(rs.GuardError):
+            record_merge(value, overrides={"merged": False})
+
+        value = premerge_state()
+        record_merge(value)
+        with self.assertRaises(rs.GuardError):
+            record_close(value, issue_state="open")
+
+    def test_premerge_cannot_enter_merging_without_gateway_intent(self):
+        value = premerge_state()
+        with self.assertRaises(rs.TransitionError):
+            rs.transition_state(value, "merging")
+
+    def test_false_operation_flags_block_before_every_connector_callback(self):
+        states = []
+
+        draft_state = assigned_state()
+        rs.set_candidate(draft_state, SHA_B, clean=True)
+        states.append(
+            (
+                draft_state,
+                "create_draft_prs",
+                "create-draft-pr",
+                pr_identity(draft_state),
+            )
         )
+
+        ready_state = assigned_state()
+        rs.set_candidate(ready_state, SHA_B, clean=True)
+        record_draft(ready_state)
+        begin_review(ready_state, "supervisor-initial")
+        rs.accept_supervisor_result(
+            ready_state,
+            thread_id="supervisor-initial",
+            candidate_sha=SHA_B,
+            result="PASS",
+        )
+        rs.record_supervisor_archived(ready_state, supervisor_thread_id="supervisor-initial")
+        rs.set_candidate(ready_state, SHA_B, clean=True)
+        states.append(
+            (
+                ready_state,
+                "mark_ready_for_review",
+                "mark-ready",
+                {
+                    **pr_identity(ready_state),
+                    "pr_number": 22,
+                    "pr_url": "https://github.com/owner/project/pull/22",
+                    "pr_state": "open",
+                    "draft": False,
+                },
+            )
+        )
+
+        merge_state = premerge_state()
+        states.append(
+            (
+                merge_state,
+                "merge_commit_after_all_gates",
+                "merge-pr",
+                premerge_live(merge_state),
+            )
+        )
+
+        close_state = premerge_state()
+        record_merge(close_state)
+        states.append(
+            (
+                close_state,
+                "close_completed_sub_issues",
+                "close-issue",
+                {"repository": "owner/project", "repository_id": 123, "issue": 11},
+            )
+        )
+
+        delete_state = premerge_state()
+        record_merge(delete_state)
+        record_close(delete_state)
+        states.append(
+            (
+                delete_state,
+                "delete_proven_task_owned_resources",
+                "delete-remote-branch",
+                {
+                    "repository": "owner/project",
+                    "repository_id": 123,
+                    "branch": "codex/issue-11",
+                },
+            )
+        )
+
+        for value, flag, operation, target in states:
+            with self.subTest(operation=operation), tempfile.TemporaryDirectory() as temporary:
+                set_operation(value, flag, False)
+                store = rs.StateStore(temporary)
+                store.initialize(value)
+                calls = []
+                with self.assertRaises(rs.ScopeError):
+                    rs.execute_github_mutation(
+                        store,
+                        operation=operation,
+                        idempotency_key=f"blocked-{operation}-0001",
+                        target=target,
+                        mutate=lambda item: calls.append(item) or {"unexpected": True},
+                    )
+                self.assertEqual(calls, [])
+
+    def test_github_gateway_records_before_mutation_and_reconciles_interruption(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            value = assigned_state()
+            rs.set_candidate(value, SHA_B, clean=True)
+            target = pr_identity(value)
+            receipt = {
+                **target,
+                "issue": 11,
+                "pr_number": 22,
+                "pr_url": "https://github.com/owner/project/pull/22",
+                "pr_state": "open",
+                "draft": True,
+            }
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            pending = store.load()
+            rs.begin_github_mutation_intent(
+                pending,
+                operation="create-draft-pr",
+                idempotency_key="create-draft-pr-0001",
+                target=target,
+            )
+            store.save(pending)
+            calls = []
+            result = rs.execute_github_mutation(
+                store,
+                operation="create-draft-pr",
+                idempotency_key="create-draft-pr-0001",
+                target=target,
+                mutate=lambda item: self.fail("pending connector mutation must not retry blindly"),
+                reconcile=lambda item: calls.append(item) or receipt,
+            )
+            self.assertEqual(result["pr_number"], 22)
+            self.assertEqual(len(calls), 1)
+            current = store.load()
+            self.assertEqual(current["phase"], "draft-pr")
+            self.assertIsNone(current["github_mutations"]["pending"])
+            self.assertEqual(
+                current["github_mutations"]["receipts"]["create-draft-pr-0001"]["status"],
+                "complete",
+            )
+
+    def test_worker_and_supervisor_capability_receipts_fail_closed(self):
+        value = state()
+        set_selection(value)
+        github_worker = {**role_receipt("worker", "worker-11"), "github_connector": True}
+        with self.assertRaises(rs.ScopeError):
+            rs.assign_task(
+                value,
+                umbrella_issue=10,
+                issue=11,
+                branch="codex/issue-11",
+                worktree="/tmp/11",
+                worker_thread_id="worker-11",
+                worker_creation_receipt=github_worker,
+                base_sha=SHA_A,
+            )
+
+        bad_fields = {
+            "model": "gpt-5.5",
+            "forked": True,
+            "permission_profile": "workspace-write",
+            "github_connector": True,
+        }
+        for field, bad_value in bad_fields.items():
+            with self.subTest(field=field):
+                candidate = assigned_state()
+                rs.set_candidate(candidate, SHA_B, clean=True)
+                record_draft(candidate)
+                service = {**role_receipt("supervisor", "supervisor-bad"), field: bad_value}
+                with self.assertRaises(rs.ScopeError):
+                    rs.begin_supervisor(
+                        candidate,
+                        "supervisor-bad",
+                        creation_receipt={
+                            "activation_id": candidate["activation"]["id"],
+                            "issue": 11,
+                            "generation": 1,
+                            "created": True,
+                            "service_receipt": service,
+                        },
+                    )
+
+    def test_merge_then_exact_issue_close_receipts(self):
+        value = premerge_state()
+        record_merge(value)
         self.assertEqual(value["phase"], "closing-issue")
-        rs.record_issue_close_receipt(
-            value,
-            repository="owner/project",
-            repository_id=123,
-            issue=11,
-            state_reason="completed",
-        )
+        record_close(value)
         self.assertEqual(value["phase"], "cleanup")
         self.assertEqual(value["task"]["issue_close_receipt"]["issue"], 11)
 
     def test_issue_close_rejects_unselected_issue(self):
-        value = assigned_state()
-        rs.set_candidate(value, SHA_B, clean=True)
-        value["task"]["pr_number"] = 22
-        value["task"]["merge_receipt"] = {"merge_sha": SHA_C}
-        value["phase"] = "closing-issue"
+        value = premerge_state()
+        record_merge(value)
         with self.assertRaises(rs.ScopeError):
-            rs.record_issue_close_receipt(
-                value,
-                repository="owner/project",
-                repository_id=123,
-                issue=12,
-                state_reason="completed",
-            )
+            record_close(value, issue=12)
 
     def test_candidate_change_invalidates_pass(self):
         value = assigned_state()
@@ -568,10 +948,11 @@ class StateMachineTests(unittest.TestCase):
             creation_receipt={
                 "activation_id": value["activation"]["id"],
                 "issue": 11,
-                "thread_id": "supervisor-whole",
                 "generation": 1,
                 "created": True,
-                "created_at": "2026-07-14T00:00:00Z",
+                "service_receipt": role_receipt(
+                    "supervisor", "supervisor-whole", created_at="2026-07-14T00:00:00Z"
+                ),
             },
         )
         rs.accept_supervisor_result(
@@ -588,10 +969,11 @@ class StateMachineTests(unittest.TestCase):
             creation_receipt={
                 "activation_id": value["activation"]["id"],
                 "issue": 11,
-                "thread_id": "supervisor-fractional",
                 "generation": 2,
                 "created": True,
-                "created_at": "2026-07-14T00:00:00.1Z",
+                "service_receipt": role_receipt(
+                    "supervisor", "supervisor-fractional", created_at="2026-07-14T00:00:00.1Z"
+                ),
             },
         )
         self.assertEqual(value["review"]["round"], 2)
@@ -633,57 +1015,15 @@ class StateMachineTests(unittest.TestCase):
 
     def test_premerge_gates(self):
         value = premerge_state()
-        live = {
-            "scope_valid": True,
-            "membership_valid": True,
-            "worker_ready_to_merge": True,
-            "worktree_clean": True,
-            "tests_passed": True,
-            "checks_passed": True,
-            "pr_ready": True,
-            "mergeable": True,
-            "no_conflict": True,
-            "no_new_blocker": True,
-            "no_maintenance_request": True,
-            "head_sha": SHA_B,
-            "repository": "owner/project",
-            "repository_id": 123,
-            "issue": 11,
-            "pr_number": 22,
-            "pr_url": "https://github.com/owner/project/pull/22",
-            "base_sha": SHA_A,
-            "base_branch": "main",
-            "branch": "codex/issue-11",
-            "merge_method": "merge",
-        }
+        live = premerge_live(value)
         self.assertEqual(rs.verify_premerge_gates(value, live), [])
         live["checks_passed"] = False
         self.assertIn("required GitHub checks are not passing", rs.verify_premerge_gates(value, live))
 
     def test_premerge_rejects_durable_maintenance_and_missing_repository_id(self):
         value = premerge_state()
-        live = {
-            "scope_valid": True,
-            "membership_valid": True,
-            "worktree_clean": True,
-            "tests_passed": True,
-            "checks_passed": True,
-            "pr_ready": True,
-            "mergeable": True,
-            "no_conflict": True,
-            "no_new_blocker": True,
-            "no_maintenance_request": True,
-            "head_sha": SHA_B,
-            "repository": "owner/project",
-            "repository_id": None,
-            "issue": 11,
-            "pr_number": 22,
-            "pr_url": "https://github.com/owner/project/pull/22",
-            "base_sha": SHA_A,
-            "base_branch": "main",
-            "branch": "codex/issue-11",
-            "merge_method": "merge",
-        }
+        live = premerge_live(value)
+        live["repository_id"] = None
         value["maintenance"]["requested"] = True
         errors = rs.verify_premerge_gates(value, live)
         self.assertIn("maintenance is pending", errors)
@@ -713,6 +1053,7 @@ class MaintenanceTests(unittest.TestCase):
                 value,
                 checkpoint_id="checkpoint-001",
                 schedule_id="schedule-1",
+                schedule_state="paused",
             )
 
     def test_worker_drain_resumes_the_same_worker_turn(self):
@@ -728,6 +1069,7 @@ class MaintenanceTests(unittest.TestCase):
             value,
             checkpoint_id="checkpoint-001",
             schedule_id="schedule-1",
+            schedule_state="paused",
         )
         rs.resume_maintenance(
             value,
@@ -767,6 +1109,7 @@ class MaintenanceTests(unittest.TestCase):
             value,
             checkpoint_id="checkpoint-001",
             schedule_id="schedule-1",
+            schedule_state="paused",
         )
         versions = {**value["versions"], "review_contract": "2"}
         rs.resume_maintenance(
@@ -797,6 +1140,7 @@ class MaintenanceTests(unittest.TestCase):
             value,
             checkpoint_id="checkpoint-001",
             schedule_id="schedule-1",
+            schedule_state="paused",
         )
         rs.resume_maintenance(
             value,
@@ -825,6 +1169,7 @@ class MaintenanceTests(unittest.TestCase):
                 value,
                 checkpoint_id="checkpoint-001",
                 schedule_id="schedule-1",
+                schedule_state="paused",
             )
 
     def _paused(self):
@@ -835,6 +1180,7 @@ class MaintenanceTests(unittest.TestCase):
             value,
             checkpoint_id="checkpoint-001",
             schedule_id="schedule-1",
+            schedule_state="paused",
         )
         return value
 
@@ -977,8 +1323,8 @@ class MaintenanceTests(unittest.TestCase):
             "last_supervisor_created_at",
         ):
             old["review"].pop(key)
-        migrated = rs.migrate_state_document(old)
-        self.assertEqual(migrated["versions"]["schema"], 2)
+        migrated = rs._migrate_state_document(old)
+        self.assertEqual(migrated["versions"]["schema"], rs.SCHEMA_VERSION)
         self.assertEqual(migrated["completed_tasks"], [])
         self.assertEqual(migrated["skill"]["source_repository"], "ythdelmar68/roundlet")
 
@@ -995,7 +1341,7 @@ class MaintenanceTests(unittest.TestCase):
         ):
             old["review"].pop(key)
         with self.assertRaises(rs.MigrationError):
-            rs.migrate_state_document(old)
+            rs._migrate_state_document(old)
 
     def test_paused_schema_migration_can_resume_and_failure_is_atomic(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1006,8 +1352,17 @@ class MaintenanceTests(unittest.TestCase):
             paused["maintenance"].pop("migration_receipt", None)
             store = rs.StateStore(temporary)
             rs.atomic_write_json(store.path, paused)
-            migrated = store.migrate()
-            self.assertEqual(migrated["maintenance"]["stored_versions"]["schema"], 2)
+            migrated = store.migrate(
+                activation_id="activation-0001",
+                checkpoint_id="checkpoint-001",
+                schedule_id="schedule-1",
+                expected_installed_digest=DIGEST,
+                expected_from_schema=1,
+                target_version=rs.SCHEMA_VERSION,
+            )
+            self.assertEqual(
+                migrated["maintenance"]["stored_versions"]["schema"], rs.SCHEMA_VERSION
+            )
             self.assertEqual(migrated["maintenance"]["migration_receipt"]["from_schema"], 1)
             rs.resume_maintenance(
                 migrated,
@@ -1027,14 +1382,63 @@ class MaintenanceTests(unittest.TestCase):
             rs.atomic_write_json(store.path, paused)
             before = store.path.read_bytes()
             with self.assertRaises(rs.MigrationError):
-                store.migrate()
+                store.migrate(
+                    activation_id="activation-0001",
+                    checkpoint_id="checkpoint-001",
+                    schedule_id="schedule-1",
+                    expected_installed_digest=DIGEST,
+                    expected_from_schema=1,
+                    target_version=rs.SCHEMA_VERSION,
+                )
+            self.assertEqual(store.path.read_bytes(), before)
+
+    def test_durable_migration_rejects_every_active_phase_without_writing(self):
+        active_states = [state(), assigned_state()]
+        selecting = state()
+        set_selection(selecting)
+        active_states.append(selecting)
+        for value in active_states:
+            with self.subTest(phase=value["phase"]), tempfile.TemporaryDirectory() as temporary:
+                value["versions"]["schema"] = 1
+                store = rs.StateStore(temporary)
+                rs.atomic_write_json(store.path, value)
+                before = store.path.read_bytes()
+                with self.assertRaises(rs.MigrationError):
+                    store.migrate(
+                        activation_id="activation-0001",
+                        checkpoint_id="checkpoint-001",
+                        schedule_id="schedule-1",
+                        expected_installed_digest=DIGEST,
+                        expected_from_schema=1,
+                        target_version=rs.SCHEMA_VERSION,
+                    )
+                self.assertEqual(store.path.read_bytes(), before)
+
+    def test_durable_migration_requires_exact_paused_schedule_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            value = self._paused()
+            value["versions"]["schema"] = 1
+            value["maintenance"]["stored_versions"]["schema"] = 1
+            value["maintenance"]["schedule_state"] = "active"
+            store = rs.StateStore(temporary)
+            rs.atomic_write_json(store.path, value)
+            before = store.path.read_bytes()
+            with self.assertRaises(rs.MigrationError):
+                store.migrate(
+                    activation_id="activation-0001",
+                    checkpoint_id="checkpoint-001",
+                    schedule_id="schedule-1",
+                    expected_installed_digest=DIGEST,
+                    expected_from_schema=1,
+                    target_version=rs.SCHEMA_VERSION,
+                )
             self.assertEqual(store.path.read_bytes(), before)
 
     def test_unknown_migration_fails(self):
         value = state()
         value["versions"]["schema"] = 99
         with self.assertRaises(rs.MigrationError):
-            rs.migrate_state_document(value)
+            rs._migrate_state_document(value)
 
 
 class DiscoveryTests(unittest.TestCase):
@@ -1051,15 +1455,47 @@ class DiscoveryTests(unittest.TestCase):
             formal_subissues=[{"repository": "owner/project", "issue": 11}],
             umbrella_body="## Required implementation order\n1. #12\n2. other/repo#99",
             comments=[
-                rs.Comment("owner", "Please include #13 as a sub-issue"),
-                rs.Comment("stranger", "Please include #14 as a sub-issue"),
+                rs.Comment("owner", 7, "Please include #13 as a sub-issue"),
+                rs.Comment("stranger", 8, "Please include #14 as a sub-issue"),
             ],
-            owner_login="owner",
+            owner_actor=OWNER_ACTOR,
             current_repository="owner/project",
         )
         self.assertEqual(set(membership), {11, 12, 13})
         self.assertEqual(membership[11], ["formal-sub-issue"])
         self.assertNotIn(14, membership)
+
+    def test_owner_comment_uses_actor_id_not_caller_selected_login(self):
+        membership = rs.discover_membership(
+            umbrella_issue=10,
+            formal_subissues=[],
+            umbrella_body="",
+            comments=[rs.Comment("owner", 999, "Please include #13 as a sub-issue")],
+            owner_actor=OWNER_ACTOR,
+            current_repository="owner/project",
+        )
+        self.assertEqual(membership, {})
+
+        renamed = rs.discover_membership(
+            umbrella_issue=10,
+            formal_subissues=[],
+            umbrella_body="",
+            comments=[rs.Comment("renamed-owner", 7, "Please include #13 as a sub-issue")],
+            owner_actor=OWNER_ACTOR,
+            current_repository="owner/project",
+        )
+        self.assertEqual(renamed, {13: ["owner-comment"]})
+
+    def test_organization_repository_requires_verified_human_actor(self):
+        membership = rs.discover_membership(
+            umbrella_issue=10,
+            formal_subissues=[],
+            umbrella_body="",
+            comments=[rs.Comment("human-owner", 7, "Please include #13 as a sub-issue")],
+            owner_actor=OWNER_ACTOR,
+            current_repository="organization/project",
+        )
+        self.assertEqual(membership, {13: ["owner-comment"]})
 
     def test_body_reference_outside_trusted_sections_does_not_expand(self):
         membership = rs.discover_membership(
@@ -1067,7 +1503,7 @@ class DiscoveryTests(unittest.TestCase):
             formal_subissues=[],
             umbrella_body="## Notes\nMaybe see #99",
             comments=[],
-            owner_login="owner",
+            owner_actor=OWNER_ACTOR,
             current_repository="owner/project",
         )
         self.assertEqual(membership, {})
@@ -1078,7 +1514,7 @@ class DiscoveryTests(unittest.TestCase):
             formal_subissues=[],
             umbrella_body="- [ ] #11\n- Maybe see #99\n1. owner/project#12",
             comments=[],
-            owner_login="owner",
+            owner_actor=OWNER_ACTOR,
             current_repository="owner/project",
         )
         self.assertEqual(set(membership), {11, 12})
@@ -1092,7 +1528,7 @@ class DiscoveryTests(unittest.TestCase):
                 "## Historical implementation order (obsolete)\n- #99"
             ),
             comments=[],
-            owner_login="owner",
+            owner_actor=OWNER_ACTOR,
             current_repository="owner/project",
         )
         self.assertEqual(membership, {})
@@ -1104,7 +1540,7 @@ class DiscoveryTests(unittest.TestCase):
             formal_subissues=[],
             umbrella_body=body,
             comments=[],
-            owner_login="owner",
+            owner_actor=OWNER_ACTOR,
             current_repository="owner/project",
         )
         self.assertEqual(set(membership), {12})
@@ -1116,10 +1552,10 @@ class DiscoveryTests(unittest.TestCase):
             formal_subissues=[],
             umbrella_body="",
             comments=[
-                rs.Comment("owner", "Do not include #98"),
-                rs.Comment("owner", "For context, see #99"),
+                rs.Comment("owner", 7, "Do not include #98"),
+                rs.Comment("owner", 7, "For context, see #99"),
             ],
-            owner_login="owner",
+            owner_actor=OWNER_ACTOR,
             current_repository="owner/project",
         )
         self.assertEqual(membership, {})
@@ -1131,7 +1567,7 @@ class DiscoveryTests(unittest.TestCase):
                 formal_subissues=[{"repository": "other/repo", "issue": 11}],
                 umbrella_body="",
                 comments=[],
-                owner_login="owner",
+                owner_actor=OWNER_ACTOR,
                 current_repository="owner/project",
             )
 
@@ -1222,7 +1658,16 @@ def snap(
 class SelectionTests(unittest.TestCase):
     def receipt(self, snapshots, umbrellas=None):
         value = state(umbrellas=umbrellas)
-        return rs.select_next_task(value, snapshots, refresh_timestamp="2026-07-14T01:00:00Z")
+        discovered = {umbrella: [] for umbrella in value["activation"]["umbrella_issues"]}
+        for snapshot in snapshots:
+            if snapshot.umbrella in discovered:
+                discovered[snapshot.umbrella].append(snapshot.issue)
+        return rs.select_next_task(
+            value,
+            snapshots,
+            refresh_timestamp="2026-07-14T01:00:00Z",
+            refresh_manifest=refresh_manifest(value, discovered),
+        )
 
     def test_selects_only_candidate(self):
         receipt = self.receipt([snap(11)])
@@ -1302,6 +1747,65 @@ class SelectionTests(unittest.TestCase):
         receipt = self.receipt([snap(11, completed=True, open=False)])
         self.assertEqual(receipt["status"], "complete")
 
+    def test_hand_built_selection_cannot_dispatch_arbitrary_issue(self):
+        value = state()
+        value["phase"] = "selecting-task"
+        value["selection"] = {
+            "status": "selected",
+            "activation_id": value["activation"]["id"],
+            "selected_umbrella": 10,
+            "selected_issue": 999,
+            "base_sha": SHA_A,
+        }
+        with self.assertRaises(rs.ValidationError):
+            rs.validate_state(value)
+        with self.assertRaises(rs.ValidationError):
+            rs.assign_task(
+                value,
+                umbrella_issue=10,
+                issue=999,
+                branch="codex/issue-999",
+                worktree="/tmp/999",
+                worker_thread_id="worker-999",
+                worker_creation_receipt=role_receipt("worker", "worker-999"),
+                base_sha=SHA_A,
+            )
+
+    def test_refresh_requires_every_umbrella_and_rejects_partial_or_empty_manifest(self):
+        value = state(umbrellas=[10, 20])
+        incomplete = refresh_manifest(value, {10: [11], 20: []})
+        incomplete["umbrellas"] = incomplete["umbrellas"][:1]
+        with self.assertRaises(rs.ScopeError):
+            rs.select_next_task(
+                value,
+                [snap(11, umbrella=10)],
+                refresh_timestamp="2026-07-14T01:00:00Z",
+                refresh_manifest=incomplete,
+            )
+        empty = refresh_manifest(value, {10: [11], 20: []})
+        empty["umbrellas"] = []
+        with self.assertRaises(rs.ScopeError):
+            rs.select_next_task(
+                value,
+                [snap(11, umbrella=10)],
+                refresh_timestamp="2026-07-14T01:00:00Z",
+                refresh_manifest=empty,
+            )
+
+    def test_umbrella_as_task_and_completion_without_receipt_are_blocked(self):
+        value = state()
+        with self.assertRaises(rs.ScopeError):
+            rs.select_next_task(
+                value,
+                [snap(10, umbrella=10)],
+                refresh_timestamp="2026-07-14T01:00:00Z",
+                refresh_manifest=refresh_manifest(value, {10: [10]}),
+            )
+        value = state()
+        rs.transition_state(value, "selecting-task")
+        with self.assertRaises(rs.TransitionError):
+            rs.transition_state(value, "scope-complete")
+
 
 class PersistenceAndMailboxTests(unittest.TestCase):
     def test_atomic_state_round_trip(self):
@@ -1327,8 +1831,7 @@ class PersistenceAndMailboxTests(unittest.TestCase):
     def test_completed_scope_requires_explicit_fresh_replacement(self):
         with tempfile.TemporaryDirectory() as temporary:
             completed = state()
-            rs.transition_state(completed, "selecting-task")
-            rs.transition_state(completed, "scope-complete")
+            complete_scope(completed)
             completed["maintenance"]["schedule_id"] = "schedule-1"
             store = rs.StateStore(temporary)
             store.initialize(completed)
@@ -1338,6 +1841,9 @@ class PersistenceAndMailboxTests(unittest.TestCase):
                 activation_id="activation-0002",
                 orchestrator_thread_id="orchestrator-1",
                 installed_roundlet_digest=DIGEST,
+                owner_actor=OWNER_ACTOR,
+                capability_preflight=CAPABILITY_PREFLIGHT,
+                orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
             )
             store.initialize(replacement, replace_completed_scope=True)
             self.assertEqual(store.load()["activation"]["id"], "activation-0002")
@@ -1378,19 +1884,7 @@ class PersistenceAndMailboxTests(unittest.TestCase):
     def test_mailbox_rejects_stale_supervisor_candidate(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
-        rs.record_draft_pr(
-            value,
-            repository="owner/project",
-            repository_id=123,
-            issue=11,
-            pr_number=22,
-            pr_url="https://github.com/owner/project/pull/22",
-            pr_state="open",
-            draft=True,
-            base_sha=SHA_A,
-            head_sha=SHA_B,
-            branch="codex/issue-11",
-        )
+        record_draft(value)
         begin_review(value, "supervisor-1")
         payload = self.envelope(value)
         payload.update(
@@ -1656,9 +2150,11 @@ class PersistenceAndMailboxTests(unittest.TestCase):
                         umbrella=10,
                         repository="owner/project",
                         membership_sources=("formal-sub-issue",),
+                        revision="r11",
                     )
                 ],
                 refresh_timestamp="2026-07-14T01:00:00Z",
+                refresh_manifest=refresh_manifest(value, {10: [11]}),
             )
             payload = {
                 "protocol_version": value["versions"]["protocol"],
@@ -1689,6 +2185,7 @@ class PersistenceAndMailboxTests(unittest.TestCase):
                     "worktree": "/repo-worktrees/issue-11",
                     "branch": "codex/issue-11",
                     "base_sha": SHA_A,
+                    "worker_creation_receipt": role_receipt("worker", "worker-11"),
                 },
                 advance=lambda current, item, result: rs.assign_task(
                     current,
@@ -1697,6 +2194,7 @@ class PersistenceAndMailboxTests(unittest.TestCase):
                     branch=result["branch"],
                     worktree=result["worktree"],
                     worker_thread_id=result["worker_thread_id"],
+                    worker_creation_receipt=result["worker_creation_receipt"],
                     base_sha=result["base_sha"],
                 ),
             )
@@ -1718,9 +2216,11 @@ class PersistenceAndMailboxTests(unittest.TestCase):
                         umbrella=10,
                         repository="owner/project",
                         membership_sources=("formal-sub-issue",),
+                        revision="r11",
                     )
                 ],
                 refresh_timestamp="2026-07-14T01:00:00Z",
+                refresh_manifest=refresh_manifest(value, {10: [11]}),
             )
             payload = {
                 "protocol_version": value["versions"]["protocol"],
@@ -1751,6 +2251,68 @@ class PersistenceAndMailboxTests(unittest.TestCase):
             self.assertEqual(calls, [])
             self.assertEqual(store.load()["mailbox_high_water"]["github-context"], 0)
 
+    def test_unauthorized_draft_pr_worker_handoff_never_invokes_callback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            value = assigned_state()
+            set_operation(value, "create_draft_prs", False)
+            payload = self.envelope(value)
+            payload["candidate_sha"] = SHA_B
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            mailboxes = rs.MailboxStore(temporary)
+            rs.atomic_write_json(mailboxes.path("worker-handoff"), payload)
+            calls = []
+            with self.assertRaises(rs.MailboxError):
+                mailboxes.consume(
+                    "worker-handoff",
+                    store,
+                    mutate=lambda item: calls.append(item) or {"pr_number": 22},
+                )
+            self.assertEqual(calls, [])
+            self.assertEqual(store.load()["mailbox_high_water"]["worker-handoff"], 0)
+
+    def test_concurrent_consumers_execute_one_mutation_and_one_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            value = assigned_state()
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            mailboxes = rs.MailboxStore(temporary)
+            payload = self.envelope(value)
+            payload["candidate_sha"] = SHA_B
+            mailboxes.write("worker-handoff", payload, value)
+            entered = threading.Event()
+            release = threading.Event()
+            calls = []
+            outcomes = []
+
+            def mutate(item):
+                calls.append(item["idempotency_key"])
+                entered.set()
+                release.wait(5)
+                return {"comment_id": 1}
+
+            def consume():
+                try:
+                    outcomes.append(mailboxes.consume("worker-handoff", store, mutate=mutate))
+                except rs.RoundletError as exc:
+                    outcomes.append(type(exc).__name__)
+
+            first = threading.Thread(target=consume)
+            second = threading.Thread(target=consume)
+            first.start()
+            self.assertTrue(entered.wait(2))
+            second.start()
+            release.set()
+            first.join(5)
+            second.join(5)
+            self.assertFalse(first.is_alive())
+            self.assertFalse(second.is_alive())
+            self.assertEqual(calls, [payload["idempotency_key"]])
+            durable = store.load()["receipts"][payload["idempotency_key"]]
+            self.assertEqual(durable["status"], "complete")
+            self.assertEqual(durable["receipt"], {"comment_id": 1})
+            self.assertIn({"comment_id": 1}, outcomes)
+
 
 class CompactionTests(unittest.TestCase):
     def test_task_compaction_is_bounded(self):
@@ -1772,7 +2334,7 @@ class CompactionTests(unittest.TestCase):
     def test_scope_compaction_writes_one_summary(self):
         with tempfile.TemporaryDirectory() as temporary:
             value = state()
-            value["phase"] = "scope-complete"
+            complete_scope(value)
             summary = rs.compact_scope(value, temporary, completed_at="2026-07-14T04:00:00Z")
             self.assertEqual(summary["final_result"], "scope-complete")
             files = sorted(path.name for path in Path(temporary).iterdir())
@@ -1917,24 +2479,12 @@ class GuardTests(unittest.TestCase):
             value["activation"]["umbrella_issues"],
             value["activation"]["allowed_operations"],
             digest,
+            owner_actor=value["activation"]["owner_actor"],
+            capability_preflight=value["activation"]["capability_preflight"],
+            orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
         )
-        rs.transition_state(value, "merging")
-        rs.record_merge_receipt(
-            value,
-            repository="owner/project",
-            repository_id=123,
-            pr_number=22,
-            expected_head_sha=SHA_B,
-            merge_sha=SHA_C,
-            merge_method="merge",
-        )
-        rs.record_issue_close_receipt(
-            value,
-            repository="owner/project",
-            repository_id=123,
-            issue=11,
-            state_reason="completed",
-        )
+        record_merge(value)
+        record_close(value)
         rs.record_children_archived(
             value,
             worker_thread_id="worker-11",
@@ -1952,6 +2502,9 @@ class GuardTests(unittest.TestCase):
             activation_id="activation-0001",
             orchestrator_thread_id="orchestrator-1",
             installed_roundlet_digest=digest,
+            owner_actor=OWNER_ACTOR,
+            capability_preflight=CAPABILITY_PREFLIGHT,
+            orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
             now="2026-07-14T00:00:00Z",
         )
         rs.transition_state(value, "selecting-task")
@@ -1963,6 +2516,7 @@ class GuardTests(unittest.TestCase):
             branch="codex/issue-11",
             worktree="/repo-worktrees/issue-11",
             worker_thread_id="worker-11",
+            worker_creation_receipt=role_receipt("worker", "worker-11"),
             base_sha=SHA_A,
         )
         rs.set_candidate(value, SHA_B, clean=True)
@@ -2110,24 +2664,12 @@ class GuardTests(unittest.TestCase):
                 value["activation"]["umbrella_issues"],
                 value["activation"]["allowed_operations"],
                 digest,
+                owner_actor=value["activation"]["owner_actor"],
+                capability_preflight=value["activation"]["capability_preflight"],
+                orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
             )
-            rs.transition_state(value, "merging")
-            rs.record_merge_receipt(
-                value,
-                repository="owner/project",
-                repository_id=123,
-                pr_number=22,
-                expected_head_sha=SHA_B,
-                merge_sha=SHA_C,
-                merge_method="merge",
-            )
-            rs.record_issue_close_receipt(
-                value,
-                repository="owner/project",
-                repository_id=123,
-                issue=11,
-                state_reason="completed",
-            )
+            record_merge(value)
+            record_close(value)
             value["task"]["cleanup"] = {key: True for key in rs.LOCAL_CLEANUP_KEYS}
             rs.transition_state(value, "sync-base")
             store = rs.StateStore(temporary)

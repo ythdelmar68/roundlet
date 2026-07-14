@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import copy
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -36,10 +38,52 @@ MAILBOX_NAMES = {
     "supervisor-review": "supervisor-review.json",
 }
 
-SCHEMA_VERSION = 2
-PROTOCOL_VERSION = "1"
-REVIEW_CONTRACT_VERSION = "1"
-POLICY_VERSION = "1"
+GITHUB_OPERATION_FLAGS = {
+    "create-draft-pr": "create_draft_prs",
+    "mark-ready": "mark_ready_for_review",
+    "merge-pr": "merge_commit_after_all_gates",
+    "close-issue": "close_completed_sub_issues",
+    "delete-remote-branch": "delete_proven_task_owned_resources",
+}
+MAX_GITHUB_MUTATION_RECEIPTS = 32
+
+ROLE_CAPABILITY_PROFILES = {
+    "orchestrator": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "xhigh",
+        "environment_type": "local",
+        "forked": False,
+        "filesystem_write": True,
+        "github_connector": True,
+    },
+    "worker": {
+        "model": "gpt-5.5",
+        "reasoning_effort": "xhigh",
+        "environment_type": "worktree",
+        "forked": False,
+        "filesystem_write": True,
+        "github_connector": False,
+        "shell_network": False,
+        "web_access": False,
+        "gh_access": False,
+    },
+    "supervisor": {
+        "model": "gpt-5.6-sol",
+        "reasoning_effort": "xhigh",
+        "environment_type": "local",
+        "forked": False,
+        "filesystem_write": False,
+        "github_connector": False,
+        "shell_network": False,
+        "web_access": False,
+        "gh_access": False,
+    },
+}
+
+SCHEMA_VERSION = 3
+PROTOCOL_VERSION = "2"
+REVIEW_CONTRACT_VERSION = "2"
+POLICY_VERSION = "2"
 VERSION_KEYS = {"schema", "protocol", "review_contract", "policy"}
 LOCAL_CLEANUP_KEYS = {
     "worktree_removed",
@@ -225,6 +269,95 @@ def require_content_digest(value: Any, label: str = "installed_roundlet_digest")
     if not isinstance(value, str) or not CONTENT_DIGEST.fullmatch(value):
         raise ValidationError(f"{label} must be a lowercase SHA-256 digest")
     return value
+
+
+def validate_owner_actor(actor: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize the connector-verified human actor that authorized this scope."""
+    if not isinstance(actor, Mapping) or set(actor) != {
+        "id",
+        "login",
+        "account_type",
+        "verified_by_connector",
+    }:
+        raise ValidationError("owner actor requires exact connector identity evidence")
+    actor_id = require_positive_issue(actor.get("id"), "owner actor ID")
+    login = actor.get("login")
+    if not isinstance(login, str) or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})", login):
+        raise ValidationError("owner actor login is malformed")
+    if actor.get("account_type") != "User" or actor.get("verified_by_connector") is not True:
+        raise ScopeError("scope activation requires a connector-verified human owner actor")
+    return {
+        "id": actor_id,
+        "login": login,
+        "account_type": "User",
+        "verified_by_connector": True,
+    }
+
+
+def validate_capability_preflight(preflight: Mapping[str, Any]) -> dict[str, Any]:
+    required = {
+        "verified_by_service": True,
+        "per_thread_receipts": True,
+        "worker_profile_enforceable": True,
+        "supervisor_profile_enforceable": True,
+    }
+    if not isinstance(preflight, Mapping) or set(preflight) != set(required):
+        raise ValidationError("capability preflight must contain the exact isolation proof fields")
+    if any(preflight.get(key) is not expected for key, expected in required.items()):
+        raise ScopeError("installed Codex surface cannot prove Worker/Supervisor isolation")
+    return dict(required)
+
+
+def validate_role_creation_receipt(
+    receipt: Mapping[str, Any],
+    *,
+    role: str,
+    thread_id: str,
+    project_identity: str,
+    parent_thread_id: str | None,
+) -> dict[str, Any]:
+    """Require service-returned capability metadata; prompts are not capability proof."""
+    profile = ROLE_CAPABILITY_PROFILES.get(role)
+    if profile is None:
+        raise ValidationError("unknown Roundlet role capability profile")
+    required_keys = {
+        "verified_by_service",
+        "role",
+        "thread_id",
+        "model",
+        "reasoning_effort",
+        "environment_type",
+        "project_identity",
+        "parent_thread_id",
+        "forked",
+        "permission_profile",
+        "filesystem_write",
+        "github_connector",
+        "shell_network",
+        "web_access",
+        "gh_access",
+        "created_at",
+    }
+    if not isinstance(receipt, Mapping) or set(receipt) != required_keys:
+        raise ValidationError(f"{role} requires an exact service capability receipt")
+    if receipt.get("verified_by_service") is not True or receipt.get("role") != role:
+        raise ScopeError(f"{role} creation was not verified by the Codex service")
+    if receipt.get("thread_id") != thread_id or receipt.get("project_identity") != project_identity:
+        raise ScopeError(f"{role} receipt is bound to another thread or project")
+    if receipt.get("parent_thread_id") != parent_thread_id:
+        raise ScopeError(f"{role} parent/fork identity is mismatched")
+    for key, expected in profile.items():
+        if receipt.get(key) != expected:
+            raise ScopeError(f"{role} capability {key} is not isolated as required")
+    permission = receipt.get("permission_profile")
+    if role == "supervisor" and permission != "read-only":
+        raise ScopeError("Supervisor permission profile must be read-only")
+    if role == "worker" and permission not in {"workspace-write", "worktree-write"}:
+        raise ScopeError("Worker permission profile must be task-worktree scoped")
+    if role == "orchestrator" and permission not in {"workspace-write", "danger-full-access"}:
+        raise ScopeError("Orchestrator permission profile cannot support the activated project")
+    parse_utc_timestamp(receipt.get("created_at"), f"{role} creation receipt timestamp")
+    return copy.deepcopy(dict(receipt))
 
 
 def validate_versions(versions: Mapping[str, Any]) -> None:
@@ -511,6 +644,9 @@ def compute_scope_digest(
     allowed_operations: Mapping[str, bool],
     installed_roundlet_digest: str,
     *,
+    owner_actor: Mapping[str, Any],
+    capability_preflight: Mapping[str, Any],
+    orchestrator_creation_receipt: Mapping[str, Any],
     protocol_version: str = PROTOCOL_VERSION,
     policy_version: str = POLICY_VERSION,
 ) -> str:
@@ -528,6 +664,9 @@ def compute_scope_digest(
         "base_branch": validate_branch_name(base_branch, "base_branch"),
         "umbrella_issues": [require_positive_issue(item) for item in umbrella_issues],
         "allowed_operations": {key: bool(allowed_operations[key]) for key in ALLOWED_OPERATION_KEYS},
+        "owner_actor": validate_owner_actor(owner_actor),
+        "capability_preflight": validate_capability_preflight(capability_preflight),
+        "orchestrator_creation_receipt_digest": digest_json(orchestrator_creation_receipt),
         "installed_roundlet_digest": installed_roundlet_digest,
         "protocol_version": str(protocol_version),
         "policy_version": str(policy_version),
@@ -542,6 +681,9 @@ def new_state(
     activation_id: str,
     orchestrator_thread_id: str,
     installed_roundlet_digest: str,
+    owner_actor: Mapping[str, Any],
+    capability_preflight: Mapping[str, Any],
+    orchestrator_creation_receipt: Mapping[str, Any],
     now: str | None = None,
 ) -> dict[str, Any]:
     normalized = normalize_activation_request(request)
@@ -555,6 +697,15 @@ def new_state(
         raise ValidationError("orchestrator_thread_id is required")
     digest = require_content_digest(installed_roundlet_digest)
     timestamp = now or utc_now()
+    normalized_owner = validate_owner_actor(owner_actor)
+    normalized_preflight = validate_capability_preflight(capability_preflight)
+    orchestrator_receipt = validate_role_creation_receipt(
+        orchestrator_creation_receipt,
+        role="orchestrator",
+        thread_id=orchestrator_thread_id,
+        project_identity=identity.git_common_dir_fingerprint,
+        parent_thread_id=None,
+    )
     repository = {
         **identity.scope_fields(),
         "git_root": identity.git_root,
@@ -566,6 +717,9 @@ def new_state(
         normalized["umbrella_issues"],
         normalized["authorize"],
         digest,
+        owner_actor=normalized_owner,
+        capability_preflight=normalized_preflight,
+        orchestrator_creation_receipt=orchestrator_receipt,
     )
     state = {
         "skill": {
@@ -582,6 +736,9 @@ def new_state(
         "activation": {
             "id": activation_id,
             "orchestrator_thread_id": orchestrator_thread_id,
+            "orchestrator_creation_receipt": orchestrator_receipt,
+            "owner_actor": normalized_owner,
+            "capability_preflight": normalized_preflight,
             "repository": repository,
             "base_branch": identity.base_branch,
             "base_sha": identity.head_sha,
@@ -599,12 +756,14 @@ def new_state(
             "pass_identity": None,
             "current_supervisor_thread_id": None,
             "supervisor_thread_ids": [],
+            "supervisor_creation_receipts": [],
             "unarchived_supervisor_thread_ids": [],
             "archived_supervisor_count": 0,
             "archived_supervisor_digest": "0" * 64,
             "last_supervisor_created_at": None,
         },
         "receipts": {},
+        "github_mutations": {"pending": None, "receipts": {}},
         "receipt_archive": {"count": 0, "digest": "0" * 64},
         "mailbox_high_water": {kind: 0 for kind in sorted(MAILBOX_NAMES)},
         "maintenance": {
@@ -613,6 +772,7 @@ def new_state(
             "checkpoint_id": None,
             "previous_phase": None,
             "schedule_id": None,
+            "schedule_state": None,
             "stored_versions": None,
             "pending_action": None,
             "resume_worker": False,
@@ -652,6 +812,15 @@ def validate_state(state: Mapping[str, Any]) -> None:
     if not isinstance(repository, Mapping):
         raise ValidationError("activation repository identity is missing")
     normalize_owner_name(str(repository.get("owner_name", "")))
+    owner_actor = validate_owner_actor(activation.get("owner_actor", {}))
+    capability_preflight = validate_capability_preflight(activation.get("capability_preflight", {}))
+    validate_role_creation_receipt(
+        activation.get("orchestrator_creation_receipt", {}),
+        role="orchestrator",
+        thread_id=str(activation.get("orchestrator_thread_id", "")),
+        project_identity=str(repository.get("git_common_dir_fingerprint", "")),
+        parent_thread_id=None,
+    )
     digest = state.get("skill", {}).get("content_digest")
     require_content_digest(digest)
     try:
@@ -661,6 +830,9 @@ def validate_state(state: Mapping[str, Any]) -> None:
             activation.get("umbrella_issues", []),
             activation.get("allowed_operations", {}),
             digest,
+            owner_actor=owner_actor,
+            capability_preflight=capability_preflight,
+            orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
             protocol_version=str(versions.get("protocol")),
             policy_version=str(versions.get("policy")),
         )
@@ -668,6 +840,13 @@ def validate_state(state: Mapping[str, Any]) -> None:
         raise ValidationError("activation scope identity is incomplete") from exc
     if activation.get("scope_digest") != expected_scope:
         raise ScopeError("scope digest does not match the persisted activation")
+    selection = state.get("selection")
+    if selection is not None:
+        validate_selection_receipt(state, selection)
+    if phase == "scope-complete" and (
+        not isinstance(selection, Mapping) or selection.get("status") != "complete"
+    ):
+        raise ValidationError("scope-complete requires a final complete refresh receipt")
     task = state.get("task")
     task_required = phase in {
         "worker-running",
@@ -690,6 +869,13 @@ def validate_state(state: Mapping[str, Any]) -> None:
         require_positive_issue(task.get("issue"), "task issue")
         if task.get("umbrella_issue") not in activation.get("umbrella_issues", []):
             raise ScopeError("active task umbrella is outside the activation")
+        validate_role_creation_receipt(
+            task.get("worker_creation_receipt", {}),
+            role="worker",
+            thread_id=str(task.get("worker_thread_id", "")),
+            project_identity=str(repository.get("git_common_dir_fingerprint", "")),
+            parent_thread_id=activation.get("orchestrator_thread_id"),
+        )
         if task.get("branch") is not None:
             branch = validate_branch_name(task["branch"])
             if not branch.startswith("codex/"):
@@ -711,6 +897,23 @@ def validate_state(state: Mapping[str, Any]) -> None:
     thread_ids = review.get("supervisor_thread_ids")
     if not isinstance(thread_ids, list) or len(thread_ids) != len(set(thread_ids)):
         raise ValidationError("Supervisor thread identities must be unique")
+    creation_receipts = review.get("supervisor_creation_receipts")
+    if not isinstance(creation_receipts, list) or len(creation_receipts) > 64:
+        raise ValidationError("Supervisor capability receipt ledger is malformed")
+    receipt_thread_ids: list[str] = []
+    for receipt in creation_receipts:
+        if not isinstance(receipt, Mapping):
+            raise ValidationError("Supervisor capability receipt is malformed")
+        normalized = validate_role_creation_receipt(
+            receipt,
+            role="supervisor",
+            thread_id=str(receipt.get("thread_id", "")),
+            project_identity=str(repository.get("git_common_dir_fingerprint", "")),
+            parent_thread_id=activation.get("orchestrator_thread_id"),
+        )
+        receipt_thread_ids.append(normalized["thread_id"])
+    if receipt_thread_ids and receipt_thread_ids != thread_ids[-len(receipt_thread_ids) :]:
+        raise ValidationError("Supervisor capability receipts differ from the freshness ledger")
     unarchived_thread_ids = review.get("unarchived_supervisor_thread_ids")
     if (
         not isinstance(unarchived_thread_ids, list)
@@ -808,9 +1011,58 @@ def validate_state(state: Mapping[str, Any]) -> None:
             raise ValidationError("mailbox receipt sequence exceeds its durable high-water mark")
         if status == "pending" and sequence != high_water[kind]:
             raise ValidationError("pending mailbox intent must be the latest sequence for its kind")
+    github_mutations = state.get("github_mutations")
+    if not isinstance(github_mutations, Mapping) or set(github_mutations) != {"pending", "receipts"}:
+        raise ValidationError("GitHub mutation ledger is malformed")
+    github_receipts = github_mutations.get("receipts")
+    if not isinstance(github_receipts, Mapping) or len(github_receipts) > MAX_GITHUB_MUTATION_RECEIPTS:
+        raise ValidationError("GitHub mutation receipt ledger is unbounded or malformed")
+    for key, receipt in github_receipts.items():
+        if (
+            not isinstance(key, str)
+            or not isinstance(receipt, Mapping)
+            or receipt.get("status") != "complete"
+            or receipt.get("operation") not in GITHUB_OPERATION_FLAGS
+            or not CONTENT_DIGEST.fullmatch(str(receipt.get("target_digest", "")))
+            or not isinstance(receipt.get("receipt"), Mapping)
+        ):
+            raise ValidationError("GitHub mutation receipt is malformed")
+    pending_github = github_mutations.get("pending")
+    if pending_github is not None and (
+        not isinstance(pending_github, Mapping)
+        or pending_github.get("operation") not in GITHUB_OPERATION_FLAGS
+        or not CONTENT_DIGEST.fullmatch(str(pending_github.get("target_digest", "")))
+        or not isinstance(pending_github.get("target"), Mapping)
+    ):
+        raise ValidationError("pending GitHub mutation intent is malformed")
+    if isinstance(pending_github, Mapping):
+        expected_phase = {
+            "create-draft-pr": "worker-running",
+            "mark-ready": "pass-follow-up",
+            "merge-pr": "merging",
+            "close-issue": "closing-issue",
+            "delete-remote-branch": "cleanup",
+        }[pending_github["operation"]]
+        if (
+            pending_github.get("activation_id") != activation.get("id")
+            or pending_github.get("target_digest") != digest_json(pending_github["target"])
+            or phase != expected_phase
+            or activation.get("allowed_operations", {}).get(
+                GITHUB_OPERATION_FLAGS[pending_github["operation"]]
+            )
+            is not True
+        ):
+            raise ValidationError("pending GitHub mutation intent is stale or unauthorized")
+        parse_utc_timestamp(pending_github.get("started_at"), "GitHub mutation intent timestamp")
     maintenance = state.get("maintenance")
     if not isinstance(maintenance, Mapping) or not isinstance(maintenance.get("resume_worker"), bool):
         raise ValidationError("maintenance Worker continuation marker is malformed")
+    if phase == "paused-maintenance" and (
+        maintenance.get("schedule_state") != "paused"
+        or not isinstance(maintenance.get("checkpoint_id"), str)
+        or not isinstance(maintenance.get("schedule_id"), str)
+    ):
+        raise ValidationError("paused-maintenance requires the exact paused schedule checkpoint")
     pass_identity = review.get("pass_identity")
     if pass_identity is not None:
         if not isinstance(task, Mapping):
@@ -885,6 +1137,18 @@ class StateStore:
     def __init__(self, state_directory: str | os.PathLike[str]):
         self.directory = Path(state_directory)
         self.path = self.directory / STATE_FILENAME
+
+    @contextmanager
+    def single_writer(self):
+        """Serialize one activation's read/intent/mutation/receipt critical section."""
+        self.directory.mkdir(parents=True, exist_ok=True)
+        lock_path = self.directory / ".single-writer.lock"
+        with lock_path.open("a+", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def load(self) -> dict[str, Any]:
         state = read_json(self.path, max_bytes=MAX_STATE_BYTES)
@@ -1047,12 +1311,44 @@ class StateStore:
         self.save(state)
         return state
 
-    def migrate(self, target_version: int = SCHEMA_VERSION) -> dict[str, Any]:
-        original = read_json(self.path, max_bytes=MAX_STATE_BYTES)
-        migrated = migrate_state_document(original, target_version)
-        validate_state(migrated)
-        atomic_write_json(self.path, migrated, max_bytes=MAX_STATE_BYTES)
-        return migrated
+    def migrate(
+        self,
+        *,
+        activation_id: str,
+        checkpoint_id: str,
+        schedule_id: str,
+        expected_installed_digest: str,
+        expected_from_schema: int,
+        target_version: int = SCHEMA_VERSION,
+    ) -> dict[str, Any]:
+        """Durably migrate only inside the exact reviewed paused-maintenance checkpoint."""
+        with self.single_writer():
+            original = read_json(self.path, max_bytes=MAX_STATE_BYTES)
+            maintenance = original.get("maintenance", {})
+            versions = original.get("versions", {})
+            if original.get("phase") != "paused-maintenance":
+                raise MigrationError("durable migration is permitted only in paused-maintenance")
+            if original.get("activation", {}).get("id") != activation_id:
+                raise MigrationError("migration activation identity is mismatched")
+            if maintenance.get("checkpoint_id") != checkpoint_id:
+                raise MigrationError("migration checkpoint identity is mismatched")
+            if maintenance.get("schedule_id") != schedule_id or maintenance.get("schedule_state") != "paused":
+                raise MigrationError("migration requires the exact paused schedule receipt")
+            digest = require_content_digest(expected_installed_digest, "expected installed digest")
+            if original.get("skill", {}).get("content_digest") != digest or maintenance.get("installed_digest") != digest:
+                raise MigrationError("migration installed digest differs from the reviewed checkpoint")
+            if maintenance.get("stored_versions") != versions:
+                raise MigrationError("migration checkpoint versions differ from the stored document")
+            if versions.get("schema") != expected_from_schema or target_version <= expected_from_schema:
+                raise MigrationError("migration old/new schema contract is mismatched")
+            if any(receipt.get("status") == "pending" for receipt in original.get("receipts", {}).values()):
+                raise MigrationError("migration requires every mutation receipt to be reconciled")
+            if original.get("github_mutations", {}).get("pending") is not None:
+                raise MigrationError("migration requires every GitHub mutation to be reconciled")
+            migrated = _migrate_state_document(original, target_version)
+            validate_state(migrated)
+            atomic_write_json(self.path, migrated, max_bytes=MAX_STATE_BYTES)
+            return migrated
 
 
 def transition_state(
@@ -1075,6 +1371,17 @@ def transition_state(
         task = state.get("task")
         if not isinstance(task, Mapping) or not all(task.get("cleanup", {}).values()):
             raise TransitionError("cleanup must be durably complete before base synchronization")
+    if old == "pre-merge" and new_phase == "merging":
+        pending = state.get("github_mutations", {}).get("pending")
+        if not isinstance(pending, Mapping) or pending.get("operation") != "merge-pr":
+            raise TransitionError("merge requires a durable authorized connector intent")
+    if new_phase == "scope-complete":
+        selection = state.get("selection")
+        if state.get("task") is not None:
+            raise TransitionError("scope completion requires no owned task resources")
+        if not isinstance(selection, Mapping) or selection.get("status") != "complete":
+            raise TransitionError("scope completion requires a final complete refresh receipt")
+        validate_selection_receipt(state, selection)
     state["phase"] = new_phase
     state.setdefault("timestamps", {})["updated_at"] = now or utc_now()
 
@@ -1087,6 +1394,7 @@ def assign_task(
     branch: str,
     worktree: str,
     worker_thread_id: str,
+    worker_creation_receipt: Mapping[str, Any],
     base_sha: str,
 ) -> None:
     if state.get("phase") != "selecting-task" or state.get("task") is not None:
@@ -1099,6 +1407,7 @@ def assign_task(
         raise ScopeError("Worker branch and task creation were not authorized")
     if not isinstance(selection, Mapping) or selection.get("status") != "selected":
         raise TransitionError("task assignment requires one durable selected receipt")
+    validate_selection_receipt(state, selection)
     if selection.get("activation_id") != activation.get("id"):
         raise ScopeError("selection receipt belongs to another activation")
     if selection.get("selected_umbrella") != umbrella or selection.get("selected_issue") != selected:
@@ -1115,12 +1424,20 @@ def assign_task(
         raise ScopeError("Worker base differs from the deterministic selection receipt")
     if not all(isinstance(item, str) and item for item in (worktree, worker_thread_id)):
         raise ValidationError("worktree and Worker thread identities are required")
+    worker_receipt = validate_role_creation_receipt(
+        worker_creation_receipt,
+        role="worker",
+        thread_id=worker_thread_id,
+        project_identity=state["activation"]["repository"]["git_common_dir_fingerprint"],
+        parent_thread_id=state["activation"]["orchestrator_thread_id"],
+    )
     state["task"] = {
         "umbrella_issue": umbrella,
         "issue": selected,
         "branch": branch_name,
         "worktree": str(Path(worktree).resolve()),
         "worker_thread_id": worker_thread_id,
+        "worker_creation_receipt": worker_receipt,
         "base_sha": base,
         "candidate_sha": None,
         "pr_number": None,
@@ -1141,6 +1458,7 @@ def assign_task(
         "pass_identity": None,
         "current_supervisor_thread_id": None,
         "supervisor_thread_ids": [],
+        "supervisor_creation_receipts": [],
         "unarchived_supervisor_thread_ids": [],
         "archived_supervisor_count": 0,
         "archived_supervisor_digest": "0" * 64,
@@ -1199,15 +1517,21 @@ def begin_supervisor(
     expected_creation = {
         "activation_id": state["activation"]["id"],
         "issue": task["issue"],
-        "thread_id": thread_id,
         "generation": review["round"] + 1,
         "created": True,
     }
-    if not isinstance(creation_receipt, Mapping) or set(creation_receipt) != set(expected_creation) | {"created_at"}:
+    if not isinstance(creation_receipt, Mapping) or set(creation_receipt) != set(expected_creation) | {"service_receipt"}:
         raise ValidationError("Supervisor requires an exact externally verified fresh-task creation receipt")
     if any(creation_receipt.get(key) != value for key, value in expected_creation.items()):
         raise ValidationError("Supervisor fresh-task creation receipt identity is mismatched")
-    created_at = creation_receipt.get("created_at")
+    service_receipt = validate_role_creation_receipt(
+        creation_receipt.get("service_receipt", {}),
+        role="supervisor",
+        thread_id=thread_id,
+        project_identity=state["activation"]["repository"]["git_common_dir_fingerprint"],
+        parent_thread_id=state["activation"]["orchestrator_thread_id"],
+    )
+    created_at = service_receipt.get("created_at")
     created_time = parse_utc_timestamp(created_at, "Supervisor creation receipt timestamp")
     previous_created_at = review.get("last_supervisor_created_at")
     if isinstance(previous_created_at, str):
@@ -1220,6 +1544,9 @@ def begin_supervisor(
     review["supervisor_thread_ids"].append(thread_id)
     if len(review["supervisor_thread_ids"]) > 64:
         review["supervisor_thread_ids"] = review["supervisor_thread_ids"][-64:]
+    review["supervisor_creation_receipts"].append(service_receipt)
+    if len(review["supervisor_creation_receipts"]) > 64:
+        review["supervisor_creation_receipts"] = review["supervisor_creation_receipts"][-64:]
     review["unarchived_supervisor_thread_ids"].append(thread_id)
     review["current_supervisor_thread_id"] = thread_id
     review["round"] += 1
@@ -1310,14 +1637,231 @@ def record_supervisor_archived(
     review["archived_supervisor_count"] += 1
 
 
+def _validate_exact_pr_identity(state: Mapping[str, Any], live: Mapping[str, Any]) -> None:
+    task = state.get("task") or {}
+    activation = state.get("activation") or {}
+    repository = activation.get("repository", {})
+    for name_key, id_key in (
+        ("repository", "repository_id"),
+        ("base_repository", "base_repository_id"),
+        ("head_repository", "head_repository_id"),
+    ):
+        assert_repository_target(
+            repository,
+            str(live.get(name_key, "")),
+            target_repository_id=live.get(id_key),
+        )
+    if live.get("base_branch") != activation.get("base_branch"):
+        raise ScopeError("PR base branch differs from the activated base branch")
+    if live.get("head_ref") != task.get("branch"):
+        raise ScopeError("PR head ref differs from the task-owned branch")
+    if live.get("base_sha") != task.get("base_sha"):
+        raise ScopeError("PR base SHA differs from the selected task")
+    if live.get("head_sha") != task.get("candidate_sha"):
+        raise ScopeError("PR head SHA differs from the reviewed candidate")
+
+
+def _require_pending_github_intent(
+    state: Mapping[str, Any],
+    *,
+    intent_key: str,
+    operation: str,
+) -> Mapping[str, Any]:
+    pending = state.get("github_mutations", {}).get("pending")
+    if (
+        not isinstance(pending, Mapping)
+        or pending.get("idempotency_key") != intent_key
+        or pending.get("operation") != operation
+    ):
+        raise TransitionError(f"{operation} receipt requires its durable gateway intent")
+    return pending
+
+
+def begin_github_mutation_intent(
+    state: MutableMapping[str, Any],
+    *,
+    operation: str,
+    idempotency_key: str,
+    target: Mapping[str, Any],
+) -> None:
+    if operation not in GITHUB_OPERATION_FLAGS:
+        raise ValidationError("unknown GitHub mutation operation")
+    if not isinstance(idempotency_key, str) or not re.fullmatch(r"[A-Za-z0-9._:-]{8,200}", idempotency_key):
+        raise ValidationError("GitHub mutation idempotency key is malformed")
+    if not isinstance(target, Mapping):
+        raise ValidationError("GitHub mutation target is missing")
+    ledger = state.get("github_mutations")
+    if not isinstance(ledger, MutableMapping):
+        raise ValidationError("GitHub mutation ledger is missing")
+    target_digest = digest_json(target)
+    completed = ledger.get("receipts", {}).get(idempotency_key)
+    if completed is not None:
+        if completed.get("operation") != operation or completed.get("target_digest") != target_digest:
+            raise MailboxError("GitHub mutation key is bound to another exact target")
+        return
+    if len(ledger.get("receipts", {})) >= MAX_GITHUB_MUTATION_RECEIPTS:
+        raise ValidationError("compact the completed task before another GitHub mutation")
+    if ledger.get("pending") is not None:
+        raise MailboxError("reconcile the pending GitHub mutation before another connector write")
+    flag = GITHUB_OPERATION_FLAGS[operation]
+    if state["activation"]["allowed_operations"].get(flag) is not True:
+        raise ScopeError(f"GitHub operation {operation} was not authorized")
+    task = state.get("task")
+    if not isinstance(task, Mapping):
+        raise TransitionError("GitHub mutation requires one active selected task")
+    phase = state.get("phase")
+    expected_phases = {
+        "create-draft-pr": "worker-running",
+        "mark-ready": "pass-follow-up",
+        "merge-pr": "pre-merge",
+        "close-issue": "closing-issue",
+        "delete-remote-branch": "cleanup",
+    }
+    if phase != expected_phases[operation]:
+        raise TransitionError(f"{operation} is not permitted from phase {phase}")
+    if operation in {"create-draft-pr", "mark-ready", "merge-pr"}:
+        _validate_exact_pr_identity(state, target)
+        if operation != "create-draft-pr":
+            if target.get("pr_number") != task.get("pr_number") or target.get("pr_url") != task.get("pr_url"):
+                raise ScopeError("GitHub mutation PR differs from the active task")
+        if operation == "merge-pr":
+            assert_premerge_gates(state, target)
+    elif operation == "close-issue":
+        assert_repository_target(
+            state["activation"]["repository"],
+            str(target.get("repository", "")),
+            target_repository_id=target.get("repository_id"),
+        )
+        if target.get("issue") != task.get("issue") or not isinstance(task.get("merge_receipt"), Mapping):
+            raise ScopeError("issue-close target is not the exact merged selected issue")
+    else:
+        assert_repository_target(
+            state["activation"]["repository"],
+            str(target.get("repository", "")),
+            target_repository_id=target.get("repository_id"),
+        )
+        if target.get("branch") != task.get("branch"):
+            raise ScopeError("remote deletion target is not the task-owned branch")
+    ledger["pending"] = {
+        "idempotency_key": idempotency_key,
+        "operation": operation,
+        "activation_id": state["activation"]["id"],
+        "target": copy.deepcopy(dict(target)),
+        "target_digest": target_digest,
+        "started_at": utc_now(),
+    }
+    if operation == "merge-pr":
+        transition_state(state, "merging")
+
+
+def complete_github_mutation_intent(
+    state: MutableMapping[str, Any],
+    *,
+    idempotency_key: str,
+    receipt: Mapping[str, Any],
+) -> None:
+    ledger = state.get("github_mutations")
+    if not isinstance(ledger, MutableMapping):
+        raise ValidationError("GitHub mutation ledger is missing")
+    pending = ledger.get("pending")
+    if not isinstance(pending, Mapping) or pending.get("idempotency_key") != idempotency_key:
+        raise MailboxError("GitHub mutation completion has no matching durable intent")
+    if not isinstance(receipt, Mapping) or not receipt:
+        raise MailboxError("connector live-state receipt is missing")
+    operation = str(pending["operation"])
+    kwargs = copy.deepcopy(dict(receipt))
+    kwargs["intent_key"] = idempotency_key
+    if operation == "create-draft-pr":
+        record_draft_pr(state, **kwargs)
+    elif operation == "mark-ready":
+        record_pr_ready(state, **kwargs)
+    elif operation == "merge-pr":
+        record_merge_receipt(state, **kwargs)
+    elif operation == "close-issue":
+        record_issue_close_receipt(state, **kwargs)
+    elif operation == "delete-remote-branch":
+        record_remote_branch_deleted(state, **kwargs)
+    else:
+        raise ValidationError("unknown pending GitHub operation")
+    receipts = ledger.setdefault("receipts", {})
+    if len(receipts) >= MAX_GITHUB_MUTATION_RECEIPTS:
+        raise ValidationError("GitHub mutation receipt bound exceeded before task compaction")
+    receipts[idempotency_key] = {
+        "status": "complete",
+        "operation": operation,
+        "target_digest": pending["target_digest"],
+        "receipt": copy.deepcopy(dict(receipt)),
+        "completed_at": utc_now(),
+    }
+    ledger["pending"] = None
+
+
+def execute_github_mutation(
+    state_store: StateStore,
+    *,
+    operation: str,
+    idempotency_key: str,
+    target: Mapping[str, Any],
+    mutate: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    reconcile: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
+) -> Mapping[str, Any]:
+    """The only connector-write gateway: authorize, intent, mutate, live receipt, advance."""
+    with state_store.single_writer():
+        state = state_store.load()
+        existing = state.get("github_mutations", {}).get("receipts", {}).get(idempotency_key)
+        if isinstance(existing, Mapping):
+            if existing.get("operation") != operation or existing.get("target_digest") != digest_json(target):
+                raise MailboxError("GitHub mutation key is bound to another exact target")
+            return existing["receipt"]
+        pending = state.get("github_mutations", {}).get("pending")
+        if pending is None:
+            begin_github_mutation_intent(
+                state,
+                operation=operation,
+                idempotency_key=idempotency_key,
+                target=target,
+            )
+            state_store.save(state)
+            result = mutate(target)
+        else:
+            if (
+                pending.get("idempotency_key") != idempotency_key
+                or pending.get("operation") != operation
+                or pending.get("target_digest") != digest_json(target)
+            ):
+                raise MailboxError("another GitHub mutation is pending reconciliation")
+            if reconcile is None:
+                raise MailboxError("pending GitHub mutation requires connector reconciliation")
+            result = reconcile(target)
+            if result is None:
+                raise MailboxError("connector mutation identity remains ambiguous")
+        if not isinstance(result, Mapping):
+            raise MailboxError("connector mutation did not return live-state evidence")
+        complete_github_mutation_intent(state, idempotency_key=idempotency_key, receipt=result)
+        state_store.save(state)
+        return result
+
+
 def record_pr_ready(
     state: MutableMapping[str, Any],
     *,
+    intent_key: str,
     repository: str,
     repository_id: int | None,
     pr_number: int,
+    pr_url: str,
+    pr_state: str,
+    draft: bool,
+    base_repository: str,
+    base_repository_id: int | None,
+    base_branch: str,
+    base_sha: str,
+    head_repository: str,
+    head_repository_id: int | None,
+    head_ref: str,
     head_sha: str,
 ) -> None:
+    _require_pending_github_intent(state, intent_key=intent_key, operation="mark-ready")
     if state.get("phase") != "pass-follow-up":
         raise TransitionError("PR readiness is expected only after initial PASS follow-up")
     task = state.get("task")
@@ -1335,6 +1879,23 @@ def record_pr_ready(
     )
     if require_positive_issue(pr_number, "pr_number") != task.get("pr_number"):
         raise ScopeError("ready receipt PR does not match the selected task")
+    live_identity = {
+        "repository": repository,
+        "repository_id": repository_id,
+        "base_repository": base_repository,
+        "base_repository_id": base_repository_id,
+        "base_branch": base_branch,
+        "base_sha": base_sha,
+        "head_repository": head_repository,
+        "head_repository_id": head_repository_id,
+        "head_ref": head_ref,
+        "head_sha": head_sha,
+    }
+    _validate_exact_pr_identity(state, live_identity)
+    if pr_url != task.get("pr_url") or not isinstance(pr_state, str) or pr_state.casefold() != "open":
+        raise GuardError("ready receipt requires the exact open PR live state")
+    if draft is not False:
+        raise GuardError("ready receipt requires connector read-back proving draft=false")
     head = require_full_sha(head_sha, "ready head_sha")
     pass_identity = review.get("pass_identity")
     if (
@@ -1384,6 +1945,7 @@ def record_worker_ready_to_merge(
 def record_draft_pr(
     state: MutableMapping[str, Any],
     *,
+    intent_key: str,
     repository: str,
     repository_id: int | None,
     issue: int,
@@ -1391,10 +1953,16 @@ def record_draft_pr(
     pr_url: str,
     pr_state: str,
     draft: bool,
+    base_repository: str,
+    base_repository_id: int | None,
+    base_branch: str,
     base_sha: str,
+    head_repository: str,
+    head_repository_id: int | None,
+    head_ref: str,
     head_sha: str,
-    branch: str,
 ) -> None:
+    _require_pending_github_intent(state, intent_key=intent_key, operation="create-draft-pr")
     if state.get("phase") != "worker-running":
         raise TransitionError("record a draft PR only after the initial Worker handoff")
     if state["activation"]["allowed_operations"].get("create_draft_prs") is not True:
@@ -1417,12 +1985,19 @@ def record_draft_pr(
         raise GuardError("draft PR receipt requires connector read-back proving the PR is open")
     if draft is not True:
         raise GuardError("draft PR receipt requires connector read-back proving draft state")
-    if require_full_sha(base_sha, "PR base_sha") != task.get("base_sha"):
-        raise ScopeError("draft PR base differs from the selected task")
-    if require_full_sha(head_sha, "PR head_sha") != task.get("candidate_sha"):
-        raise ScopeError("draft PR head differs from the selected candidate")
-    if validate_branch_name(branch) != task.get("branch"):
-        raise ScopeError("draft PR branch differs from the selected task")
+    live_identity = {
+        "repository": repository,
+        "repository_id": repository_id,
+        "base_repository": base_repository,
+        "base_repository_id": base_repository_id,
+        "base_branch": base_branch,
+        "base_sha": require_full_sha(base_sha, "PR base_sha"),
+        "head_repository": head_repository,
+        "head_repository_id": head_repository_id,
+        "head_ref": validate_branch_name(head_ref, "PR head_ref"),
+        "head_sha": require_full_sha(head_sha, "PR head_sha"),
+    }
+    _validate_exact_pr_identity(state, live_identity)
     task.update(
         {
             "pr_number": number,
@@ -1435,8 +2010,13 @@ def record_draft_pr(
                 "pr_number": number,
                 "pr_url": pr_url,
                 "base_sha": base_sha,
+                "base_repository": normalize_owner_name(base_repository),
+                "base_repository_id": base_repository_id,
+                "base_branch": base_branch,
                 "head_sha": head_sha,
-                "branch": branch,
+                "head_repository": normalize_owner_name(head_repository),
+                "head_repository_id": head_repository_id,
+                "head_ref": head_ref,
                 "state": "open",
                 "draft": draft,
             },
@@ -1448,13 +2028,26 @@ def record_draft_pr(
 def record_merge_receipt(
     state: MutableMapping[str, Any],
     *,
+    intent_key: str,
     repository: str,
     repository_id: int | None,
     pr_number: int,
+    pr_url: str,
+    pr_state: str,
+    merged: bool,
+    base_repository: str,
+    base_repository_id: int | None,
+    base_branch: str,
+    base_sha: str,
+    head_repository: str,
+    head_repository_id: int | None,
+    head_ref: str,
+    head_sha: str,
     expected_head_sha: str,
     merge_sha: str,
     merge_method: str,
 ) -> None:
+    _require_pending_github_intent(state, intent_key=intent_key, operation="merge-pr")
     if state.get("phase") != "merging":
         raise TransitionError("merge receipt is expected only in merging")
     task = state.get("task")
@@ -1467,9 +2060,26 @@ def record_merge_receipt(
     )
     if require_positive_issue(pr_number, "pr_number") != task.get("pr_number"):
         raise ScopeError("merge receipt PR does not match the active task")
+    live_identity = {
+        "repository": repository,
+        "repository_id": repository_id,
+        "base_repository": base_repository,
+        "base_repository_id": base_repository_id,
+        "base_branch": base_branch,
+        "base_sha": base_sha,
+        "head_repository": head_repository,
+        "head_repository_id": head_repository_id,
+        "head_ref": head_ref,
+        "head_sha": head_sha,
+    }
+    _validate_exact_pr_identity(state, live_identity)
+    if pr_url != task.get("pr_url") or merged is not True or str(pr_state).casefold() != "closed":
+        raise GuardError("merge receipt requires connector proof that the exact PR is merged and closed")
     expected = require_full_sha(expected_head_sha, "expected_head_sha")
     if expected != task.get("candidate_sha"):
         raise ScopeError("merge receipt head differs from the reviewed candidate")
+    if require_full_sha(head_sha, "merged PR head_sha") != expected:
+        raise ScopeError("merged PR live head differs from the expected reviewed candidate")
     if merge_method != "merge":
         raise ScopeError("Roundlet permits merge commits only")
     merged = require_full_sha(merge_sha, "merge_sha")
@@ -1477,6 +2087,16 @@ def record_merge_receipt(
         "repository": normalize_owner_name(repository),
         "repository_id": repository_id,
         "pr_number": pr_number,
+        "pr_url": pr_url,
+        "state": "closed",
+        "merged": True,
+        "base_repository": normalize_owner_name(base_repository),
+        "base_repository_id": base_repository_id,
+        "base_branch": base_branch,
+        "base_sha": base_sha,
+        "head_repository": normalize_owner_name(head_repository),
+        "head_repository_id": head_repository_id,
+        "head_ref": head_ref,
         "expected_head_sha": expected,
         "merge_sha": merged,
         "merge_method": "merge",
@@ -1494,11 +2114,14 @@ def record_merge_receipt(
 def record_issue_close_receipt(
     state: MutableMapping[str, Any],
     *,
+    intent_key: str,
     repository: str,
     repository_id: int | None,
     issue: int,
+    issue_state: str,
     state_reason: str,
 ) -> None:
+    _require_pending_github_intent(state, intent_key=intent_key, operation="close-issue")
     if state.get("phase") != "closing-issue":
         raise TransitionError("issue-close receipt is expected only in closing-issue")
     if state["activation"]["allowed_operations"].get("close_completed_sub_issues") is not True:
@@ -1516,6 +2139,8 @@ def record_issue_close_receipt(
         raise ScopeError("only the exact selected issue may be closed")
     if state_reason != "completed":
         raise ScopeError("selected issue must close as completed")
+    if not isinstance(issue_state, str) or issue_state.casefold() != "closed":
+        raise GuardError("issue-close receipt requires connector read-back proving state=closed")
     task["issue_close_receipt"] = {
         "repository": normalize_owner_name(repository),
         "repository_id": repository_id,
@@ -1529,11 +2154,13 @@ def record_issue_close_receipt(
 def record_remote_branch_deleted(
     state: MutableMapping[str, Any],
     *,
+    intent_key: str,
     repository: str,
     repository_id: int | None,
     branch: str,
     absent: bool,
 ) -> None:
+    _require_pending_github_intent(state, intent_key=intent_key, operation="delete-remote-branch")
     if state.get("phase") != "cleanup" or absent is not True:
         raise TransitionError("remote branch deletion proof is expected only during cleanup")
     if state["activation"]["allowed_operations"].get("delete_proven_task_owned_resources") is not True:
@@ -1631,11 +2258,7 @@ def verify_premerge_gates(state: Mapping[str, Any], live: Mapping[str, Any]) -> 
     if isinstance(pass_identity, Mapping) and pass_identity.get("candidate_sha") != candidate:
         errors.append("Supervisor PASS is stale")
     try:
-        assert_repository_target(
-            activation.get("repository", {}),
-            str(live.get("repository", "")),
-            target_repository_id=live.get("repository_id"),
-        )
+        _validate_exact_pr_identity(state, live)
     except (ScopeError, ValidationError) as exc:
         errors.append(str(exc))
     if live.get("issue") != task.get("issue"):
@@ -1646,12 +2269,8 @@ def verify_premerge_gates(state: Mapping[str, Any], live: Mapping[str, Any]) -> 
         errors.append("merge target does not match the selected PR")
     if live.get("pr_url") != task.get("pr_url"):
         errors.append("merge target PR URL differs from the selected task")
-    if live.get("base_sha") != task.get("base_sha"):
-        errors.append("merge target base SHA differs from the selected task")
-    if live.get("base_branch") != activation.get("base_branch"):
-        errors.append("merge target base branch differs from the activation")
-    if live.get("branch") != task.get("branch"):
-        errors.append("merge target branch differs from the selected task")
+    if str(live.get("pr_state", "")).casefold() != "open" or live.get("draft") is not False:
+        errors.append("merge target must be the exact open ready PR")
     if live.get("merge_method") != "merge":
         errors.append("merge method must be merge")
     if state.get("maintenance", {}).get("requested"):
@@ -1749,26 +2368,32 @@ def create_maintenance_checkpoint(
     *,
     checkpoint_id: str,
     schedule_id: str,
+    schedule_state: str,
     pending_action: Mapping[str, Any] | None = None,
 ) -> None:
     if state.get("phase") not in {"maintenance-requested", "maintenance-draining"}:
         raise TransitionError("maintenance checkpoint is not expected")
-    if state.get("phase") == "maintenance-requested":
-        transition_state(state, "maintenance-draining")
+    if not isinstance(checkpoint_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{8,128}", checkpoint_id):
+        raise ValidationError("checkpoint_id is malformed")
+    if not isinstance(schedule_id, str) or not schedule_id:
+        raise ValidationError("schedule_id is required")
+    if schedule_state != "paused":
+        raise GuardError("maintenance checkpoint requires connector proof that the schedule is paused")
     task = state.get("task")
     if isinstance(task, Mapping) and task.get("active_role") is not None:
         raise TransitionError("cannot checkpoint while a child role is mutating or unresolved")
     if any(receipt.get("status") == "pending" for receipt in state.get("receipts", {}).values()):
         raise MailboxError("reconcile pending mutation receipts before maintenance checkpoint")
-    if not isinstance(checkpoint_id, str) or not re.fullmatch(r"[A-Za-z0-9._-]{8,128}", checkpoint_id):
-        raise ValidationError("checkpoint_id is malformed")
-    if not isinstance(schedule_id, str) or not schedule_id:
-        raise ValidationError("schedule_id is required")
+    if state.get("github_mutations", {}).get("pending") is not None:
+        raise MailboxError("reconcile pending GitHub mutation before maintenance checkpoint")
+    if state.get("phase") == "maintenance-requested":
+        transition_state(state, "maintenance-draining")
     maintenance = state["maintenance"]
     maintenance.update(
         {
             "checkpoint_id": checkpoint_id,
             "schedule_id": schedule_id,
+            "schedule_state": "paused",
             "stored_versions": copy.deepcopy(state["versions"]),
             "installed_digest": state["skill"]["content_digest"],
             "pending_action": copy.deepcopy(pending_action),
@@ -1853,6 +2478,8 @@ def resume_maintenance(
             raise ValidationError("existing schedule ID differs from the checkpoint")
         if any(receipt.get("status") == "pending" for receipt in state.get("receipts", {}).values()):
             raise MailboxError("reconcile pending mutation receipts before maintenance resume")
+        if state.get("github_mutations", {}).get("pending") is not None:
+            raise MailboxError("reconcile pending GitHub mutation before maintenance resume")
         repo = state["activation"]["repository"]
         assert_repository_target(repo, repository_identity.owner_name, target_repository_id=repository_identity.repository_id)
         if repo.get("git_common_dir_fingerprint") != repository_identity.git_common_dir_fingerprint:
@@ -1913,6 +2540,9 @@ def resume_maintenance(
             state["activation"]["umbrella_issues"],
             state["activation"]["allowed_operations"],
             new_digest,
+            owner_actor=state["activation"]["owner_actor"],
+            capability_preflight=state["activation"]["capability_preflight"],
+            orchestrator_creation_receipt=state["activation"]["orchestrator_creation_receipt"],
             protocol_version=str(state["versions"]["protocol"]),
             policy_version=str(state["versions"]["policy"]),
         )
@@ -1952,7 +2582,7 @@ def resume_maintenance(
         raise
 
 
-def migrate_state_document(document: Mapping[str, Any], target_version: int = SCHEMA_VERSION) -> dict[str, Any]:
+def _migrate_state_document(document: Mapping[str, Any], target_version: int = SCHEMA_VERSION) -> dict[str, Any]:
     if not isinstance(document, Mapping):
         raise MigrationError("state migration input must be an object")
     result = copy.deepcopy(dict(document))
@@ -1983,6 +2613,7 @@ def migrate_state_document(document: Mapping[str, Any], target_version: int = SC
                 "archived_supervisor_count",
                 "archived_supervisor_digest",
                 "last_supervisor_created_at",
+                "supervisor_creation_receipts",
             )
         ):
             raise MigrationError("legacy review history lacks immutable freshness and archival evidence")
@@ -1990,6 +2621,7 @@ def migrate_state_document(document: Mapping[str, Any], target_version: int = SC
         review.setdefault("archived_supervisor_count", 0)
         review.setdefault("archived_supervisor_digest", "0" * 64)
         review.setdefault("last_supervisor_created_at", None)
+        review.setdefault("supervisor_creation_receipts", [])
         result.setdefault("receipt_archive", {"count": 0, "digest": "0" * 64})
         if "mailbox_high_water" not in result:
             high_water = {kind: 0 for kind in sorted(MAILBOX_NAMES)}
@@ -2020,6 +2652,52 @@ def migrate_state_document(document: Mapping[str, Any], target_version: int = SC
                 "migrated_at": utc_now(),
             }
         current = 2
+    if current == 2 and target_version >= 3:
+        activation = result.get("activation")
+        if not isinstance(activation, Mapping):
+            raise MigrationError("schema-2 activation identity is missing")
+        try:
+            validate_owner_actor(activation.get("owner_actor", {}))
+            validate_capability_preflight(activation.get("capability_preflight", {}))
+            validate_role_creation_receipt(
+                activation.get("orchestrator_creation_receipt", {}),
+                role="orchestrator",
+                thread_id=str(activation.get("orchestrator_thread_id", "")),
+                project_identity=str(
+                    activation.get("repository", {}).get("git_common_dir_fingerprint", "")
+                ),
+                parent_thread_id=None,
+            )
+        except RoundletError as exc:
+            raise MigrationError(
+                "schema-2 state lacks externally verified owner/capability activation evidence"
+            ) from exc
+        review = result.get("review")
+        if not isinstance(review, Mapping) or "supervisor_creation_receipts" not in review:
+            raise MigrationError("schema-2 state lacks service-returned Supervisor capability receipts")
+        task = result.get("task")
+        if isinstance(task, Mapping) and "worker_creation_receipt" not in task:
+            raise MigrationError("schema-2 task lacks a service-returned Worker capability receipt")
+        github_mutations = result.get("github_mutations")
+        if not isinstance(github_mutations, Mapping) or set(github_mutations) != {"pending", "receipts"}:
+            raise MigrationError("schema-2 state cannot prove the GitHub mutation intent ledger")
+        maintenance = result.setdefault("maintenance", {})
+        if result.get("phase") == "paused-maintenance":
+            if maintenance.get("stored_versions") != versions:
+                raise MigrationError("paused checkpoint versions do not match schema-2 input")
+            if maintenance.get("schedule_state") != "paused":
+                raise MigrationError("schema-2 checkpoint lacks paused schedule evidence")
+        versions["schema"] = 3
+        if result.get("phase") == "paused-maintenance":
+            maintenance["migrated_from_versions"] = original_versions
+            maintenance["stored_versions"] = copy.deepcopy(dict(versions))
+            maintenance["migration_receipt"] = {
+                "from_schema": original_versions.get("schema"),
+                "to_schema": 3,
+                "input_digest": digest_json(document),
+                "migrated_at": utc_now(),
+            }
+        current = 3
     if current != target_version:
         raise MigrationError(f"no supported migration from schema {current} to {target_version}")
     return result
@@ -2028,6 +2706,7 @@ def migrate_state_document(document: Mapping[str, Any], target_version: int = SC
 @dataclass(frozen=True)
 class Comment:
     author: str
+    author_id: int
     body: str
 
 
@@ -2114,11 +2793,12 @@ def discover_membership(
     formal_subissues: Iterable[Mapping[str, Any]],
     umbrella_body: str,
     comments: Iterable[Comment | Mapping[str, Any]],
-    owner_login: str,
+    owner_actor: Mapping[str, Any],
     current_repository: str,
 ) -> dict[int, list[str]]:
     """Discover only deterministic, owner-authorized same-repository membership."""
     require_positive_issue(umbrella_issue, "umbrella_issue")
+    authorized_actor = validate_owner_actor(owner_actor)
     membership: dict[int, list[str]] = {}
 
     def add(number: int, source: str) -> None:
@@ -2174,8 +2854,15 @@ def discover_membership(
         for number in extract_same_repository_issue_numbers(line, current_repository):
             add(number, "umbrella-body-list")
     for raw in comments:
-        comment = raw if isinstance(raw, Comment) else Comment(str(raw.get("author", "")), str(raw.get("body", "")))
-        if comment.author.casefold() != owner_login.casefold():
+        try:
+            comment = raw if isinstance(raw, Comment) else Comment(
+                str(raw.get("author", "")),
+                require_positive_issue(raw.get("author_id"), "comment author ID"),
+                str(raw.get("body", "")),
+            )
+        except (AttributeError, TypeError) as exc:
+            raise ScopeError("owner-comment evidence lacks connector actor identity") from exc
+        if comment.author_id != authorized_actor["id"]:
             continue
         for line in comment.body.splitlines():
             lowered = line.casefold()
@@ -2253,6 +2940,207 @@ class IssueSnapshot:
             require_positive_issue(dependency, "dependency")
 
 
+def snapshot_document(snapshot: IssueSnapshot) -> dict[str, Any]:
+    if not isinstance(snapshot.revision, str) or not snapshot.revision:
+        raise ValidationError(f"snapshot #{snapshot.issue} is missing a connector source revision")
+    return {
+        "issue": snapshot.issue,
+        "umbrella": snapshot.umbrella,
+        "repository": normalize_owner_name(snapshot.repository),
+        "open": snapshot.open,
+        "completion_verified": snapshot.completion_verified,
+        "dependencies": list(snapshot.dependencies),
+        "external_blockers": list(snapshot.external_blockers),
+        "membership_sources": list(snapshot.membership_sources),
+        "required_order_index": snapshot.required_order_index,
+        "ambiguous_active_implementation": snapshot.ambiguous_active_implementation,
+        "owner_priority": snapshot.owner_priority,
+        "unlocks": snapshot.unlocks,
+        "overlap_risk": snapshot.overlap_risk,
+        "revision": snapshot.revision,
+    }
+
+
+def normalize_refresh_manifest(
+    state: Mapping[str, Any],
+    snapshots: Sequence[IssueSnapshot],
+    manifest: Mapping[str, Any],
+    *,
+    refresh_timestamp: str,
+) -> dict[str, Any]:
+    required = {"repository", "repository_id", "base_sha", "refresh_timestamp", "umbrellas"}
+    if not isinstance(manifest, Mapping) or set(manifest) != required:
+        raise ValidationError("refresh manifest must contain the exact complete scope fields")
+    parse_utc_timestamp(refresh_timestamp, "selection refresh timestamp")
+    if manifest.get("refresh_timestamp") != refresh_timestamp:
+        raise ScopeError("refresh manifest timestamp differs from the selection receipt")
+    activation = state["activation"]
+    assert_repository_target(
+        activation["repository"],
+        str(manifest.get("repository", "")),
+        target_repository_id=manifest.get("repository_id"),
+    )
+    expected_base = activation.get("base_sha")
+    task = state.get("task")
+    current_selection = state.get("selection")
+    if isinstance(task, Mapping) and isinstance(current_selection, Mapping) and current_selection.get("status") == "selected":
+        expected_base = task.get("base_sha")
+    if require_full_sha(manifest.get("base_sha"), "refresh base_sha") != expected_base:
+        raise ScopeError("refresh manifest base differs from the activation")
+    umbrella_entries = manifest.get("umbrellas")
+    if not isinstance(umbrella_entries, list):
+        raise ValidationError("refresh manifest umbrellas must be an ordered list")
+    expected_umbrellas = list(activation.get("umbrella_issues", []))
+    normalized_entries: list[dict[str, Any]] = []
+    seen: list[int] = []
+    discovered: dict[int, list[int]] = {}
+    for entry in umbrella_entries:
+        if not isinstance(entry, Mapping) or set(entry) != {
+            "umbrella_issue",
+            "umbrella_revision",
+            "membership_evidence_digest",
+            "discovered_issues",
+            "complete",
+        }:
+            raise ValidationError("each umbrella refresh requires exact completeness evidence")
+        umbrella = require_positive_issue(entry.get("umbrella_issue"), "refresh umbrella")
+        revision = entry.get("umbrella_revision")
+        if not isinstance(revision, str) or not revision:
+            raise ValidationError("umbrella refresh revision is required")
+        evidence_digest = require_content_digest(
+            entry.get("membership_evidence_digest"),
+            "membership evidence digest",
+        )
+        issues = entry.get("discovered_issues")
+        if (
+            not isinstance(issues, list)
+            or any(require_positive_issue(item) == umbrella for item in issues)
+            or len(issues) != len(set(issues))
+        ):
+            raise ScopeError("umbrella refresh contains an invalid or umbrella-as-task issue")
+        if entry.get("complete") is not True:
+            raise ScopeError("partial umbrella refresh cannot authorize selection or completion")
+        seen.append(umbrella)
+        discovered[umbrella] = list(issues)
+        normalized_entries.append(
+            {
+                "umbrella_issue": umbrella,
+                "umbrella_revision": revision,
+                "membership_evidence_digest": evidence_digest,
+                "discovered_issues": list(issues),
+                "complete": True,
+            }
+        )
+    if seen != expected_umbrellas:
+        raise ScopeError("refresh manifest must cover every authorized umbrella exactly once and in order")
+    snapshot_issues: dict[int, list[int]] = {umbrella: [] for umbrella in expected_umbrellas}
+    for snapshot in snapshots:
+        if snapshot.issue == snapshot.umbrella:
+            raise ScopeError("an umbrella issue cannot be dispatched as its own sub-issue")
+        if snapshot.umbrella not in snapshot_issues:
+            raise ScopeError("snapshot belongs to an unauthorized umbrella")
+        snapshot_document(snapshot)
+        snapshot_issues[snapshot.umbrella].append(snapshot.issue)
+    for umbrella in expected_umbrellas:
+        if sorted(discovered[umbrella]) != sorted(snapshot_issues[umbrella]):
+            raise ScopeError("refresh manifest discovered issues differ from the complete snapshots")
+    return {
+        "repository": normalize_owner_name(str(manifest["repository"])),
+        "repository_id": manifest["repository_id"],
+        "base_sha": manifest["base_sha"],
+        "refresh_timestamp": refresh_timestamp,
+        "umbrellas": normalized_entries,
+    }
+
+
+def validate_selection_receipt(state: Mapping[str, Any], receipt: Mapping[str, Any]) -> None:
+    required = {
+        "refresh_timestamp",
+        "refresh_manifest",
+        "snapshot_evidence",
+        "source_revisions",
+        "eligible_candidates",
+        "excluded_candidates",
+        "dependency_edges",
+        "required_order_positions",
+        "selected_umbrella",
+        "selected_issue",
+        "tie_break",
+        "base_sha",
+        "activation_id",
+        "status",
+        "receipt_digest",
+    }
+    if not isinstance(receipt, Mapping) or set(receipt) != required:
+        raise ValidationError("selection receipt is incomplete or hand-built")
+    core = {key: copy.deepcopy(value) for key, value in receipt.items() if key != "receipt_digest"}
+    if digest_json(core) != receipt.get("receipt_digest"):
+        raise ScopeError("selection receipt digest is invalid")
+    activation = state.get("activation", {})
+    expected_base = activation.get("base_sha")
+    task = state.get("task")
+    if isinstance(task, Mapping) and receipt.get("status") == "selected":
+        expected_base = task.get("base_sha")
+    if receipt.get("activation_id") != activation.get("id") or receipt.get("base_sha") != expected_base:
+        raise ScopeError("selection receipt activation or base identity is stale")
+    evidence = receipt.get("snapshot_evidence")
+    if not isinstance(evidence, list):
+        raise ValidationError("selection snapshot evidence is malformed")
+    snapshots: list[IssueSnapshot] = []
+    try:
+        for item in evidence:
+            if not isinstance(item, Mapping):
+                raise ValidationError("selection snapshot evidence is malformed")
+            snapshots.append(
+                IssueSnapshot(
+                    issue=item["issue"],
+                    umbrella=item["umbrella"],
+                    repository=item["repository"],
+                    open=item["open"],
+                    completion_verified=item["completion_verified"],
+                    dependencies=tuple(item["dependencies"]),
+                    external_blockers=tuple(item["external_blockers"]),
+                    membership_sources=tuple(item["membership_sources"]),
+                    required_order_index=item["required_order_index"],
+                    ambiguous_active_implementation=item["ambiguous_active_implementation"],
+                    owner_priority=item["owner_priority"],
+                    unlocks=item["unlocks"],
+                    overlap_risk=item["overlap_risk"],
+                    revision=item["revision"],
+                )
+            )
+    except (KeyError, TypeError) as exc:
+        raise ValidationError("selection snapshot evidence is incomplete") from exc
+    normalize_refresh_manifest(
+        state,
+        snapshots,
+        receipt.get("refresh_manifest", {}),
+        refresh_timestamp=str(receipt.get("refresh_timestamp", "")),
+    )
+    expected_revisions = {
+        str(item.issue): item.revision for item in snapshots if item.revision is not None
+    }
+    if receipt.get("source_revisions") != expected_revisions:
+        raise ScopeError("selection source revisions differ from the canonical snapshots")
+    expected_decision = _recompute_selection_fields(state, snapshots)
+    for key, expected in expected_decision.items():
+        if receipt.get(key) != expected:
+            raise ScopeError(f"selection decision field {key} was not deterministically derived")
+    selected_issue = receipt.get("selected_issue")
+    selected_umbrella = receipt.get("selected_umbrella")
+    status = receipt.get("status")
+    if status not in {"selected", "waiting-dependency", "complete"}:
+        raise ValidationError("selection receipt status is invalid")
+    if status == "selected":
+        matches = [item for item in snapshots if item.issue == selected_issue and item.umbrella == selected_umbrella]
+        if len(matches) != 1 or selected_issue not in receipt.get("eligible_candidates", []):
+            raise ScopeError("selected task is not proven by the complete refresh evidence")
+    elif selected_issue is not None or selected_umbrella is not None:
+        raise ScopeError("non-selected refresh receipt cannot name a task")
+    if status == "complete" and any(not item.completion_verified for item in snapshots):
+        raise ScopeError("scope completion receipt contains incomplete discovered work")
+
+
 def _find_cycle(graph: Mapping[int, set[int]]) -> list[int] | None:
     visiting: set[int] = set()
     visited: set[int] = set()
@@ -2283,13 +3171,135 @@ def _find_cycle(graph: Mapping[int, set[int]]) -> list[int] | None:
     return None
 
 
-def select_next_task(
+def _recompute_selection_fields(
     state: Mapping[str, Any],
+    snapshots: Sequence[IssueSnapshot],
+) -> dict[str, Any]:
+    activation = state.get("activation", {})
+    current_repo = normalize_owner_name(activation.get("repository", {}).get("owner_name", ""))
+    umbrella_order = list(activation.get("umbrella_issues", []))
+    by_issue: dict[int, IssueSnapshot] = {}
+    for snapshot in snapshots:
+        if normalize_owner_name(snapshot.repository) != current_repo:
+            raise ScopeError(f"snapshot #{snapshot.issue} belongs to another repository")
+        if snapshot.umbrella not in umbrella_order:
+            raise ScopeError(f"snapshot #{snapshot.issue} belongs to an unauthorized umbrella")
+        if not snapshot.membership_sources:
+            raise ScopeError(f"snapshot #{snapshot.issue} has no authorized membership evidence")
+        if snapshot.issue in by_issue:
+            raise ValidationError(f"duplicate snapshot for issue #{snapshot.issue}")
+        by_issue[snapshot.issue] = snapshot
+    graph = {
+        issue: set(snapshot.dependencies)
+        for issue, snapshot in by_issue.items()
+        if not snapshot.completion_verified
+    }
+    cycle = _find_cycle(graph)
+    if cycle:
+        raise SelectionBlocked("dependency cycle: " + " -> ".join(f"#{item}" for item in cycle))
+    for snapshot in by_issue.values():
+        if snapshot.required_order_index is None:
+            continue
+        for dependency in snapshot.dependencies:
+            other = by_issue.get(dependency)
+            if (
+                other
+                and other.umbrella == snapshot.umbrella
+                and other.required_order_index is not None
+                and other.required_order_index > snapshot.required_order_index
+                and not other.completion_verified
+            ):
+                raise SelectionBlocked(
+                    f"required-order contradiction: #{snapshot.issue} depends on later #{dependency}"
+                )
+    completed = {issue for issue, item in by_issue.items() if item.completion_verified}
+    ambiguous = sorted(
+        item.issue
+        for item in by_issue.values()
+        if item.ambiguous_active_implementation and item.issue not in completed
+    )
+    if ambiguous:
+        raise SelectionBlocked(
+            "ambiguous active implementation or PR ownership: "
+            + ", ".join(f"#{issue}" for issue in ambiguous)
+        )
+    excluded: dict[str, list[str]] = {}
+    eligible_heads: list[IssueSnapshot] = []
+    for umbrella in umbrella_order:
+        remaining = [
+            item
+            for item in by_issue.values()
+            if item.umbrella == umbrella and item.issue not in completed
+        ]
+        if not remaining:
+            continue
+        ordered = [item for item in remaining if item.required_order_index is not None]
+        heads = [min(ordered, key=lambda item: (item.required_order_index, item.issue))] if ordered else remaining
+        head_ids = {item.issue for item in heads}
+        for item in remaining:
+            reasons: list[str] = []
+            if item.issue not in head_ids:
+                reasons.append("not the first incomplete required-order entry")
+            if not item.open and not item.completion_verified:
+                reasons.append("closed state lacks verified completion evidence")
+            missing = [dependency for dependency in item.dependencies if dependency not in completed]
+            if missing:
+                reasons.append("waiting for dependencies " + ", ".join(f"#{number}" for number in sorted(missing)))
+            if item.external_blockers:
+                reasons.append("external dependency requires owner-safe evidence")
+            if reasons:
+                excluded[str(item.issue)] = reasons
+            elif item.issue in head_ids:
+                eligible_heads.append(item)
+    dependency_targets = {
+        dependency
+        for snapshot in by_issue.values()
+        for dependency in snapshot.dependencies
+        if by_issue.get(dependency) and by_issue[dependency].umbrella != snapshot.umbrella
+    }
+
+    def rank(item: IssueSnapshot) -> tuple[int, int, int, int, int, int]:
+        return (
+            0 if item.issue in dependency_targets else 1,
+            -item.unlocks,
+            item.overlap_risk,
+            -item.owner_priority,
+            umbrella_order.index(item.umbrella),
+            item.issue,
+        )
+
+    selected = min(eligible_heads, key=rank) if eligible_heads else None
+    return {
+        "eligible_candidates": [item.issue for item in sorted(eligible_heads, key=rank)],
+        "excluded_candidates": excluded,
+        "dependency_edges": sorted(
+            (
+                {"dependent": issue, "prerequisite": dependency}
+                for issue, dependencies in graph.items()
+                for dependency in dependencies
+            ),
+            key=lambda edge: (edge["dependent"], edge["prerequisite"]),
+        ),
+        "required_order_positions": {
+            str(item.issue): item.required_order_index
+            for item in snapshots
+            if item.required_order_index is not None
+        },
+        "selected_umbrella": selected.umbrella if selected else None,
+        "selected_issue": selected.issue if selected else None,
+        "tie_break": "cross-dependency, unlocks, overlap-risk, owner-priority, umbrella-order, issue-number",
+        "status": "selected" if selected else ("complete" if not graph else "waiting-dependency"),
+    }
+
+
+def select_next_task(
+    state: MutableMapping[str, Any],
     snapshots: Sequence[IssueSnapshot],
     *,
     refresh_timestamp: str,
+    refresh_manifest: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Build a bounded, deterministic selection receipt from refreshed evidence."""
+    """Atomically bind one complete refresh decision into the active state."""
     if state.get("task") is not None:
         raise TransitionError("do not select another task while one task remains active")
     if state.get("phase") not in {"selecting-task", "scope-preflight", "waiting-dependency", "task-done"}:
@@ -2299,6 +3309,12 @@ def select_next_task(
     umbrella_order = list(activation.get("umbrella_issues", []))
     if not umbrella_order:
         raise ValidationError("activation has no umbrella scope")
+    normalized_manifest = normalize_refresh_manifest(
+        state,
+        snapshots,
+        refresh_manifest,
+        refresh_timestamp=refresh_timestamp,
+    )
     by_issue: dict[int, IssueSnapshot] = {}
     for snapshot in snapshots:
         if normalize_owner_name(snapshot.repository) != current_repo:
@@ -2406,6 +3422,8 @@ def select_next_task(
     )
     receipt = {
         "refresh_timestamp": refresh_timestamp,
+        "refresh_manifest": normalized_manifest,
+        "snapshot_evidence": [snapshot_document(item) for item in snapshots],
         "source_revisions": {
             str(item.issue): item.revision for item in snapshots if item.revision is not None
         },
@@ -2424,8 +3442,18 @@ def select_next_task(
         "activation_id": activation.get("id"),
         "status": "selected" if selected else ("complete" if not graph else "waiting-dependency"),
     }
+    receipt["receipt_digest"] = digest_json(receipt)
     if len(canonical_json(receipt).encode("utf-8")) > 65536:
         raise ValidationError("selection receipt exceeds the bounded state limit")
+    state["selection"] = copy.deepcopy(receipt)
+    current_phase = state.get("phase")
+    if current_phase != "selecting-task":
+        transition_state(state, "selecting-task")
+    if receipt["status"] == "waiting-dependency":
+        transition_state(state, "waiting-dependency")
+    elif receipt["status"] == "complete":
+        transition_state(state, "scope-complete")
+    validate_selection_receipt(state, receipt)
     return receipt
 
 
@@ -2533,6 +3561,8 @@ def validate_mailbox_envelope(payload: Mapping[str, Any], state: Mapping[str, An
             raise MailboxError("Worker handoff is not accepted in this phase")
         if task.get("active_role") != "worker":
             raise MailboxError("Worker handoff requires the active Worker role")
+        if phase == "worker-running" and state["activation"]["allowed_operations"].get("create_draft_prs") is not True:
+            raise MailboxError("draft PR creation was not authorized before Worker handoff consumption")
         if phase == "ready" and payload["candidate_sha"] != task.get("candidate_sha"):
             raise MailboxError("final Worker handoff candidate SHA mismatch")
     elif kind == "supervisor-review":
@@ -2595,49 +3625,56 @@ class MailboxStore:
         | None = None,
     ) -> Mapping[str, Any]:
         mailbox_path = self.path(kind)
-        payload = read_json(mailbox_path, max_bytes=MAX_MAILBOX_BYTES)
-        state = state_store.load()
-        validate_mailbox_shape(payload, kind)
-        key = payload["idempotency_key"]
-        payload_digest = digest_json(payload)
-        existing = state.get("receipts", {}).get(key)
-        if existing is not None:
-            if existing.get("kind") != kind or existing.get("payload_digest") != payload_digest:
-                raise MailboxError("idempotency key is bound to another mailbox payload")
-            if existing.get("status") == "complete":
-                mailbox_path.unlink()
-                return existing["receipt"]
-        elif mailbox_sequence(key) <= state["mailbox_high_water"][kind]:
-            raise MailboxError("mailbox idempotency key was already consumed and archived")
-        elif mailbox_sequence(key) != state["mailbox_high_water"][kind] + 1:
-            raise MailboxError("mailbox idempotency sequence must be the next value for its kind")
-        validate_mailbox_envelope(payload, state, kind)
-        if existing is not None:
-            if existing.get("status") != "pending" or reconcile is None:
-                raise MailboxError("pending mailbox mutation requires deterministic reconciliation")
-            reconciled = reconcile(payload)
-            if reconciled is None:
-                raise MailboxError("mailbox mutation identity is ambiguous after interruption")
-            if reconciled is False:
-                receipt = mutate(payload)
-            elif isinstance(reconciled, Mapping):
-                receipt = reconciled
+        with state_store.single_writer():
+            payload = read_json(mailbox_path, max_bytes=MAX_MAILBOX_BYTES)
+            state = state_store.load()
+            validate_mailbox_shape(payload, kind)
+            key = payload["idempotency_key"]
+            payload_digest = digest_json(payload)
+            existing = state.get("receipts", {}).get(key)
+            if existing is not None:
+                if existing.get("kind") != kind or existing.get("payload_digest") != payload_digest:
+                    raise MailboxError("idempotency key is bound to another mailbox payload")
+                if existing.get("status") == "complete":
+                    try:
+                        mailbox_path.unlink()
+                    except FileNotFoundError:
+                        pass
+                    return existing["receipt"]
+            elif mailbox_sequence(key) <= state["mailbox_high_water"][kind]:
+                raise MailboxError("mailbox idempotency key was already consumed and archived")
+            elif mailbox_sequence(key) != state["mailbox_high_water"][kind] + 1:
+                raise MailboxError("mailbox idempotency sequence must be the next value for its kind")
+            validate_mailbox_envelope(payload, state, kind)
+            if existing is not None:
+                if existing.get("status") != "pending" or reconcile is None:
+                    raise MailboxError("pending mailbox mutation requires deterministic reconciliation")
+                reconciled = reconcile(payload)
+                if reconciled is None:
+                    raise MailboxError("mailbox mutation identity is ambiguous after interruption")
+                if reconciled is False:
+                    receipt = mutate(payload)
+                elif isinstance(reconciled, Mapping):
+                    receipt = reconciled
+                else:
+                    raise MailboxError("mailbox reconciliation result is invalid")
             else:
-                raise MailboxError("mailbox reconciliation result is invalid")
-        else:
-            state_store.begin_mailbox_intent(key, kind, payload_digest)
-            receipt = mutate(payload)
-        if not isinstance(receipt, Mapping) or not receipt:
-            raise MailboxError("mutation receipt is missing or ambiguous")
-        state_store.complete_mailbox_intent(
-            key,
-            kind,
-            payload_digest,
-            receipt,
-            update=(lambda current: advance(current, payload, receipt)) if advance is not None else None,
-        )
-        mailbox_path.unlink()
-        return receipt
+                state_store.begin_mailbox_intent(key, kind, payload_digest)
+                receipt = mutate(payload)
+            if not isinstance(receipt, Mapping) or not receipt:
+                raise MailboxError("mutation receipt is missing or ambiguous")
+            state_store.complete_mailbox_intent(
+                key,
+                kind,
+                payload_digest,
+                receipt,
+                update=(lambda current: advance(current, payload, receipt)) if advance is not None else None,
+            )
+            try:
+                mailbox_path.unlink()
+            except FileNotFoundError:
+                pass
+            return receipt
 
     def discard_github_context_after_dispatch(self) -> None:
         path = self.path("github-context")
@@ -2681,6 +3718,7 @@ def compact_completed_task(
         "pass_identity": None,
         "current_supervisor_thread_id": None,
         "supervisor_thread_ids": [],
+        "supervisor_creation_receipts": [],
         "unarchived_supervisor_thread_ids": [],
         "archived_supervisor_count": 0,
         "archived_supervisor_digest": "0" * 64,
@@ -2700,6 +3738,9 @@ def compact_completed_task(
         )
         state["receipt_archive"]["count"] += len(entries)
     state["receipts"] = {}
+    if state.get("github_mutations", {}).get("pending") is not None:
+        raise MailboxError("reconcile the pending GitHub mutation before task compaction")
+    state["github_mutations"] = {"pending": None, "receipts": {}}
     state["maintenance"]["pending_action"] = None
 
 
@@ -2734,7 +3775,7 @@ def compact_scope(
         "versions": copy.deepcopy(state["versions"]),
         "activation": copy.deepcopy(state["activation"]),
         "phase": "scope-complete",
-        "selection": None,
+        "selection": copy.deepcopy(state["selection"]),
         "task": None,
         "review": {
             "round": 0,
@@ -2742,12 +3783,14 @@ def compact_scope(
             "pass_identity": None,
             "current_supervisor_thread_id": None,
             "supervisor_thread_ids": [],
+            "supervisor_creation_receipts": [],
             "unarchived_supervisor_thread_ids": [],
             "archived_supervisor_count": 0,
             "archived_supervisor_digest": "0" * 64,
             "last_supervisor_created_at": None,
         },
         "receipts": {},
+        "github_mutations": {"pending": None, "receipts": {}},
         "receipt_archive": {"count": 0, "digest": "0" * 64},
         "mailbox_high_water": {kind: 0 for kind in sorted(MAILBOX_NAMES)},
         "maintenance": {
@@ -2756,6 +3799,7 @@ def compact_scope(
             "checkpoint_id": None,
             "previous_phase": None,
             "schedule_id": state.get("maintenance", {}).get("schedule_id"),
+            "schedule_state": "paused",
             "stored_versions": None,
             "pending_action": None,
             "resume_worker": False,
@@ -3136,6 +4180,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     migrate = sub.add_parser("migrate-state", help="Atomically apply a supported state migration")
     migrate.add_argument("--state-dir", required=True)
+    migrate.add_argument("--activation-id", required=True)
+    migrate.add_argument("--checkpoint-id", required=True)
+    migrate.add_argument("--schedule-id", required=True)
+    migrate.add_argument("--expected-installed-digest", required=True)
+    migrate.add_argument("--expected-from-schema", required=True, type=int)
+    migrate.add_argument("--target-schema", required=True, type=int)
 
     digest = sub.add_parser("skill-digest", help="Print the deterministic installed skill content digest")
     digest.add_argument("--skill-root", required=True)
@@ -3161,7 +4211,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "validate-state":
             StateStore(args.state_dir).load()
         elif args.command == "migrate-state":
-            StateStore(args.state_dir).migrate()
+            StateStore(args.state_dir).migrate(
+                activation_id=args.activation_id,
+                checkpoint_id=args.checkpoint_id,
+                schedule_id=args.schedule_id,
+                expected_installed_digest=args.expected_installed_digest,
+                expected_from_schema=args.expected_from_schema,
+                target_version=args.target_schema,
+            )
         elif args.command == "skill-digest":
             print(skill_content_digest(args.skill_root))
             return 0

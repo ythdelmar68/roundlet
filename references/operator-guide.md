@@ -124,6 +124,8 @@ Verify the exact authorized writes for:
 - exact selected-issue close after merge;
 - exact recorded remote-branch deletion after cleanup proof.
 
+Route every write through `execute_github_mutation`. Supply one target-bound idempotency key and exact pre-mutation live target. The gateway checks the operation flag, repository/task/phase/PR identity and merge gates, persists intent before the callback, then requires connector live read-back before state advances. For recovery, reconcile the pending intent through connector reads; do not call the post-mutation receipt helpers directly.
+
 Do not silently fall back to `gh`, shell HTTP, a different connector, or a credential copied into the project.
 
 ### Host Git credentials
@@ -146,6 +148,8 @@ Verify the root Orchestrator can:
 - continue the same Worker task;
 - inspect and archive child tasks;
 - attach, pause, update, and reactivate one schedule on the existing Orchestrator task.
+
+Require the task service to return verifiable creation metadata for every role: model, reasoning effort, project/environment identity, parent/fork identity, permission profile, filesystem-write capability, GitHub connector, `gh`, web, network, and UTC creation time. Bind the Orchestrator receipt and a connector-verified human actor ID during activation; bind Worker/Supervisor receipts before dispatch. If this product surface cannot expose or enforce those fields, activation is blocked. Prompt text alone does not prove isolation.
 
 ### Permissions
 
@@ -202,7 +206,7 @@ authorize:
 
 Do not include a repository, URL, organization, account, or repository list. Set an operation to `false` when Roundlet must stop before that transition. Missing or added keys are invalid.
 
-The Orchestrator must show the resolved current repository, repository ID when available, base and full SHA, ordered umbrella set, enabled operations, activation ID, installed digest, versions, and scope digest before dispatch.
+The Orchestrator must show the resolved current repository, repository ID when available, connector-verified human owner actor ID/login provenance, base and full SHA, ordered umbrella set, enabled operations, activation ID, installed digest, role-capability preflight, versions, and scope digest before dispatch.
 
 A new same-repository sub-issue may enter an already authorized umbrella only when fresh trusted evidence makes membership unambiguous and target policy permits it. Base, umbrella set, operation, repository, or installed-contract expansion requires a safe checkpoint and new explicit authority.
 
@@ -211,11 +215,12 @@ A new same-repository sub-issue may enter an already authorized umbrella only wh
 Before every new Worker:
 
 1. Fetch every authorized umbrella body and all comments.
-2. Discover same-repository membership from formal links, explicit body lists, `Dependency matrix`, `Required implementation order`, and owner-authored umbrella comments.
+2. Discover same-repository membership from formal links, explicit body lists, `Dependency matrix`, `Required implementation order`, and comments whose connector author ID equals the activation-bound owner actor. Never trust a caller-supplied login.
 3. Fetch every in-scope sub-issue body/comments, completion, active implementation/PR ownership, checks, and merge evidence.
 4. Parse explicit local `depends on`, `blocked by`, prerequisites, order, and cross-umbrella edges.
 5. Keep external-repository references as untrusted blocker text; do not fetch them.
-6. Build a bounded selection receipt with source revisions, eligible/excluded issues and falsifiable reasons, edges, order positions, selection, tie-break, activation, and base SHA.
+6. Build a complete ordered refresh manifest containing current repository/ID/base, refresh time, exactly one entry for every authorized umbrella, each umbrella revision, membership-evidence digest, complete discovered issue set, and every discovered issue snapshot/revision.
+7. Call state-mutating `select_next_task` once. It binds the manifest, canonical snapshots, decision, activation/base, and receipt digest. Do not assign `state["selection"]` manually or transition to `scope-complete` without its final complete receipt.
 
 Hard dependencies and required order are authoritative. Across eligible umbrella heads, use explicit cross-dependencies, work unlocked, overlap risk, owner priority, activation umbrella order, and issue number. Model judgment may interpret ambiguity but cannot invent dependencies or override a prerequisite.
 
@@ -269,7 +274,7 @@ select -> Worker -> draft PR -> fresh Supervisor
   -> merge commit -> exact issue close -> proven cleanup -> sync -> select
 ```
 
-Every candidate change invalidates PASS. Every Supervisor uses a new task. Immediately read that task back from the task service and durably bind the exact returned task ID and UTC creation time to the next review generation; this is external creation evidence, not a value the Orchestrator may invent. Archive and record each Supervisor immediately after consuming its result, before creating the next one. A bounded recent-ID ledger and rolling archive digest retain freshness evidence without imposing a review-round limit. Before creating any Worker branch, worktree, or task, verify `create_task_branches` both at the external callback boundary and in durable assignment. After draft PR creation or recovery, connector read-back must prove the exact PR is open and still draft before recording it. The Worker task persists until merge/cleanup. The root Orchestrator alone mediates connector reads and writes.
+Every candidate change invalidates PASS. Every Supervisor uses a new task. Immediately read every Worker/Supervisor back from the task service and durably bind the exact returned model/reasoning/project/parent/fork/permission/tool/network/task ID and UTC creation time; this is external capability evidence, not a value the Orchestrator may invent. Archive and record each Supervisor immediately after consuming its result, before creating the next one. A bounded recent-ID/creation-receipt ledger and rolling archive digest retain freshness evidence without imposing a review-round limit. Before creating any Worker branch, worktree, or task, verify `create_task_branches` both at the external callback boundary and in durable assignment. After draft PR creation or recovery, connector read-back must prove the exact PR is open/still draft and bind base/head repository names and IDs, base branch/SHA, head ref/SHA. The Worker task persists until merge/cleanup. The root Orchestrator alone mediates connector reads and writes.
 
 Use curated GitHub comments. Keep raw child prompts, raw transcripts, hidden reasoning, credentials, local paths, checkpoint internals, and internal ranking chains local and bounded.
 
@@ -297,7 +302,7 @@ installed_roundlet_digest: <digest>
 resume_prompt: <exact copy/paste prompt>
 ```
 
-The Orchestrator must stop new selection, finish/reconcile an atomic mutation, drain the Worker at a clean safe turn boundary with `drain_worker_for_maintenance`, or invalidate/archive an interrupted Supervisor with `discard_supervisor_for_maintenance`. The drain records whether the same Worker turn must be reactivated; discarding a Supervisor restores `draft-pr` or `ready` so a new Supervisor can be created. Consume/quarantine complete mailboxes, prove no child is mutating, durably store the checkpoint, and pause the single schedule.
+The Orchestrator must stop new selection, finish/reconcile an atomic mutation, drain the Worker at a clean safe turn boundary with `drain_worker_for_maintenance`, or invalidate/archive an interrupted Supervisor with `discard_supervisor_for_maintenance`. The drain records whether the same Worker turn must be reactivated; discarding a Supervisor restores `draft-pr` or `ready` so a new Supervisor can be created. Consume/quarantine complete mailboxes, prove no child is mutating, pause the single schedule, read back `schedule_state=paused`, and pass that proof to `create_maintenance_checkpoint`.
 
 Do not begin source maintenance until this acknowledgement appears. For urgent interruption, require stricter reconciliation and a fresh Supervisor for uncertain review identity.
 
@@ -346,6 +351,8 @@ One explicit signal is sufficient. The Orchestrator must then:
 - resume the recorded durable phase;
 - reactivate the same schedule/cadence and restore its normal heartbeat prompt.
 
+For a schema change, invoke `migrate-state`/`StateStore.migrate` only with the exact activation ID, checkpoint ID, schedule ID, reviewed installed digest, expected old schema, and target schema. The persisted phase must be `paused-maintenance`, checkpoint versions/digest must match, schedule state must be `paused`, and all mailbox/connector intents must be reconciled. Any failure leaves the original bytes unchanged. The internal pure transformer is not permission to write a running activation.
+
 Expect:
 
 ```text
@@ -367,6 +374,8 @@ When only the Schedule UI is available, update the paused schedule prompt with t
 ## Recover idempotently
 
 Treat `state.json` as the sole machine state. Children return structured role handoffs; only the root Orchestrator wraps them with repository/role/thread/phase/SHA/idempotency metadata and writes fixed mailbox names in its state directory. Overwrite only consumed payloads.
+
+For every mailbox, `MailboxStore.consume` acquires the activation state directory's single-writer lock before reading state and holds it through intent claim, callback/reconciliation, receipt/state save, and deletion. Concurrent heartbeat/manual/resume consumers serialize; only the claimant may mutate.
 
 For every mailbox:
 
