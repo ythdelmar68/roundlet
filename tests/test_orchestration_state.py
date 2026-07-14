@@ -23,6 +23,7 @@ SHA_B = "b" * 40
 SHA_C = "c" * 40
 SHA_D = "d" * 40
 DIGEST = "d" * 64
+REFRESH_TIME = "2026-07-14T01:00:00Z"
 OWNER_ACTOR = {
     "id": 7,
     "login": "owner",
@@ -113,20 +114,88 @@ def state(*, umbrellas=None, digest=DIGEST, operations=None):
     )
 
 
+def issue_connector_evidence(issue, *, open=True, completed=False):
+    core = {
+        "verified_by_connector": True,
+        "repository": "owner/project",
+        "repository_id": 123,
+        "issue": issue,
+        "state": "open" if open else "closed",
+        "state_reason": None if open else ("completed" if completed else "not_planned"),
+        "observed_at": REFRESH_TIME,
+    }
+    return {**core, "revision": rs.digest_json(core)}
+
+
+def umbrella_connector_evidence(umbrella):
+    return {
+        "verified_by_connector": True,
+        "repository": "owner/project",
+        "repository_id": 123,
+        "issue": umbrella,
+        "body_digest": rs.digest_json({"umbrella": umbrella, "kind": "body"}),
+        "comments_digest": rs.digest_json({"umbrella": umbrella, "kind": "comments"}),
+        "formal_subissues_digest": rs.digest_json({"umbrella": umbrella, "kind": "formal"}),
+        "observed_at": REFRESH_TIME,
+    }
+
+
+def formal_membership_evidence(issue, umbrella, issue_revision):
+    umbrella_evidence = umbrella_connector_evidence(umbrella)
+    return {
+        "verified_by_connector": True,
+        "source_type": "formal-sub-issue",
+        "repository": "owner/project",
+        "repository_id": 123,
+        "umbrella_issue": umbrella,
+        "umbrella_revision": rs.digest_json(umbrella_evidence),
+        "issue": issue,
+        "issue_revision": issue_revision,
+        "observed_at": REFRESH_TIME,
+        "relationship_id": f"formal:{umbrella}:{issue}",
+    }
+
+
+def merged_completion_evidence(issue, issue_revision):
+    return {
+        "verified_by_connector": True,
+        "repository": "owner/project",
+        "repository_id": 123,
+        "issue": issue,
+        "issue_revision": issue_revision,
+        "issue_state": "closed",
+        "issue_state_reason": "completed",
+        "observed_at": REFRESH_TIME,
+        "merged_pr": {
+            "number": 1000 + issue,
+            "repository": "owner/project",
+            "repository_id": 123,
+            "state": "closed",
+            "merged": True,
+            "head_sha": SHA_B,
+            "merge_commit_sha": SHA_C,
+            "observed_at": REFRESH_TIME,
+        },
+    }
+
+
 def set_selection(value, *, umbrella=10, issue=11, base=SHA_A):
     source_umbrella = value["activation"]["umbrella_issues"][0]
+    issue_evidence = issue_connector_evidence(issue)
     snapshot = rs.IssueSnapshot(
         issue=issue,
         umbrella=source_umbrella,
         repository="owner/project",
-        membership_sources=("formal-sub-issue",),
-        revision=f"r{issue}",
+        membership_evidence=(
+            formal_membership_evidence(issue, source_umbrella, issue_evidence["revision"]),
+        ),
+        issue_evidence=issue_evidence,
     )
     receipt = rs.select_next_task(
         value,
         [snapshot],
-        refresh_timestamp="2026-07-14T01:00:00Z",
-        refresh_manifest=refresh_manifest(value, {source_umbrella: [issue]}),
+        refresh_timestamp=REFRESH_TIME,
+        refresh_manifest=refresh_manifest(value, {source_umbrella: [issue]}, [snapshot]),
     )
     receipt["selected_umbrella"] = umbrella
     receipt["base_sha"] = base
@@ -136,18 +205,45 @@ def set_selection(value, *, umbrella=10, issue=11, base=SHA_A):
     value["selection"] = receipt
 
 
-def refresh_manifest(value, discovered):
+def refresh_manifest(value, discovered, snapshots=None):
+    snapshots = list(snapshots or [])
+    memberships_by_umbrella = {
+        umbrella: [] for umbrella in value["activation"]["umbrella_issues"]
+    }
+    for snapshot in snapshots:
+        memberships_by_umbrella.setdefault(snapshot.umbrella, []).extend(
+            copy.deepcopy(list(snapshot.membership_evidence))
+        )
+    for umbrella, issues in discovered.items():
+        known = {
+            item["issue"] for item in memberships_by_umbrella.get(umbrella, [])
+        }
+        for issue in issues:
+            if issue not in known:
+                issue_evidence = issue_connector_evidence(issue)
+                memberships_by_umbrella.setdefault(umbrella, []).append(
+                    formal_membership_evidence(issue, umbrella, issue_evidence["revision"])
+                )
     return {
         "repository": "owner/project",
         "repository_id": 123,
         "base_sha": value["activation"]["base_sha"],
-        "refresh_timestamp": "2026-07-14T01:00:00Z",
+        "refresh_timestamp": REFRESH_TIME,
         "umbrellas": [
             {
                 "umbrella_issue": umbrella,
-                "umbrella_revision": f"umbrella-r{umbrella}",
+                "umbrella_evidence": umbrella_connector_evidence(umbrella),
+                "umbrella_revision": rs.digest_json(umbrella_connector_evidence(umbrella)),
                 "membership_evidence_digest": rs.digest_json(
-                    {"umbrella": umbrella, "issues": discovered.get(umbrella, [])}
+                    {
+                        "repository": "owner/project",
+                        "repository_id": 123,
+                        "umbrella_issue": umbrella,
+                        "umbrella_revision": rs.digest_json(umbrella_connector_evidence(umbrella)),
+                        "membership_evidence": sorted(
+                            memberships_by_umbrella.get(umbrella, []), key=rs.canonical_json
+                        ),
+                    }
                 ),
                 "discovered_issues": discovered.get(umbrella, []),
                 "complete": True,
@@ -306,23 +402,31 @@ def record_close(value, *, issue=11, issue_state="closed"):
 
 
 def complete_scope(value):
+    issue_evidence = issue_connector_evidence(11, open=False, completed=True)
+    snapshot = rs.IssueSnapshot(
+        issue=11,
+        umbrella=value["activation"]["umbrella_issues"][0],
+        repository="owner/project",
+        open=False,
+        completion_verified=True,
+        membership_evidence=(
+            formal_membership_evidence(
+                11,
+                value["activation"]["umbrella_issues"][0],
+                issue_evidence["revision"],
+            ),
+        ),
+        issue_evidence=issue_evidence,
+        completion_evidence=merged_completion_evidence(11, issue_evidence["revision"]),
+    )
     rs.select_next_task(
         value,
-        [
-            rs.IssueSnapshot(
-                issue=11,
-                umbrella=value["activation"]["umbrella_issues"][0],
-                repository="owner/project",
-                open=False,
-                completion_verified=True,
-                membership_sources=("formal-sub-issue",),
-                revision="r11-closed",
-            )
-        ],
-        refresh_timestamp="2026-07-14T01:00:00Z",
+        [snapshot],
+        refresh_timestamp=REFRESH_TIME,
         refresh_manifest=refresh_manifest(
             value,
             {value["activation"]["umbrella_issues"][0]: [11]},
+            [snapshot],
         ),
     )
 
@@ -1637,6 +1741,7 @@ def snap(
     repository="owner/project",
     open=True,
 ):
+    issue_evidence = issue_connector_evidence(issue, open=open, completed=completed)
     return rs.IssueSnapshot(
         issue=issue,
         umbrella=umbrella,
@@ -1645,13 +1750,20 @@ def snap(
         completion_verified=completed,
         dependencies=tuple(deps),
         external_blockers=tuple(external),
-        membership_sources=("formal-sub-issue",),
+        membership_evidence=(
+            formal_membership_evidence(issue, umbrella, issue_evidence["revision"]),
+        ),
+        issue_evidence=issue_evidence,
+        completion_evidence=(
+            merged_completion_evidence(issue, issue_evidence["revision"])
+            if completed
+            else None
+        ),
         required_order_index=order,
         ambiguous_active_implementation=ambiguous,
         owner_priority=priority,
         unlocks=unlocks,
         overlap_risk=risk,
-        revision=f"r{issue}",
     )
 
 
@@ -1665,8 +1777,8 @@ class SelectionTests(unittest.TestCase):
         return rs.select_next_task(
             value,
             snapshots,
-            refresh_timestamp="2026-07-14T01:00:00Z",
-            refresh_manifest=refresh_manifest(value, discovered),
+            refresh_timestamp=REFRESH_TIME,
+            refresh_manifest=refresh_manifest(value, discovered, snapshots),
         )
 
     def test_selects_only_candidate(self):
@@ -1746,6 +1858,119 @@ class SelectionTests(unittest.TestCase):
     def test_scope_complete(self):
         receipt = self.receipt([snap(11, completed=True, open=False)])
         self.assertEqual(receipt["status"], "complete")
+
+    def test_forged_membership_source_cannot_authorize_arbitrary_issue(self):
+        value = state()
+        issue_evidence = issue_connector_evidence(999)
+        snapshot = rs.IssueSnapshot(
+            issue=999,
+            umbrella=10,
+            repository="owner/project",
+            membership_evidence=(
+                {"source_type": "forged-caller-claim", "verified_by_connector": True},
+            ),
+            issue_evidence=issue_evidence,
+        )
+        with self.assertRaisesRegex(rs.ValidationError, "supported connector receipt"):
+            rs.select_next_task(
+                value,
+                [snapshot],
+                refresh_timestamp=REFRESH_TIME,
+                refresh_manifest=refresh_manifest(value, {10: [999]}),
+            )
+
+    def test_manifest_digest_and_revisions_are_recomputed(self):
+        value = state()
+        snapshot = snap(11)
+        manifest = refresh_manifest(value, {10: [11]}, [snapshot])
+        manifest["umbrellas"][0]["membership_evidence_digest"] = "f" * 64
+        with self.assertRaisesRegex(rs.ScopeError, "not derived from canonical connector evidence"):
+            rs.select_next_task(
+                value,
+                [snapshot],
+                refresh_timestamp=REFRESH_TIME,
+                refresh_manifest=manifest,
+            )
+
+        value = state()
+        snapshot = snap(11)
+        manifest = refresh_manifest(value, {10: [11]}, [snapshot])
+        manifest["umbrellas"][0]["umbrella_revision"] = "f" * 64
+        with self.assertRaisesRegex(rs.ScopeError, "umbrella revision was not derived"):
+            rs.select_next_task(
+                value,
+                [snapshot],
+                refresh_timestamp=REFRESH_TIME,
+                refresh_manifest=manifest,
+            )
+
+        value = state()
+        issue_evidence = issue_connector_evidence(11)
+        issue_evidence["revision"] = "f" * 64
+        snapshot = rs.IssueSnapshot(
+            issue=11,
+            umbrella=10,
+            repository="owner/project",
+            membership_evidence=(
+                formal_membership_evidence(11, 10, issue_evidence["revision"]),
+            ),
+            issue_evidence=issue_evidence,
+        )
+        with self.assertRaisesRegex(rs.ScopeError, "issue evidence revision was not derived"):
+            rs.select_next_task(
+                value,
+                [snapshot],
+                refresh_timestamp=REFRESH_TIME,
+                refresh_manifest=refresh_manifest(value, {10: [11]}, [snapshot]),
+            )
+
+    def test_snapshot_boolean_fields_are_strict(self):
+        evidence = issue_connector_evidence(11)
+        membership = formal_membership_evidence(11, 10, evidence["revision"])
+        with self.assertRaisesRegex(rs.ValidationError, "must be booleans"):
+            rs.IssueSnapshot(
+                issue=11,
+                umbrella=10,
+                repository="owner/project",
+                open="false",
+                membership_evidence=(membership,),
+                issue_evidence=evidence,
+            )
+        with self.assertRaisesRegex(rs.ValidationError, "must be booleans"):
+            rs.IssueSnapshot(
+                issue=11,
+                umbrella=10,
+                repository="owner/project",
+                completion_verified="caller-says-complete",
+                membership_evidence=(membership,),
+                issue_evidence=evidence,
+                completion_evidence={},
+            )
+
+    def test_completion_requires_bound_live_closed_issue_and_merged_pr(self):
+        value = state()
+        issue_evidence = issue_connector_evidence(11, open=False, completed=True)
+        completion = merged_completion_evidence(11, issue_evidence["revision"])
+        completion["merged_pr"]["merged"] = False
+        snapshot = rs.IssueSnapshot(
+            issue=11,
+            umbrella=10,
+            repository="owner/project",
+            open=False,
+            completion_verified=True,
+            membership_evidence=(
+                formal_membership_evidence(11, 10, issue_evidence["revision"]),
+            ),
+            issue_evidence=issue_evidence,
+            completion_evidence=completion,
+        )
+        with self.assertRaisesRegex(rs.ScopeError, "closed and merged PR"):
+            rs.select_next_task(
+                value,
+                [snapshot],
+                refresh_timestamp=REFRESH_TIME,
+                refresh_manifest=refresh_manifest(value, {10: [11]}, [snapshot]),
+            )
 
     def test_hand_built_selection_cannot_dispatch_arbitrary_issue(self):
         value = state()
@@ -2142,19 +2367,21 @@ class PersistenceAndMailboxTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             value = state()
             rs.transition_state(value, "selecting-task")
+            issue_evidence = issue_connector_evidence(11)
+            snapshot = rs.IssueSnapshot(
+                issue=11,
+                umbrella=10,
+                repository="owner/project",
+                membership_evidence=(
+                    formal_membership_evidence(11, 10, issue_evidence["revision"]),
+                ),
+                issue_evidence=issue_evidence,
+            )
             value["selection"] = rs.select_next_task(
                 value,
-                [
-                    rs.IssueSnapshot(
-                        issue=11,
-                        umbrella=10,
-                        repository="owner/project",
-                        membership_sources=("formal-sub-issue",),
-                        revision="r11",
-                    )
-                ],
-                refresh_timestamp="2026-07-14T01:00:00Z",
-                refresh_manifest=refresh_manifest(value, {10: [11]}),
+                [snapshot],
+                refresh_timestamp=REFRESH_TIME,
+                refresh_manifest=refresh_manifest(value, {10: [11]}, [snapshot]),
             )
             payload = {
                 "protocol_version": value["versions"]["protocol"],
@@ -2208,19 +2435,21 @@ class PersistenceAndMailboxTests(unittest.TestCase):
             operations["create_task_branches"] = False
             value = state(operations=operations)
             rs.transition_state(value, "selecting-task")
+            issue_evidence = issue_connector_evidence(11)
+            snapshot = rs.IssueSnapshot(
+                issue=11,
+                umbrella=10,
+                repository="owner/project",
+                membership_evidence=(
+                    formal_membership_evidence(11, 10, issue_evidence["revision"]),
+                ),
+                issue_evidence=issue_evidence,
+            )
             value["selection"] = rs.select_next_task(
                 value,
-                [
-                    rs.IssueSnapshot(
-                        issue=11,
-                        umbrella=10,
-                        repository="owner/project",
-                        membership_sources=("formal-sub-issue",),
-                        revision="r11",
-                    )
-                ],
-                refresh_timestamp="2026-07-14T01:00:00Z",
-                refresh_manifest=refresh_manifest(value, {10: [11]}),
+                [snapshot],
+                refresh_timestamp=REFRESH_TIME,
+                refresh_manifest=refresh_manifest(value, {10: [11]}, [snapshot]),
             )
             payload = {
                 "protocol_version": value["versions"]["protocol"],

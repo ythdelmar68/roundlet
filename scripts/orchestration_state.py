@@ -2924,25 +2924,335 @@ class IssueSnapshot:
     completion_verified: bool = False
     dependencies: tuple[int, ...] = ()
     external_blockers: tuple[str, ...] = ()
-    membership_sources: tuple[str, ...] = ()
+    membership_evidence: tuple[Mapping[str, Any], ...] = ()
+    issue_evidence: Mapping[str, Any] | None = None
+    completion_evidence: Mapping[str, Any] | None = None
     required_order_index: int | None = None
     ambiguous_active_implementation: bool = False
     owner_priority: int = 0
     unlocks: int = 0
     overlap_risk: int = 0
-    revision: str | None = None
 
     def __post_init__(self) -> None:
         require_positive_issue(self.issue)
         require_positive_issue(self.umbrella, "umbrella")
         normalize_owner_name(self.repository)
+        if type(self.open) is not bool or type(self.completion_verified) is not bool:
+            raise ValidationError("snapshot open and completion_verified fields must be booleans")
+        if type(self.ambiguous_active_implementation) is not bool:
+            raise ValidationError("snapshot ambiguity field must be a boolean")
+        for label, value in (
+            ("owner priority", self.owner_priority),
+            ("unlocks", self.unlocks),
+            ("overlap risk", self.overlap_risk),
+        ):
+            if type(value) is not int or value < 0:
+                raise ValidationError(f"snapshot {label} must be a non-negative integer")
+        if self.required_order_index is not None and (
+            type(self.required_order_index) is not int or self.required_order_index < 0
+        ):
+            raise ValidationError("snapshot required order index must be null or a non-negative integer")
+        if type(self.dependencies) is not tuple or type(self.external_blockers) is not tuple:
+            raise ValidationError("snapshot dependency and blocker collections must be tuples")
+        if type(self.membership_evidence) is not tuple:
+            raise ValidationError("snapshot membership evidence must be a tuple of connector receipts")
         for dependency in self.dependencies:
             require_positive_issue(dependency, "dependency")
+        if len(self.dependencies) != len(set(self.dependencies)) or self.issue in self.dependencies:
+            raise ValidationError("snapshot dependencies must be unique and cannot contain the issue itself")
+        if any(not isinstance(item, str) or not item.strip() for item in self.external_blockers):
+            raise ValidationError("snapshot external blockers must be non-empty strings")
+        if not isinstance(self.issue_evidence, Mapping):
+            raise ValidationError("snapshot requires canonical connector issue evidence")
+        if not self.membership_evidence or any(
+            not isinstance(item, Mapping) for item in self.membership_evidence
+        ):
+            raise ScopeError("snapshot requires canonical connector membership evidence")
+        if self.completion_verified is not (self.completion_evidence is not None):
+            raise ValidationError("snapshot completion flag must exactly match completion evidence presence")
+        if self.completion_verified and self.open:
+            raise ScopeError("completed snapshot cannot remain open")
 
 
-def snapshot_document(snapshot: IssueSnapshot) -> dict[str, Any]:
-    if not isinstance(snapshot.revision, str) or not snapshot.revision:
-        raise ValidationError(f"snapshot #{snapshot.issue} is missing a connector source revision")
+def _require_connector_timestamp(value: Any, label: str, refresh_timestamp: str) -> str:
+    parsed = parse_utc_timestamp(value, label)
+    refresh = parse_utc_timestamp(refresh_timestamp, "selection refresh timestamp")
+    if parsed != refresh:
+        raise ScopeError(f"{label} is not bound to the complete refresh")
+    return str(value)
+
+
+def _validate_issue_evidence(
+    state: Mapping[str, Any],
+    snapshot: IssueSnapshot,
+    *,
+    refresh_timestamp: str,
+) -> dict[str, Any]:
+    evidence = snapshot.issue_evidence
+    required = {
+        "verified_by_connector",
+        "repository",
+        "repository_id",
+        "issue",
+        "revision",
+        "state",
+        "state_reason",
+        "observed_at",
+    }
+    if not isinstance(evidence, Mapping) or set(evidence) != required:
+        raise ValidationError("issue evidence must contain the exact connector receipt fields")
+    activation = state["activation"]
+    assert_repository_target(
+        activation["repository"],
+        str(evidence.get("repository", "")),
+        target_repository_id=evidence.get("repository_id"),
+    )
+    if evidence.get("verified_by_connector") is not True:
+        raise ScopeError("issue evidence was not verified by the connector")
+    if require_positive_issue(evidence.get("issue")) != snapshot.issue:
+        raise ScopeError("issue evidence identifies another issue")
+    revision = require_content_digest(evidence.get("revision"), "issue evidence revision")
+    issue_state = evidence.get("state")
+    state_reason = evidence.get("state_reason")
+    if issue_state not in {"open", "closed"}:
+        raise ValidationError("issue evidence state must be open or closed")
+    if issue_state == "open" and state_reason is not None:
+        raise ValidationError("open issue evidence cannot have a close reason")
+    if issue_state == "closed" and state_reason not in {"completed", "not_planned"}:
+        raise ValidationError("closed issue evidence requires an exact close reason")
+    if snapshot.open is not (issue_state == "open"):
+        raise ScopeError("snapshot open flag differs from live connector issue state")
+    observed_at = _require_connector_timestamp(
+        evidence.get("observed_at"), "issue evidence timestamp", refresh_timestamp
+    )
+    normalized = {
+        "verified_by_connector": True,
+        "repository": normalize_owner_name(str(evidence["repository"])),
+        "repository_id": evidence["repository_id"],
+        "issue": snapshot.issue,
+        "state": issue_state,
+        "state_reason": state_reason,
+        "observed_at": observed_at,
+    }
+    if revision != digest_json(normalized):
+        raise ScopeError("issue evidence revision was not derived from the canonical connector receipt")
+    return {**normalized, "revision": revision}
+
+
+def _validate_membership_evidence(
+    state: Mapping[str, Any],
+    snapshot: IssueSnapshot,
+    evidence: Mapping[str, Any],
+    *,
+    umbrella_revision: str,
+    issue_revision: str,
+    refresh_timestamp: str,
+) -> dict[str, Any]:
+    common = {
+        "verified_by_connector",
+        "source_type",
+        "repository",
+        "repository_id",
+        "umbrella_issue",
+        "umbrella_revision",
+        "issue",
+        "issue_revision",
+        "observed_at",
+    }
+    source_type = evidence.get("source_type") if isinstance(evidence, Mapping) else None
+    variant = {
+        "formal-sub-issue": {"relationship_id"},
+        "umbrella-body": {"section", "source_text"},
+        "umbrella-body-list": {"source_text"},
+        "owner-comment": {"comment_id", "author_id", "source_text"},
+    }.get(source_type)
+    if variant is None or set(evidence) != common | variant:
+        raise ValidationError("membership evidence must be an exact supported connector receipt")
+    activation = state["activation"]
+    assert_repository_target(
+        activation["repository"],
+        str(evidence.get("repository", "")),
+        target_repository_id=evidence.get("repository_id"),
+    )
+    if evidence.get("verified_by_connector") is not True:
+        raise ScopeError("membership evidence was not verified by the connector")
+    if require_positive_issue(evidence.get("umbrella_issue"), "membership umbrella") != snapshot.umbrella:
+        raise ScopeError("membership evidence identifies another umbrella")
+    if require_positive_issue(evidence.get("issue")) != snapshot.issue:
+        raise ScopeError("membership evidence identifies another issue")
+    if require_content_digest(evidence.get("umbrella_revision"), "membership umbrella revision") != umbrella_revision:
+        raise ScopeError("membership evidence has a stale umbrella revision")
+    if require_content_digest(evidence.get("issue_revision"), "membership issue revision") != issue_revision:
+        raise ScopeError("membership evidence has a stale issue revision")
+    observed_at = _require_connector_timestamp(
+        evidence.get("observed_at"), "membership evidence timestamp", refresh_timestamp
+    )
+    normalized = {key: copy.deepcopy(evidence[key]) for key in common}
+    normalized.update({key: copy.deepcopy(evidence[key]) for key in variant})
+    normalized["repository"] = normalize_owner_name(str(evidence["repository"]))
+    normalized["umbrella_issue"] = snapshot.umbrella
+    normalized["issue"] = snapshot.issue
+    normalized["observed_at"] = observed_at
+    if source_type == "formal-sub-issue":
+        relationship_id = evidence.get("relationship_id")
+        if not isinstance(relationship_id, str) or not relationship_id.strip() or len(relationship_id) > 256:
+            raise ValidationError("formal membership evidence requires a bounded relationship ID")
+    else:
+        source_text = evidence.get("source_text")
+        if not isinstance(source_text, str) or not source_text.strip() or len(source_text) > 512:
+            raise ValidationError("text membership evidence requires a bounded source excerpt")
+        if snapshot.issue not in extract_same_repository_issue_numbers(source_text, snapshot.repository):
+            raise ScopeError("membership source excerpt does not authorize the snapshot issue")
+        if source_type == "umbrella-body":
+            if evidence.get("section") not in {
+                "sub-issues",
+                "dependency matrix",
+                "required implementation order",
+                "implementation order",
+            }:
+                raise ScopeError("umbrella body evidence is outside an authorized scope section")
+        elif source_type == "umbrella-body-list":
+            if not re.match(
+                r"^\s*(?:[-*+]|\d+[.)])\s+(?:\[[ xX]\]\s*)?(?:#\d+\b|[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#\d+\b|https?://github\.com/)",
+                source_text,
+                re.IGNORECASE,
+            ):
+                raise ScopeError("umbrella list evidence is not an explicit issue list item")
+        elif source_type == "owner-comment":
+            require_positive_issue(evidence.get("comment_id"), "membership comment ID")
+            if require_positive_issue(evidence.get("author_id"), "membership author ID") != activation["owner_actor"]["id"]:
+                raise ScopeError("owner-comment membership evidence is not from the activation-bound actor")
+            lowered = source_text.casefold()
+            explicit = re.search(
+                r"\b(?:add|include|link|authorize|sub[- ]?issue|implementation\s+order|dependency\s+matrix|in\s+scope)\b",
+                lowered,
+            ) or re.match(r"^\s*(?:[-*]|\d+[.)])\s*(?:\[[ xX]\]\s*)?#\d+", source_text)
+            if _scope_line_is_negative(lowered) or not explicit:
+                raise ScopeError("owner comment does not explicitly authorize membership")
+    return normalized
+
+
+def _validate_completion_evidence(
+    state: Mapping[str, Any],
+    snapshot: IssueSnapshot,
+    evidence: Mapping[str, Any] | None,
+    *,
+    issue_revision: str,
+    refresh_timestamp: str,
+) -> dict[str, Any] | None:
+    if evidence is None:
+        return None
+    required = {
+        "verified_by_connector",
+        "repository",
+        "repository_id",
+        "issue",
+        "issue_revision",
+        "issue_state",
+        "issue_state_reason",
+        "observed_at",
+        "merged_pr",
+    }
+    if not isinstance(evidence, Mapping) or set(evidence) != required:
+        raise ValidationError("completion evidence must contain exact live issue and PR receipts")
+    activation = state["activation"]
+    assert_repository_target(
+        activation["repository"],
+        str(evidence.get("repository", "")),
+        target_repository_id=evidence.get("repository_id"),
+    )
+    if evidence.get("verified_by_connector") is not True:
+        raise ScopeError("completion evidence was not verified by the connector")
+    if require_positive_issue(evidence.get("issue")) != snapshot.issue:
+        raise ScopeError("completion evidence identifies another issue")
+    if require_content_digest(evidence.get("issue_revision"), "completion issue revision") != issue_revision:
+        raise ScopeError("completion evidence has a stale issue revision")
+    if evidence.get("issue_state") != "closed" or evidence.get("issue_state_reason") != "completed":
+        raise ScopeError("completion requires live closed/completed issue evidence")
+    observed_at = _require_connector_timestamp(
+        evidence.get("observed_at"), "completion evidence timestamp", refresh_timestamp
+    )
+    pr = evidence.get("merged_pr")
+    pr_required = {
+        "number",
+        "repository",
+        "repository_id",
+        "state",
+        "merged",
+        "head_sha",
+        "merge_commit_sha",
+        "observed_at",
+    }
+    if not isinstance(pr, Mapping) or set(pr) != pr_required:
+        raise ValidationError("completion requires an exact merged PR connector receipt")
+    assert_repository_target(
+        activation["repository"],
+        str(pr.get("repository", "")),
+        target_repository_id=pr.get("repository_id"),
+    )
+    require_positive_issue(pr.get("number"), "completion PR number")
+    if pr.get("state") != "closed" or pr.get("merged") is not True:
+        raise ScopeError("completion requires a live closed and merged PR")
+    head_sha = require_full_sha(pr.get("head_sha"), "completion PR head SHA")
+    merge_sha = require_full_sha(pr.get("merge_commit_sha"), "completion PR merge commit SHA")
+    pr_observed_at = _require_connector_timestamp(
+        pr.get("observed_at"), "completion PR timestamp", refresh_timestamp
+    )
+    return {
+        "verified_by_connector": True,
+        "repository": normalize_owner_name(str(evidence["repository"])),
+        "repository_id": evidence["repository_id"],
+        "issue": snapshot.issue,
+        "issue_revision": issue_revision,
+        "issue_state": "closed",
+        "issue_state_reason": "completed",
+        "observed_at": observed_at,
+        "merged_pr": {
+            "number": pr["number"],
+            "repository": normalize_owner_name(str(pr["repository"])),
+            "repository_id": pr["repository_id"],
+            "state": "closed",
+            "merged": True,
+            "head_sha": head_sha,
+            "merge_commit_sha": merge_sha,
+            "observed_at": pr_observed_at,
+        },
+    }
+
+
+def snapshot_document(
+    state: Mapping[str, Any],
+    snapshot: IssueSnapshot,
+    *,
+    umbrella_revision: str,
+    refresh_timestamp: str,
+) -> dict[str, Any]:
+    issue_evidence = _validate_issue_evidence(
+        state, snapshot, refresh_timestamp=refresh_timestamp
+    )
+    memberships = [
+        _validate_membership_evidence(
+            state,
+            snapshot,
+            item,
+            umbrella_revision=umbrella_revision,
+            issue_revision=issue_evidence["revision"],
+            refresh_timestamp=refresh_timestamp,
+        )
+        for item in snapshot.membership_evidence
+    ]
+    memberships.sort(key=canonical_json)
+    if len(memberships) != len({canonical_json(item) for item in memberships}):
+        raise ValidationError("snapshot membership evidence contains duplicates")
+    completion = _validate_completion_evidence(
+        state,
+        snapshot,
+        snapshot.completion_evidence,
+        issue_revision=issue_evidence["revision"],
+        refresh_timestamp=refresh_timestamp,
+    )
+    if snapshot.completion_verified and issue_evidence["state_reason"] != "completed":
+        raise ScopeError("completion flag differs from live issue completion evidence")
     return {
         "issue": snapshot.issue,
         "umbrella": snapshot.umbrella,
@@ -2951,14 +3261,57 @@ def snapshot_document(snapshot: IssueSnapshot) -> dict[str, Any]:
         "completion_verified": snapshot.completion_verified,
         "dependencies": list(snapshot.dependencies),
         "external_blockers": list(snapshot.external_blockers),
-        "membership_sources": list(snapshot.membership_sources),
+        "membership_evidence": memberships,
+        "issue_evidence": issue_evidence,
+        "completion_evidence": completion,
         "required_order_index": snapshot.required_order_index,
         "ambiguous_active_implementation": snapshot.ambiguous_active_implementation,
         "owner_priority": snapshot.owner_priority,
         "unlocks": snapshot.unlocks,
         "overlap_risk": snapshot.overlap_risk,
-        "revision": snapshot.revision,
     }
+
+
+def _snapshot_from_document(document: Mapping[str, Any]) -> IssueSnapshot:
+    required = {
+        "issue",
+        "umbrella",
+        "repository",
+        "open",
+        "completion_verified",
+        "dependencies",
+        "external_blockers",
+        "membership_evidence",
+        "issue_evidence",
+        "completion_evidence",
+        "required_order_index",
+        "ambiguous_active_implementation",
+        "owner_priority",
+        "unlocks",
+        "overlap_risk",
+    }
+    if not isinstance(document, Mapping) or set(document) != required:
+        raise ValidationError("selection snapshot evidence requires exact canonical fields")
+    try:
+        return IssueSnapshot(
+            issue=document["issue"],
+            umbrella=document["umbrella"],
+            repository=document["repository"],
+            open=document["open"],
+            completion_verified=document["completion_verified"],
+            dependencies=tuple(document["dependencies"]),
+            external_blockers=tuple(document["external_blockers"]),
+            membership_evidence=tuple(document["membership_evidence"]),
+            issue_evidence=document["issue_evidence"],
+            completion_evidence=document["completion_evidence"],
+            required_order_index=document["required_order_index"],
+            ambiguous_active_implementation=document["ambiguous_active_implementation"],
+            owner_priority=document["owner_priority"],
+            unlocks=document["unlocks"],
+            overlap_risk=document["overlap_risk"],
+        )
+    except (KeyError, TypeError) as exc:
+        raise ValidationError("selection snapshot evidence is incomplete") from exc
 
 
 def normalize_refresh_manifest(
@@ -2997,6 +3350,7 @@ def normalize_refresh_manifest(
     for entry in umbrella_entries:
         if not isinstance(entry, Mapping) or set(entry) != {
             "umbrella_issue",
+            "umbrella_evidence",
             "umbrella_revision",
             "membership_evidence_digest",
             "discovered_issues",
@@ -3004,9 +3358,44 @@ def normalize_refresh_manifest(
         }:
             raise ValidationError("each umbrella refresh requires exact completeness evidence")
         umbrella = require_positive_issue(entry.get("umbrella_issue"), "refresh umbrella")
-        revision = entry.get("umbrella_revision")
-        if not isinstance(revision, str) or not revision:
-            raise ValidationError("umbrella refresh revision is required")
+        revision = require_content_digest(
+            entry.get("umbrella_revision"), "umbrella refresh revision"
+        )
+        umbrella_evidence = entry.get("umbrella_evidence")
+        umbrella_required = {
+            "verified_by_connector",
+            "repository",
+            "repository_id",
+            "issue",
+            "body_digest",
+            "comments_digest",
+            "formal_subissues_digest",
+            "observed_at",
+        }
+        if not isinstance(umbrella_evidence, Mapping) or set(umbrella_evidence) != umbrella_required:
+            raise ValidationError("umbrella refresh requires exact canonical connector evidence")
+        assert_repository_target(
+            activation["repository"],
+            str(umbrella_evidence.get("repository", "")),
+            target_repository_id=umbrella_evidence.get("repository_id"),
+        )
+        if umbrella_evidence.get("verified_by_connector") is not True:
+            raise ScopeError("umbrella refresh evidence was not verified by the connector")
+        if require_positive_issue(umbrella_evidence.get("issue"), "umbrella evidence issue") != umbrella:
+            raise ScopeError("umbrella connector evidence identifies another issue")
+        for digest_key in ("body_digest", "comments_digest", "formal_subissues_digest"):
+            require_content_digest(umbrella_evidence.get(digest_key), f"umbrella {digest_key}")
+        _require_connector_timestamp(
+            umbrella_evidence.get("observed_at"),
+            "umbrella evidence timestamp",
+            refresh_timestamp,
+        )
+        normalized_umbrella_evidence = {
+            **copy.deepcopy(dict(umbrella_evidence)),
+            "repository": normalize_owner_name(str(umbrella_evidence["repository"])),
+        }
+        if revision != digest_json(normalized_umbrella_evidence):
+            raise ScopeError("umbrella revision was not derived from canonical connector evidence")
         evidence_digest = require_content_digest(
             entry.get("membership_evidence_digest"),
             "membership evidence digest",
@@ -3025,6 +3414,7 @@ def normalize_refresh_manifest(
         normalized_entries.append(
             {
                 "umbrella_issue": umbrella,
+                "umbrella_evidence": normalized_umbrella_evidence,
                 "umbrella_revision": revision,
                 "membership_evidence_digest": evidence_digest,
                 "discovered_issues": list(issues),
@@ -3034,16 +3424,45 @@ def normalize_refresh_manifest(
     if seen != expected_umbrellas:
         raise ScopeError("refresh manifest must cover every authorized umbrella exactly once and in order")
     snapshot_issues: dict[int, list[int]] = {umbrella: [] for umbrella in expected_umbrellas}
+    membership_by_umbrella: dict[int, list[dict[str, Any]]] = {
+        umbrella: [] for umbrella in expected_umbrellas
+    }
+    revisions = {
+        entry["umbrella_issue"]: entry["umbrella_revision"] for entry in normalized_entries
+    }
     for snapshot in snapshots:
         if snapshot.issue == snapshot.umbrella:
             raise ScopeError("an umbrella issue cannot be dispatched as its own sub-issue")
         if snapshot.umbrella not in snapshot_issues:
             raise ScopeError("snapshot belongs to an unauthorized umbrella")
-        snapshot_document(snapshot)
+        document = snapshot_document(
+            state,
+            snapshot,
+            umbrella_revision=revisions[snapshot.umbrella],
+            refresh_timestamp=refresh_timestamp,
+        )
         snapshot_issues[snapshot.umbrella].append(snapshot.issue)
+        membership_by_umbrella[snapshot.umbrella].extend(document["membership_evidence"])
     for umbrella in expected_umbrellas:
         if sorted(discovered[umbrella]) != sorted(snapshot_issues[umbrella]):
             raise ScopeError("refresh manifest discovered issues differ from the complete snapshots")
+        canonical_memberships = sorted(membership_by_umbrella[umbrella], key=canonical_json)
+        expected_digest = digest_json(
+            {
+                "repository": normalize_owner_name(str(manifest["repository"])),
+                "repository_id": manifest["repository_id"],
+                "umbrella_issue": umbrella,
+                "umbrella_revision": revisions[umbrella],
+                "membership_evidence": canonical_memberships,
+            }
+        )
+        supplied_digest = next(
+            entry["membership_evidence_digest"]
+            for entry in normalized_entries
+            if entry["umbrella_issue"] == umbrella
+        )
+        if supplied_digest != expected_digest:
+            raise ScopeError("membership evidence digest was not derived from canonical connector evidence")
     return {
         "repository": normalize_owner_name(str(manifest["repository"])),
         "repository_id": manifest["repository_id"],
@@ -3087,30 +3506,8 @@ def validate_selection_receipt(state: Mapping[str, Any], receipt: Mapping[str, A
     if not isinstance(evidence, list):
         raise ValidationError("selection snapshot evidence is malformed")
     snapshots: list[IssueSnapshot] = []
-    try:
-        for item in evidence:
-            if not isinstance(item, Mapping):
-                raise ValidationError("selection snapshot evidence is malformed")
-            snapshots.append(
-                IssueSnapshot(
-                    issue=item["issue"],
-                    umbrella=item["umbrella"],
-                    repository=item["repository"],
-                    open=item["open"],
-                    completion_verified=item["completion_verified"],
-                    dependencies=tuple(item["dependencies"]),
-                    external_blockers=tuple(item["external_blockers"]),
-                    membership_sources=tuple(item["membership_sources"]),
-                    required_order_index=item["required_order_index"],
-                    ambiguous_active_implementation=item["ambiguous_active_implementation"],
-                    owner_priority=item["owner_priority"],
-                    unlocks=item["unlocks"],
-                    overlap_risk=item["overlap_risk"],
-                    revision=item["revision"],
-                )
-            )
-    except (KeyError, TypeError) as exc:
-        raise ValidationError("selection snapshot evidence is incomplete") from exc
+    for item in evidence:
+        snapshots.append(_snapshot_from_document(item))
     normalize_refresh_manifest(
         state,
         snapshots,
@@ -3118,7 +3515,7 @@ def validate_selection_receipt(state: Mapping[str, Any], receipt: Mapping[str, A
         refresh_timestamp=str(receipt.get("refresh_timestamp", "")),
     )
     expected_revisions = {
-        str(item.issue): item.revision for item in snapshots if item.revision is not None
+        str(item.issue): item.issue_evidence["revision"] for item in snapshots
     }
     if receipt.get("source_revisions") != expected_revisions:
         raise ScopeError("selection source revisions differ from the canonical snapshots")
@@ -3184,7 +3581,7 @@ def _recompute_selection_fields(
             raise ScopeError(f"snapshot #{snapshot.issue} belongs to another repository")
         if snapshot.umbrella not in umbrella_order:
             raise ScopeError(f"snapshot #{snapshot.issue} belongs to an unauthorized umbrella")
-        if not snapshot.membership_sources:
+        if not snapshot.membership_evidence:
             raise ScopeError(f"snapshot #{snapshot.issue} has no authorized membership evidence")
         if snapshot.issue in by_issue:
             raise ValidationError(f"duplicate snapshot for issue #{snapshot.issue}")
@@ -3321,7 +3718,7 @@ def select_next_task(
             raise ScopeError(f"snapshot #{snapshot.issue} belongs to another repository")
         if snapshot.umbrella not in umbrella_order:
             raise ScopeError(f"snapshot #{snapshot.issue} belongs to an unauthorized umbrella")
-        if not snapshot.membership_sources:
+        if not snapshot.membership_evidence:
             raise ScopeError(f"snapshot #{snapshot.issue} has no authorized membership evidence")
         if snapshot.issue in by_issue:
             raise ValidationError(f"duplicate snapshot for issue #{snapshot.issue}")
@@ -3420,12 +3817,25 @@ def select_next_task(
         ({"dependent": issue, "prerequisite": dependency} for issue, deps in graph.items() for dependency in deps),
         key=lambda edge: (edge["dependent"], edge["prerequisite"]),
     )
+    umbrella_revisions = {
+        entry["umbrella_issue"]: entry["umbrella_revision"]
+        for entry in normalized_manifest["umbrellas"]
+    }
+    snapshot_evidence = [
+        snapshot_document(
+            state,
+            item,
+            umbrella_revision=umbrella_revisions[item.umbrella],
+            refresh_timestamp=refresh_timestamp,
+        )
+        for item in snapshots
+    ]
     receipt = {
         "refresh_timestamp": refresh_timestamp,
         "refresh_manifest": normalized_manifest,
-        "snapshot_evidence": [snapshot_document(item) for item in snapshots],
+        "snapshot_evidence": snapshot_evidence,
         "source_revisions": {
-            str(item.issue): item.revision for item in snapshots if item.revision is not None
+            str(item.issue): item.issue_evidence["revision"] for item in snapshots
         },
         "eligible_candidates": [item.issue for item in sorted(eligible_heads, key=rank)],
         "excluded_candidates": excluded,
