@@ -1,0 +1,13 @@
+interface:
+  display_name: "Roundlet"
+  short_description: "Run repository-scoped GitHub issue review loops"
+  default_prompt: "Use $roundlet to start or resume an authorized issue review loop in the current repository."
+
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "github"
+      description: "GitHub connector for current-repository issue and pull request operations"
+
+policy:
+  allow_implicit_invocation: false
