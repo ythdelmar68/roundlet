@@ -62,7 +62,7 @@ For a new activation, use this exact order with one reviewed `<installed-roundle
 
 ## Configure role models
 
-The only supported role-model setting is `<installed-roundlet>/assets/role-models.json`. Validate it before activation:
+The only supported Roundlet configuration setting is `<installed-roundlet>/assets/roundlet-config.json`. Validate it before activation:
 
 ```text
 python3 <installed-roundlet>/scripts/orchestration_state.py role-config \

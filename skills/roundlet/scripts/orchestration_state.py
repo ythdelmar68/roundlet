@@ -76,7 +76,7 @@ ROLE_ISOLATION_PROFILES = {
 }
 
 ROLE_NAMES = frozenset(ROLE_ISOLATION_PROFILES)
-ROLE_MODEL_CONFIG_NAME = "role-models.json"
+ROLE_MODEL_CONFIG_NAME = "roundlet-config.json"
 ROLE_MODEL_CONFIG_RELATIVE_PATH = Path("assets") / ROLE_MODEL_CONFIG_NAME
 REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
 MODEL_ID = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
@@ -84,10 +84,10 @@ MODEL_ID = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
 # keeps migration compatible without carrying duplicate model literals in code.
 POLICY3_ROLE_MODEL_SNAPSHOT_DIGEST = "be1680d41063b90e22fef16e5a207fa6aea59004624be5e5bfb08d8de07c77bf"
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 PROTOCOL_VERSION = "3"
-REVIEW_CONTRACT_VERSION = "3"
-POLICY_VERSION = "4"
+REVIEW_CONTRACT_VERSION = "4"
+POLICY_VERSION = "5"
 VERSION_KEYS = {"schema", "protocol", "review_contract", "policy"}
 LOCAL_CLEANUP_KEYS = {
     "worktree_removed",
@@ -114,6 +114,7 @@ PHASES = {
     "draft-pr",
     "supervisor-running",
     "worker-repair",
+    "final-worker-repair",
     "pass-follow-up",
     "ready",
     "final-supervisor",
@@ -150,8 +151,9 @@ LEGAL_TRANSITIONS = {
     "waiting-dependency": {"selecting-task", "blocked"},
     "worker-running": {"draft-pr", "blocked"},
     "draft-pr": {"supervisor-running", "blocked"},
-    "supervisor-running": {"worker-repair", "pass-follow-up", "blocked"},
+    "supervisor-running": {"worker-repair", "final-worker-repair", "pass-follow-up", "blocked"},
     "worker-repair": {"supervisor-running", "final-supervisor", "blocked"},
+    "final-worker-repair": {"ready", "blocked"},
     "pass-follow-up": {"worker-repair", "ready", "blocked"},
     "ready": {"final-supervisor", "pre-merge", "blocked"},
     "final-supervisor": {"worker-repair", "ready", "blocked"},
@@ -277,31 +279,44 @@ def _validate_role_model_snapshot(snapshot: Mapping[str, Any]) -> dict[str, dict
     return normalized
 
 
+def _validate_review_policy(policy: Mapping[str, Any]) -> dict[str, int]:
+    if not isinstance(policy, Mapping) or set(policy) != {"max_supervisor_cycles"}:
+        raise ValidationError("review policy must contain exactly max_supervisor_cycles")
+    value = policy.get("max_supervisor_cycles")
+    if type(value) is not int or not 1 <= value <= 64:
+        raise ValidationError("review.max_supervisor_cycles must be an integer from 1 to 64")
+    return {"max_supervisor_cycles": value}
+
+
 def load_role_model_config(skill_root: str | os.PathLike[str]) -> dict[str, Any]:
-    """Read the strict, dependency-free model configuration from one skill payload."""
+    """Read the strict, dependency-free Roundlet configuration from one skill payload."""
     path = Path(skill_root).resolve() / ROLE_MODEL_CONFIG_RELATIVE_PATH
     try:
         content = path.read_bytes().decode("utf-8")
     except FileNotFoundError as exc:
-        raise ValidationError("Roundlet role-model configuration is missing") from exc
+        raise ValidationError("Roundlet configuration is missing") from exc
     except (OSError, UnicodeDecodeError) as exc:
-        raise ValidationError("Roundlet role-model configuration is unreadable") from exc
+        raise ValidationError("Roundlet configuration is unreadable") from exc
     try:
         raw = json.loads(content, object_pairs_hook=_reject_duplicate_json_keys)
     except json.JSONDecodeError as exc:
-        raise ValidationError("Roundlet role-model configuration is unreadable") from exc
+        raise ValidationError("Roundlet configuration is unreadable") from exc
     if not isinstance(raw, Mapping) or set(raw) != {"schema_version", "defaults", "legacy_profiles"}:
-        raise ValidationError("role-model configuration has unknown or missing fields")
-    if type(raw.get("schema_version")) is not int or raw.get("schema_version") != 1:
-        raise ValidationError("role-model configuration schema is unsupported")
-    defaults = _validate_role_model_snapshot(raw.get("defaults", {}))
+        raise ValidationError("Roundlet configuration has unknown or missing fields")
+    if type(raw.get("schema_version")) is not int or raw.get("schema_version") != 2:
+        raise ValidationError("Roundlet configuration schema is unsupported")
+    defaults_raw = raw.get("defaults")
+    if not isinstance(defaults_raw, Mapping) or set(defaults_raw) != {"roles", "review"}:
+        raise ValidationError("Roundlet configuration defaults have unknown or missing fields")
+    defaults = _validate_role_model_snapshot(defaults_raw.get("roles", {}))
+    review_policy = _validate_review_policy(defaults_raw.get("review", {}))
     legacy_raw = raw.get("legacy_profiles")
     if not isinstance(legacy_raw, Mapping) or set(legacy_raw) != {"policy_3"}:
-        raise ValidationError("role-model configuration legacy profiles are unsupported")
+        raise ValidationError("Roundlet configuration legacy profiles are unsupported")
     legacy_profiles = {"policy_3": _validate_role_model_snapshot(legacy_raw["policy_3"])}
     canonical = {
-        "schema_version": 1,
-        "defaults": defaults,
+        "schema_version": 2,
+        "defaults": {"roles": defaults, "review": review_policy},
         "legacy_profiles": legacy_profiles,
     }
     return {**canonical, "config_digest": digest_json(canonical)}
@@ -732,6 +747,8 @@ def compute_scope_digest(
     orchestrator_creation_receipt: Mapping[str, Any],
     role_model_snapshot: Mapping[str, Any],
     role_model_snapshot_digest: str,
+    review_policy_snapshot: Mapping[str, Any] | None = None,
+    review_policy_snapshot_digest: str | None = None,
     protocol_version: str = PROTOCOL_VERSION,
     policy_version: str = POLICY_VERSION,
 ) -> str:
@@ -739,6 +756,11 @@ def compute_scope_digest(
     snapshot = _validate_role_model_snapshot(role_model_snapshot)
     if role_model_snapshot_digest != digest_json(snapshot):
         raise ScopeError("role model snapshot digest does not match the snapshot")
+    review_policy = None
+    if review_policy_snapshot is not None or review_policy_snapshot_digest is not None:
+        review_policy = _validate_review_policy(review_policy_snapshot or {})
+        if review_policy_snapshot_digest != digest_json(review_policy):
+            raise ScopeError("review policy snapshot digest does not match the snapshot")
     normalized_repo = {
         "owner_name": normalize_owner_name(str(repository["owner_name"])),
         "repository_id": repository.get("repository_id"),
@@ -756,6 +778,7 @@ def compute_scope_digest(
         "capability_preflight": validate_capability_preflight(capability_preflight),
         "orchestrator_creation_receipt_digest": digest_json(orchestrator_creation_receipt),
         "role_model_snapshot_digest": role_model_snapshot_digest,
+        "review_policy_snapshot_digest": None if review_policy is None else review_policy_snapshot_digest,
         "installed_roundlet_digest": installed_roundlet_digest,
         "protocol_version": str(protocol_version),
         "policy_version": str(policy_version),
@@ -893,7 +916,7 @@ def new_state(
         raise ValidationError("orchestrator_thread_id is required")
     digest = require_content_digest(installed_roundlet_digest)
     config = load_stable_role_model_config(skill_root, digest)
-    role_snapshot = config["defaults"]
+    role_snapshot = config["defaults"]["roles"]
     snapshot_digest = role_model_snapshot_digest(role_snapshot)
     timestamp = now or utc_now()
     normalized_owner = validate_owner_actor(owner_actor)
@@ -922,6 +945,8 @@ def new_state(
         orchestrator_creation_receipt=orchestrator_receipt,
         role_model_snapshot=role_snapshot,
         role_model_snapshot_digest=snapshot_digest,
+        review_policy_snapshot=config["defaults"]["review"],
+        review_policy_snapshot_digest=digest_json(config["defaults"]["review"]),
     )
     state = {
         "skill": {
@@ -943,6 +968,8 @@ def new_state(
             "capability_preflight": normalized_preflight,
             "role_model_snapshot": role_snapshot,
             "role_model_snapshot_digest": snapshot_digest,
+            "review_policy_snapshot": config["defaults"]["review"],
+            "review_policy_snapshot_digest": digest_json(config["defaults"]["review"]),
             "repository": repository,
             "base_branch": identity.base_branch,
             "base_sha": identity.head_sha,
@@ -965,6 +992,7 @@ def new_state(
             "archived_supervisor_count": 0,
             "archived_supervisor_digest": "0" * 64,
             "last_supervisor_created_at": None,
+            "exhaustion": None,
         },
         "receipts": {},
         "github_mutations": {"pending": None, "receipts": {}},
@@ -1022,6 +1050,9 @@ def validate_state(state: Mapping[str, Any]) -> None:
     snapshot_digest = activation.get("role_model_snapshot_digest")
     if snapshot_digest != digest_json(role_snapshot):
         raise ScopeError("activation role-model snapshot digest is mismatched")
+    review_policy = _validate_review_policy(activation.get("review_policy_snapshot", {}))
+    if activation.get("review_policy_snapshot_digest") != digest_json(review_policy):
+        raise ScopeError("activation review-policy snapshot digest is mismatched")
     validate_role_creation_receipt(
         activation.get("orchestrator_creation_receipt", {}),
         role="orchestrator",
@@ -1044,13 +1075,30 @@ def validate_state(state: Mapping[str, Any]) -> None:
             orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
             role_model_snapshot=role_snapshot,
             role_model_snapshot_digest=str(snapshot_digest),
+            review_policy_snapshot=review_policy,
+            review_policy_snapshot_digest=activation.get("review_policy_snapshot_digest"),
             protocol_version=str(versions.get("protocol")),
             policy_version=str(versions.get("policy")),
         )
     except (KeyError, TypeError) as exc:
         raise ValidationError("activation scope identity is incomplete") from exc
     if activation.get("scope_digest") != expected_scope:
-        raise ScopeError("scope digest does not match the persisted activation")
+        legacy_scope = compute_scope_digest(
+            repository,
+            activation.get("base_branch"),
+            activation.get("umbrella_issues", []),
+            activation.get("allowed_operations", {}),
+            digest,
+            owner_actor=owner_actor,
+            capability_preflight=capability_preflight,
+            orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
+            role_model_snapshot=role_snapshot,
+            role_model_snapshot_digest=str(snapshot_digest),
+            protocol_version=str(versions.get("protocol")),
+            policy_version=str(versions.get("policy")),
+        )
+        if activation.get("scope_digest") != legacy_scope:
+            raise ScopeError("scope digest does not match the persisted activation")
     selection = state.get("selection")
     if selection is not None:
         validate_selection_receipt(state, selection)
@@ -1064,6 +1112,7 @@ def validate_state(state: Mapping[str, Any]) -> None:
         "draft-pr",
         "supervisor-running",
         "worker-repair",
+        "final-worker-repair",
         "pass-follow-up",
         "ready",
         "final-supervisor",
@@ -1145,8 +1194,25 @@ def validate_state(state: Mapping[str, Any]) -> None:
     review_round = review.get("round")
     if isinstance(review_round, bool) or not isinstance(review_round, int) or review_round < 0:
         raise ValidationError("Supervisor round must be a non-negative integer")
+    max_cycles = review_policy["max_supervisor_cycles"]
+    if review_round > max_cycles:
+        raise ValidationError("Supervisor round exceeds the activation review budget")
     if review_round != archived_count + len(unarchived_thread_ids):
         raise ValidationError("Supervisor round count differs from archived and active receipts")
+    exhaustion = review.get("exhaustion")
+    if exhaustion is not None:
+        if not isinstance(exhaustion, Mapping) or set(exhaustion) != {"outcome", "round", "candidate_sha", "findings_count", "findings_digest", "worker_dispositions_count", "worker_dispositions_digest"}:
+            raise ValidationError("review exhaustion evidence is malformed")
+        if exhaustion.get("outcome") != "REVIEW_BUDGET_EXHAUSTED" or exhaustion.get("round") != max_cycles:
+            raise ValidationError("review exhaustion outcome is not bound to the budget")
+        require_full_sha(exhaustion.get("candidate_sha"), "exhaustion candidate_sha")
+        require_content_digest(exhaustion.get("findings_digest"), "exhaustion findings digest")
+        if type(exhaustion.get("findings_count")) is not int or exhaustion.get("findings_count") < 1:
+            raise ValidationError("exhaustion findings count must be positive")
+        if exhaustion.get("worker_dispositions_count") is not None:
+            require_content_digest(exhaustion.get("worker_dispositions_digest"), "worker dispositions digest")
+            if exhaustion.get("worker_dispositions_count") != exhaustion.get("findings_count"):
+                raise ValidationError("worker final dispositions must match exhausted findings")
     last_created_at = review.get("last_supervisor_created_at")
     if review.get("round") == 0:
         if last_created_at is not None:
@@ -1687,6 +1753,7 @@ def assign_task(
         "archived_supervisor_count": 0,
         "archived_supervisor_digest": "0" * 64,
         "last_supervisor_created_at": None,
+        "exhaustion": None,
     }
     transition_state(state, "worker-running")
 
@@ -1695,7 +1762,7 @@ def set_candidate(state: MutableMapping[str, Any], candidate_sha: str, *, clean:
     task = state.get("task")
     if not isinstance(task, MutableMapping):
         raise TransitionError("candidate requires an active task")
-    if state.get("phase") not in {"worker-running", "worker-repair", "pass-follow-up"}:
+    if state.get("phase") not in {"worker-running", "worker-repair", "final-worker-repair", "pass-follow-up"}:
         raise TransitionError("candidate handoff is not accepted in this phase")
     if task.get("active_role") != "worker":
         raise TransitionError("candidate handoff requires the active Worker")
@@ -1734,6 +1801,10 @@ def begin_supervisor(
     elif phase not in {"draft-pr", "worker-repair"} or task.get("pr_ready") is True:
         raise TransitionError("initial Supervisor requires a draft PR candidate")
     review = state["review"]
+    if review.get("round", 0) >= state["activation"]["review_policy_snapshot"]["max_supervisor_cycles"]:
+        raise GuardError("Supervisor review budget is exhausted")
+    if review.get("exhaustion") is not None:
+        raise GuardError("Supervisor review budget is exhausted")
     if review.get("unarchived_supervisor_thread_ids"):
         raise TransitionError("archive the previous Supervisor before creating another")
     if thread_id in review["supervisor_thread_ids"]:
@@ -1810,7 +1881,19 @@ def accept_supervisor_result(
     if result == "FINDINGS":
         review["pass_identity"] = None
         task["active_role"] = "worker"
-        transition_state(state, "worker-repair")
+        if review.get("round") >= state["activation"]["review_policy_snapshot"]["max_supervisor_cycles"]:
+            review["exhaustion"] = {
+                "outcome": "REVIEW_BUDGET_EXHAUSTED",
+                "round": review["round"],
+                "candidate_sha": candidate,
+                "findings_count": len(non_blocking_items or []),
+                "findings_digest": digest_json(list(non_blocking_items or [])),
+                "worker_dispositions_count": None,
+                "worker_dispositions_digest": None,
+            }
+            transition_state(state, "final-worker-repair")
+        else:
+            transition_state(state, "worker-repair")
         return
     items = list(non_blocking_items or [])
     review["pass_identity"] = {
@@ -2135,6 +2218,45 @@ def record_pr_ready(
     transition_state(state, "ready")
 
 
+
+def record_worker_final_dispositions(
+    state: MutableMapping[str, Any],
+    *,
+    worker_thread_id: str,
+    head_sha: str,
+    clean: bool,
+    dispositions: Sequence[Mapping[str, Any]],
+) -> None:
+    if state.get("phase") != "final-worker-repair":
+        raise TransitionError("final Worker dispositions are expected only after review budget exhaustion")
+    task = state.get("task")
+    review = state.get("review")
+    if not isinstance(task, MutableMapping) or not isinstance(review, MutableMapping):
+        raise ValidationError("active task/review is missing")
+    if task.get("active_role") != "worker" or worker_thread_id != task.get("worker_thread_id"):
+        raise ScopeError("final dispositions must come from the same active Worker")
+    if not clean:
+        raise GuardError("Worker worktree must be clean after final repair")
+    head = require_full_sha(head_sha, "Worker final repair head")
+    if head != task.get("candidate_sha"):
+        raise GuardError("Worker final repair head must match the active candidate")
+    exhaustion = review.get("exhaustion")
+    if not isinstance(exhaustion, MutableMapping) or exhaustion.get("outcome") != "REVIEW_BUDGET_EXHAUSTED":
+        raise GuardError("final dispositions require durable review-budget exhaustion")
+    normalized = list(dispositions)
+    if len(normalized) != exhaustion.get("findings_count"):
+        raise GuardError("Worker final dispositions must match exhausted findings")
+    for item in normalized:
+        if not isinstance(item, Mapping) or set(item) != {"finding", "disposition", "evidence"}:
+            raise ValidationError("each final disposition must bind finding, disposition, and evidence")
+        if item.get("disposition") not in {"FIXED", "REJECTED"} or not isinstance(item.get("evidence"), str) or not item.get("evidence"):
+            raise ValidationError("final dispositions must be FIXED or REJECTED with evidence")
+    exhaustion["worker_dispositions_count"] = len(normalized)
+    exhaustion["worker_dispositions_digest"] = digest_json(normalized)
+    task["pr_ready"] = True
+    task["active_role"] = "worker"
+    transition_state(state, "ready")
+
 def record_worker_ready_to_merge(
     state: MutableMapping[str, Any],
     *,
@@ -2154,14 +2276,21 @@ def record_worker_ready_to_merge(
         raise GuardError("Worker worktree must be clean for merge-readiness")
     head = require_full_sha(head_sha, "Worker READY_TO_MERGE head")
     pass_identity = review.get("pass_identity")
-    if (
-        review.get("last_result") != "PASS"
-        or not isinstance(pass_identity, Mapping)
-        or pass_identity.get("stage") != "final"
-        or pass_identity.get("candidate_sha") != head
-        or task.get("candidate_sha") != head
-    ):
-        raise GuardError("Worker readiness requires an unchanged final Supervisor PASS")
+    exhaustion = review.get("exhaustion")
+    exhausted_final = (
+        isinstance(exhaustion, Mapping)
+        and exhaustion.get("outcome") == "REVIEW_BUDGET_EXHAUSTED"
+        and exhaustion.get("candidate_sha") == head
+        and exhaustion.get("worker_dispositions_count") == exhaustion.get("findings_count")
+    )
+    final_pass = (
+        review.get("last_result") == "PASS"
+        and isinstance(pass_identity, Mapping)
+        and pass_identity.get("stage") == "final"
+        and pass_identity.get("candidate_sha") == head
+    )
+    if task.get("candidate_sha") != head or not (final_pass or exhausted_final):
+        raise GuardError("Worker readiness requires an unchanged final Supervisor PASS or exhausted review budget")
     task["worker_ready_to_merge"] = True
     task["active_role"] = None
     transition_state(state, "pre-merge")
@@ -2475,8 +2604,17 @@ def verify_premerge_gates(state: Mapping[str, Any], live: Mapping[str, Any]) -> 
     if activation.get("allowed_operations", {}).get("merge_commit_after_all_gates") is not True:
         errors.append("merge operation was not authorized")
     pass_identity = review.get("pass_identity")
+    exhaustion = review.get("exhaustion")
+    exhausted_final = (
+        isinstance(exhaustion, Mapping)
+        and exhaustion.get("outcome") == "REVIEW_BUDGET_EXHAUSTED"
+        and exhaustion.get("candidate_sha") == task.get("candidate_sha")
+        and exhaustion.get("round") == activation.get("review_policy_snapshot", {}).get("max_supervisor_cycles")
+        and exhaustion.get("worker_dispositions_count") == exhaustion.get("findings_count")
+    )
     if review.get("last_result") != "PASS" or not isinstance(pass_identity, Mapping):
-        errors.append("latest fresh Supervisor result is not PASS")
+        if not exhausted_final:
+            errors.append("latest fresh Supervisor result is not PASS and review budget was not exhausted with Worker finalization")
     candidate = task.get("candidate_sha")
     if live.get("head_sha") != candidate:
         errors.append("PR head differs from the active candidate")
@@ -2500,7 +2638,7 @@ def verify_premerge_gates(state: Mapping[str, Any], live: Mapping[str, Any]) -> 
         errors.append("merge method must be merge")
     if state.get("maintenance", {}).get("requested"):
         errors.append("maintenance is pending")
-    if not isinstance(pass_identity, Mapping) or pass_identity.get("stage") != "final":
+    if not exhausted_final and (not isinstance(pass_identity, Mapping) or pass_identity.get("stage") != "final"):
         errors.append("latest Supervisor PASS is not the fresh post-ready review")
     return errors
 
@@ -2959,7 +3097,7 @@ def _migrate_state_document(
             {
                 "schema": 4,
                 "protocol": PROTOCOL_VERSION,
-                "review_contract": REVIEW_CONTRACT_VERSION,
+                "review_contract": "3",
                 "policy": "3",
             }
         )
@@ -3001,8 +3139,8 @@ def _migrate_state_document(
             {
                 "schema": 5,
                 "protocol": PROTOCOL_VERSION,
-                "review_contract": REVIEW_CONTRACT_VERSION,
-                "policy": POLICY_VERSION,
+                "review_contract": "3",
+                "policy": "4",
             }
         )
         result["activation"]["scope_digest"] = compute_scope_digest(
@@ -3017,7 +3155,7 @@ def _migrate_state_document(
             role_model_snapshot=legacy_snapshot,
             role_model_snapshot_digest=activation["role_model_snapshot_digest"],
             protocol_version=PROTOCOL_VERSION,
-            policy_version=POLICY_VERSION,
+            policy_version="4",
         )
         maintenance = result.get("maintenance", {})
         if result.get("phase") == "paused-maintenance":
@@ -3037,6 +3175,48 @@ def _migrate_state_document(
                 "migrated_at": utc_now(),
             }
         current = 5
+
+    if current == 5 and target_version >= 6:
+        activation = result.get("activation")
+        if not isinstance(activation, MutableMapping):
+            raise MigrationError("schema-5 activation identity is missing")
+        legacy_unbounded = {"max_supervisor_cycles": 64}
+        activation.setdefault("review_policy_snapshot", legacy_unbounded)
+        activation.setdefault("review_policy_snapshot_digest", digest_json(legacy_unbounded))
+        review = result.setdefault("review", {})
+        if isinstance(review, MutableMapping):
+            review.setdefault("exhaustion", None)
+        versions.update(
+            {
+                "schema": 6,
+                "protocol": PROTOCOL_VERSION,
+                "review_contract": REVIEW_CONTRACT_VERSION,
+                "policy": POLICY_VERSION,
+            }
+        )
+        maintenance = result.get("maintenance")
+        if result.get("phase") == "paused-maintenance" and isinstance(maintenance, MutableMapping):
+            maintenance["stored_versions"] = copy.deepcopy(dict(versions))
+            receipt = maintenance.get("migration_receipt")
+            if isinstance(receipt, MutableMapping):
+                receipt["to_schema"] = 6
+        activation["scope_digest"] = compute_scope_digest(
+            activation["repository"],
+            activation.get("base_branch"),
+            activation.get("umbrella_issues", []),
+            activation.get("allowed_operations", {}),
+            result["skill"]["content_digest"],
+            owner_actor=activation.get("owner_actor", {}),
+            capability_preflight=activation.get("capability_preflight", {}),
+            orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
+            role_model_snapshot=activation.get("role_model_snapshot", {}),
+            role_model_snapshot_digest=activation.get("role_model_snapshot_digest"),
+            review_policy_snapshot=activation.get("review_policy_snapshot"),
+            review_policy_snapshot_digest=activation.get("review_policy_snapshot_digest"),
+            policy_version=POLICY_VERSION,
+        )
+        current = 6
+
     if current != target_version:
         raise MigrationError(f"no supported migration from schema {current} to {target_version}")
     return result
@@ -4896,6 +5076,7 @@ def compact_scope(
             "archived_supervisor_count": 0,
             "archived_supervisor_digest": "0" * 64,
             "last_supervisor_created_at": None,
+            "exhaustion": None,
         },
         "receipts": {},
         "github_mutations": {"pending": None, "receipts": {}},

@@ -49,7 +49,7 @@ Stop before creating a worktree, child task, or schedule unless all checks pass:
 1. Resolve one Git root, Git common directory, canonical origin owner/name, repository ID when available, and base branch.
 2. Fetch exactly `origin/<base>` and require a clean orchestration checkout with `HEAD == <base> == origin/<base>` by full SHA.
 3. Inspect all current-repository worktrees. Block on dirty, unmerged, uniquely owned, ambiguous, or conflicting work; never modify another checkout to satisfy preflight.
-4. From one exact reviewed installation root, validate `assets/role-models.json` and compute the installed Roundlet digest. Use its validated `defaults` only to create and read back the Orchestrator; `new_state` then repeats the stable-root check and binds those defaults as the immutable activation snapshot. Do not reread configuration for an active role.
+4. From one exact reviewed installation root, validate `assets/roundlet-config.json` and compute the installed Roundlet digest. Use its validated `defaults` only to create and read back the Orchestrator; `new_state` then repeats the stable-root check and binds those defaults as the immutable activation snapshot. Do not reread configuration for an active role.
 5. Verify GitHub connector reads and each authorized mutation against this repository only.
 6. Verify unattended Git fetch/push, guarded cleanup, thread management, schedule update, merge-with-expected-head, and issue-close capabilities.
 7. Require service evidence that per-task model, reasoning, parent/fork identity, project, permission profile, filesystem write, connector, `gh`, web, and network capabilities are observable and enforceable. Block activation if Worker or Supervisor isolation cannot be proven.

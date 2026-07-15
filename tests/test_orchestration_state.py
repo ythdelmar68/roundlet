@@ -77,7 +77,7 @@ def identity(*, base: str = "main", digest_root: str = "/repo/.git") -> rs.Repos
 
 
 def role_receipt(role, thread_id, *, created_at="2026-07-14T00:00:00Z", parent="orchestrator-1"):
-    model_profile = rs.load_role_model_config(SKILL_ROOT)["defaults"][role]
+    model_profile = rs.load_role_model_config(SKILL_ROOT)["defaults"]["roles"][role]
     profiles = {
         "orchestrator": (True, True, "workspace-write"),
         "worker": (True, False, "worktree-write"),
@@ -123,7 +123,7 @@ def downgrade_to_policy3(value):
         receipt.update(rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]["supervisor"])
     activation.pop("role_model_snapshot", None)
     activation.pop("role_model_snapshot_digest", None)
-    value["versions"].update({"schema": 4, "policy": "3"})
+    value["versions"].update({"schema": 4, "review_contract": "3", "policy": "3"})
     refresh_policy3_scope(value)
 
 
@@ -1147,12 +1147,76 @@ class StateMachineTests(unittest.TestCase):
         with self.assertRaises(rs.ValidationError):
             begin_review(value, "supervisor-1")
 
+    def test_review_budget_exhaustion_requires_worker_finalization(self):
+        value = assigned_state()
+        value["activation"]["review_policy_snapshot"] = {"max_supervisor_cycles": 1}
+        value["activation"]["review_policy_snapshot_digest"] = rs.digest_json(value["activation"]["review_policy_snapshot"])
+        value["activation"]["scope_digest"] = rs.compute_scope_digest(
+            value["activation"]["repository"],
+            value["activation"]["base_branch"],
+            value["activation"]["umbrella_issues"],
+            value["activation"]["allowed_operations"],
+            value["skill"]["content_digest"],
+            owner_actor=value["activation"]["owner_actor"],
+            capability_preflight=value["activation"]["capability_preflight"],
+            orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
+            role_model_snapshot=value["activation"]["role_model_snapshot"],
+            role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
+            review_policy_snapshot=value["activation"]["review_policy_snapshot"],
+            review_policy_snapshot_digest=value["activation"]["review_policy_snapshot_digest"],
+        )
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
+        value["phase"] = "draft-pr"
+        begin_review(value, "supervisor-budget")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-budget",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fix this"],
+        )
+        self.assertEqual(value["phase"], "final-worker-repair")
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+        value["task"]["active_role"] = None
+        value["phase"] = "worker-repair"
+        with self.assertRaises(rs.GuardError):
+            begin_review(value, "supervisor-too-many")
+        value["phase"] = "final-worker-repair"
+        value["task"]["active_role"] = "worker"
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_B,
+            clean=True,
+            dispositions=[{"finding": "fix this", "disposition": "FIXED", "evidence": "test"}],
+        )
+        self.assertEqual(value["phase"], "ready")
+        rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_B, clean=True)
+        self.assertEqual(value["phase"], "pre-merge")
+
     def test_review_history_stays_bounded_across_two_hundred_fresh_rounds(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
         value["task"]["pr_number"] = 22
         value["phase"] = "draft-pr"
-        for review_round in range(1, 201):
+        value["activation"]["review_policy_snapshot"] = {"max_supervisor_cycles": 64}
+        value["activation"]["review_policy_snapshot_digest"] = rs.digest_json(value["activation"]["review_policy_snapshot"])
+        value["activation"]["scope_digest"] = rs.compute_scope_digest(
+            value["activation"]["repository"],
+            value["activation"]["base_branch"],
+            value["activation"]["umbrella_issues"],
+            value["activation"]["allowed_operations"],
+            value["skill"]["content_digest"],
+            owner_actor=value["activation"]["owner_actor"],
+            capability_preflight=value["activation"]["capability_preflight"],
+            orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
+            role_model_snapshot=value["activation"]["role_model_snapshot"],
+            role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
+            review_policy_snapshot=value["activation"]["review_policy_snapshot"],
+            review_policy_snapshot_digest=value["activation"]["review_policy_snapshot_digest"],
+        )
+        for review_round in range(1, 65):
             thread_id = f"supervisor-{review_round}"
             begin_review(value, thread_id)
             rs.accept_supervisor_result(
@@ -1160,12 +1224,13 @@ class StateMachineTests(unittest.TestCase):
                 thread_id=thread_id,
                 candidate_sha=SHA_B,
                 result="FINDINGS",
+                non_blocking_items=[f"finding-{review_round}"],
             )
             rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
             rs.set_candidate(value, SHA_B, clean=True)
         rs.validate_state(value)
-        self.assertEqual(value["review"]["round"], 200)
-        self.assertEqual(value["review"]["archived_supervisor_count"], 200)
+        self.assertEqual(value["review"]["round"], 64)
+        self.assertEqual(value["review"]["archived_supervisor_count"], 64)
         self.assertLessEqual(len(value["review"]["supervisor_thread_ids"]), 64)
         self.assertEqual(value["review"]["unarchived_supervisor_thread_ids"], [])
         self.assertLess(len(rs.canonical_json(value).encode("utf-8")), rs.MAX_STATE_BYTES)
@@ -1738,9 +1803,9 @@ class MaintenanceTests(unittest.TestCase):
 
             def mutate_after_load(skill_root):
                 loaded = original_loader(skill_root)
-                path = Path(skill_root) / "assets" / "role-models.json"
+                path = Path(skill_root) / "assets" / "roundlet-config.json"
                 config = json.loads(path.read_text())
-                config["defaults"]["worker"]["reasoning_effort"] = "low"
+                config["defaults"]["roles"]["worker"]["reasoning_effort"] = "low"
                 path.write_text(json.dumps(config))
                 return loaded
 
@@ -1831,7 +1896,7 @@ class MaintenanceTests(unittest.TestCase):
             with self.subTest(with_task=with_task), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary) / "roundlet"
                 shutil.copytree(SKILL_ROOT, root)
-                path = root / "assets" / "role-models.json"
+                path = root / "assets" / "roundlet-config.json"
                 config = json.loads(path.read_text())
                 config["legacy_profiles"]["policy_3"]["worker"]["reasoning_effort"] = "low"
                 path.write_text(json.dumps(config))
@@ -2950,36 +3015,56 @@ class RoleModelConfigTests(unittest.TestCase):
     def test_config_rejects_missing_unknown_or_invalid_role_values(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = self.copy_skill(temporary)
-            path = root / "assets" / "role-models.json"
+            path = root / "assets" / "roundlet-config.json"
             path.unlink()
             with self.assertRaisesRegex(rs.ValidationError, "missing"):
                 rs.load_role_model_config(root)
         for mutation in (
             lambda value: value.update({"unknown": True}),
-            lambda value: value["defaults"].pop("worker"),
-            lambda value: value["defaults"]["worker"].update({"model": "bad model"}),
-            lambda value: value["defaults"]["worker"].update({"reasoning_effort": "soft"}),
-            lambda value: value.update({"schema_version": 2}),
+            lambda value: value["defaults"]["roles"].pop("worker"),
+            lambda value: value["defaults"]["roles"]["worker"].update({"model": "bad model"}),
+            lambda value: value["defaults"]["roles"]["worker"].update({"reasoning_effort": "soft"}),
+            lambda value: value.update({"schema_version": 1}),
             lambda value: value.update({"schema_version": True}),
             lambda value: value.update({"schema_version": 1.0}),
         ):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = self.copy_skill(temporary)
-                path = root / "assets" / "role-models.json"
+                path = root / "assets" / "roundlet-config.json"
                 value = json.loads(path.read_text())
                 mutation(value)
                 path.write_text(json.dumps(value))
                 with self.assertRaises(rs.ValidationError):
                     rs.load_role_model_config(root)
 
+
+    def test_config_rejects_invalid_review_policy_values(self):
+        for bad in (True, 0, -1, 1.5, 65):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as temporary:
+                root = self.copy_skill(temporary)
+                path = root / "assets" / "roundlet-config.json"
+                value = json.loads(path.read_text())
+                value["defaults"]["review"]["max_supervisor_cycles"] = bad
+                path.write_text(json.dumps(value))
+                with self.assertRaises(rs.ValidationError):
+                    rs.load_role_model_config(root)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.copy_skill(temporary)
+            path = root / "assets" / "roundlet-config.json"
+            value = json.loads(path.read_text())
+            value["defaults"]["review"]["extra"] = 5
+            path.write_text(json.dumps(value))
+            with self.assertRaises(rs.ValidationError):
+                rs.load_role_model_config(root)
+
     def test_config_rejects_duplicate_keys_and_invalid_utf8(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = self.copy_skill(temporary)
-            path = root / "assets" / "role-models.json"
-            path.write_text('{"schema_version":2,"schema_version":1,"defaults":{},"legacy_profiles":{}}')
+            path = root / "assets" / "roundlet-config.json"
+            path.write_text('{"schema_version":1,"schema_version":1,"defaults":{},"legacy_profiles":{}}}')
             with self.assertRaisesRegex(rs.ValidationError, "duplicate"):
                 rs.load_role_model_config(root)
-            path.write_text('{"schema_version":1,"defaults":{"worker":{"model":"x","model":"y","reasoning_effort":"high"}},"legacy_profiles":{}}')
+            path.write_text('{"schema_version":2,"defaults":{"roles":{"worker":{"model":"x","model":"y","reasoning_effort":"high"}},"legacy_profiles":{}}}')
             with self.assertRaisesRegex(rs.ValidationError, "duplicate"):
                 rs.load_role_model_config(root)
             path.write_bytes(b"\xff")
@@ -3016,9 +3101,9 @@ class RoleModelConfigTests(unittest.TestCase):
 
             def mutate_after_load(skill_root):
                 loaded = original_loader(skill_root)
-                path = Path(skill_root) / "assets" / "role-models.json"
+                path = Path(skill_root) / "assets" / "roundlet-config.json"
                 value = json.loads(path.read_text())
-                value["defaults"]["worker"]["reasoning_effort"] = "low"
+                value["defaults"]["roles"]["worker"]["reasoning_effort"] = "low"
                 path.write_text(json.dumps(value))
                 return loaded
 
@@ -3053,9 +3138,9 @@ class RoleModelConfigTests(unittest.TestCase):
                 orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"), skill_root=root,
             )
             before = copy.deepcopy(value["activation"]["role_model_snapshot"])
-            path = root / "assets" / "role-models.json"
+            path = root / "assets" / "roundlet-config.json"
             config = json.loads(path.read_text())
-            config["defaults"]["worker"]["reasoning_effort"] = "low"
+            config["defaults"]["roles"]["worker"]["reasoning_effort"] = "low"
             path.write_text(json.dumps(config))
             rs.validate_state(value)
             self.assertEqual(value["activation"]["role_model_snapshot"], before)
@@ -3622,7 +3707,7 @@ class StaticSkillTests(unittest.TestCase):
             "SKILL.md",
             "agents/openai.yaml",
             "assets/roundlet.rules",
-            "assets/role-models.json",
+            "assets/roundlet-config.json",
             "references/operator-guide.md",
             "references/thread-prompts.md",
             "scripts/orchestration_state.py",
@@ -3644,7 +3729,7 @@ class StaticSkillTests(unittest.TestCase):
                 not path.is_file()
                 or "__pycache__" in path.parts
                 or path.suffix in {".pyc", ".pyo"}
-                or path == SKILL_ROOT / "assets" / "role-models.json"
+                or path == SKILL_ROOT / "assets" / "roundlet-config.json"
             ):
                 continue
             with self.subTest(path=path):
