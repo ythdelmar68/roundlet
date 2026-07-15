@@ -1179,8 +1179,9 @@ class StateMachineTests(unittest.TestCase):
         set_review_budget(value, 1)
         rs.set_candidate(value, SHA_B, clean=True)
         value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
-        value["phase"] = "draft-pr"
-        begin_review(value, "supervisor-budget")
+        value["task"]["pr_ready"] = True
+        value["phase"] = "ready"
+        begin_review(value, "supervisor-budget", final=True)
         rs.accept_supervisor_result(
             value,
             thread_id="supervisor-budget",
@@ -1210,8 +1211,8 @@ class StateMachineTests(unittest.TestCase):
         )
         rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
         value["task"]["active_role"] = None
-        value["phase"] = "worker-repair"
-        with self.assertRaises(rs.GuardError):
+        value["phase"] = "draft-pr"
+        with self.assertRaises((rs.GuardError, rs.TransitionError)):
             begin_review(value, "supervisor-too-many")
         value["phase"] = "final-worker-repair"
         value["task"]["active_role"] = "worker"
@@ -1226,9 +1227,8 @@ class StateMachineTests(unittest.TestCase):
         self.assertEqual(value["review"]["exhaustion"]["reviewed_candidate_sha"], SHA_B)
         self.assertEqual(value["review"]["exhaustion"]["final_candidate_sha"], SHA_C)
         self.assertEqual(value["task"]["candidate_sha"], SHA_C)
-        self.assertEqual(value["phase"], "draft-pr")
-        record_ready(value)
         self.assertEqual(value["phase"], "ready")
+        rs.begin_worker_merge_readiness(value)
         rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_C, clean=True)
         self.assertEqual(value["phase"], "pre-merge")
         self.assertEqual(rs.verify_premerge_gates(value, premerge_live(value)), [])
@@ -1254,13 +1254,53 @@ class StateMachineTests(unittest.TestCase):
             )
         self.assertEqual(calls, [])
 
+    def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["phase"] = "draft-pr"
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            creations = []
+            with self.assertRaises(rs.ValidationError):
+                rs.create_supervisor_after_preflight(
+                    value,
+                    final=False,
+                    state_store=store,
+                    create_task=lambda intent: creations.append(intent) or {},
+                )
+            durable = store.load()
+            self.assertIsNotNone(durable["review"]["supervisor_creation_intent"])
+            self.assertEqual(len(creations), 1)
+            rs.create_supervisor_after_preflight(
+                value,
+                final=False,
+                state_store=store,
+                create_task=lambda intent: self.fail("must reconcile instead of creating twice"),
+                reconcile_task=lambda intent: {
+                    "thread_id": "supervisor-reconciled",
+                    "creation_receipt": {
+                        "activation_id": intent["activation_id"],
+                        "issue": intent["issue"],
+                        "generation": intent["generation"],
+                        "created": True,
+                        "service_receipt": role_receipt(
+                            "supervisor", "supervisor-reconciled", created_at="2026-07-14T00:00:00.000001Z"
+                        ),
+                    },
+                },
+            )
+            self.assertEqual(len(creations), 1)
+            self.assertEqual(store.load()["review"]["round"], 1)
+
     def test_exhausted_findings_require_exact_identity_and_archival(self):
         value = assigned_state()
         set_review_budget(value, 1)
         rs.set_candidate(value, SHA_B, clean=True)
         value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
-        value["phase"] = "draft-pr"
-        begin_review(value, "supervisor-budget")
+        value["task"]["pr_ready"] = True
+        value["phase"] = "ready"
+        begin_review(value, "supervisor-budget", final=True)
         rs.accept_supervisor_result(
             value,
             thread_id="supervisor-budget",
@@ -1347,12 +1387,13 @@ class StateMachineTests(unittest.TestCase):
         rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_C, clean=True)
         self.assertEqual(value["phase"], "pre-merge")
 
-    def test_last_round_initial_pass_becomes_terminal_after_ready_readback(self):
+    def test_max_one_reserves_a_real_final_supervisor_after_ready_readback(self):
         value = assigned_state()
         set_review_budget(value, 1)
         rs.set_candidate(value, SHA_B, clean=True)
         record_draft(value)
-        begin_review(value, "supervisor-only")
+        record_ready(value)
+        begin_review(value, "supervisor-only", final=True)
         rs.accept_supervisor_result(
             value,
             thread_id="supervisor-only",
@@ -1360,14 +1401,12 @@ class StateMachineTests(unittest.TestCase):
             result="PASS",
         )
         rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-only")
-        rs.set_candidate(value, SHA_B, clean=True)
-        record_ready(value)
         self.assertEqual(value["review"]["pass_identity"]["stage"], "final")
         self.assertEqual(value["task"]["active_role"], "worker")
         rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_B, clean=True)
         self.assertEqual(value["phase"], "pre-merge")
 
-    def test_default_budget_draft_pass_on_round_five_is_not_stranded(self):
+    def test_default_budget_reserves_round_five_for_a_real_final_review(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
         record_draft(value)
@@ -1383,7 +1422,8 @@ class StateMachineTests(unittest.TestCase):
             )
             rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
             rs.set_candidate(value, SHA_B, clean=True)
-        begin_review(value, "supervisor-5")
+        record_ready(value)
+        begin_review(value, "supervisor-5", final=True)
         rs.accept_supervisor_result(
             value,
             thread_id="supervisor-5",
@@ -1391,8 +1431,6 @@ class StateMachineTests(unittest.TestCase):
             result="PASS",
         )
         rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-5")
-        rs.set_candidate(value, SHA_B, clean=True)
-        record_ready(value)
         self.assertEqual(value["review"]["pass_identity"]["stage"], "final")
         rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_B, clean=True)
         self.assertEqual(value["phase"], "pre-merge")
@@ -1402,24 +1440,12 @@ class StateMachineTests(unittest.TestCase):
         rs.set_candidate(value, SHA_B, clean=True)
         value["task"]["pr_number"] = 22
         value["phase"] = "draft-pr"
-        value["activation"]["review_policy_snapshot"] = {"max_supervisor_cycles": 64}
-        value["activation"]["review_policy_snapshot_digest"] = rs.digest_json(value["activation"]["review_policy_snapshot"])
-        value["activation"]["legacy_unbounded_review"] = True
-        value["activation"]["scope_digest"] = rs.compute_scope_digest(
-            value["activation"]["repository"],
-            value["activation"]["base_branch"],
-            value["activation"]["umbrella_issues"],
-            value["activation"]["allowed_operations"],
-            value["skill"]["content_digest"],
-            owner_actor=value["activation"]["owner_actor"],
-            capability_preflight=value["activation"]["capability_preflight"],
-            orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
-            role_model_snapshot=value["activation"]["role_model_snapshot"],
-            role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
-            review_policy_snapshot=value["activation"]["review_policy_snapshot"],
-            review_policy_snapshot_digest=value["activation"]["review_policy_snapshot_digest"],
-            legacy_unbounded_review=value["activation"]["legacy_unbounded_review"],
-        )
+        value["versions"].update({"schema": 5, "protocol": "3", "review_contract": "3", "policy": "4"})
+        for key in ("review_policy_snapshot", "review_policy_snapshot_digest", "legacy_unbounded_review", "legacy_review_migration"):
+            value["activation"].pop(key, None)
+        value["review"].pop("exhaustion")
+        value["review"].pop("supervisor_creation_intent")
+        value = rs._migrate_state_document(value)
         for review_round in range(1, 201):
             thread_id = f"supervisor-{review_round}"
             begin_review(value, thread_id)
@@ -1438,6 +1464,12 @@ class StateMachineTests(unittest.TestCase):
         self.assertLessEqual(len(value["review"]["supervisor_thread_ids"]), 64)
         self.assertEqual(value["review"]["unarchived_supervisor_thread_ids"], [])
         self.assertLess(len(rs.canonical_json(value).encode("utf-8")), rs.MAX_STATE_BYTES)
+
+    def test_fresh_activation_cannot_select_legacy_unbounded_review(self):
+        value = assigned_state()
+        set_review_budget(value, 64, legacy_unbounded=True)
+        with self.assertRaisesRegex(rs.ScopeError, "migration provenance"):
+            rs.validate_state(value)
 
     def test_supervisor_creation_time_orders_whole_then_fractional_second(self):
         value = assigned_state()
@@ -1589,8 +1621,9 @@ class MaintenanceTests(unittest.TestCase):
         set_review_budget(value, 1)
         rs.set_candidate(value, SHA_B, clean=True)
         value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
-        value["phase"] = "draft-pr"
-        begin_review(value, "supervisor-budget")
+        value["task"]["pr_ready"] = True
+        value["phase"] = "ready"
+        begin_review(value, "supervisor-budget", final=True)
         rs.accept_supervisor_result(
             value,
             thread_id="supervisor-budget",
@@ -1603,7 +1636,7 @@ class MaintenanceTests(unittest.TestCase):
         rs.drain_worker_for_maintenance(
             value,
             worker_thread_id="worker-11",
-            candidate_sha=SHA_B,
+            candidate_sha=SHA_C,
             clean=True,
         )
         rs.create_maintenance_checkpoint(
@@ -1622,7 +1655,56 @@ class MaintenanceTests(unittest.TestCase):
         )
         self.assertEqual(value["phase"], "final-worker-repair")
         self.assertEqual(value["task"]["active_role"], "worker")
+        self.assertEqual(value["task"]["candidate_sha"], SHA_B)
+        self.assertEqual(value["review"]["exhaustion"]["provisional_candidate_sha"], SHA_C)
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_C,
+            clean=True,
+            tests_passed=True,
+            dispositions=[{"finding": "fix this", "disposition": "FIXED", "evidence": "test"}],
+        )
+        self.assertEqual(value["review"]["exhaustion"]["final_candidate_sha"], SHA_C)
         rs.validate_state(value)
+
+    def test_material_maintenance_cannot_preserve_exhausted_terminal_authority(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22", "pr_ready": True})
+        value["phase"] = "ready"
+        begin_review(value, "supervisor-budget", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-budget",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fix this"],
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+        rs.request_maintenance(value, "upgrade")
+        rs.drain_worker_for_maintenance(value, worker_thread_id="worker-11", candidate_sha=None, clean=True)
+        rs.create_maintenance_checkpoint(
+            value, checkpoint_id="checkpoint-001", schedule_id="schedule-1", schedule_state="paused"
+        )
+        for digest, versions in (
+            ("e" * 64, value["versions"]),
+            (value["skill"]["content_digest"], {**value["versions"], "review_contract": "999"}),
+        ):
+            paused = copy.deepcopy(value)
+            with self.subTest(digest=digest, versions=versions):
+                with self.assertRaisesRegex(rs.GuardError, "invalidates review-budget exhaustion"):
+                    rs.resume_maintenance(
+                        paused,
+                        checkpoint_id="checkpoint-001",
+                        installed_roundlet_digest=digest,
+                        current_versions=versions,
+                        repository_identity=identity(),
+                        schedule_id="schedule-1",
+                    )
+                self.assertEqual(paused["phase"], "paused-maintenance")
+                self.assertIsNotNone(paused["review"]["exhaustion"])
 
     def test_current_state_rejects_legacy_unbound_scope_digest(self):
         value = state()
@@ -1922,8 +2004,13 @@ class MaintenanceTests(unittest.TestCase):
                         "last_supervisor_created_at": "2026-07-14T00:00:00.000001Z",
                     }
                 )
+                schema5_digest = rs.digest_json(old)
                 migrated = rs._migrate_state_document(old)
                 self.assertTrue(migrated["activation"]["legacy_unbounded_review"])
+                self.assertEqual(
+                    migrated["activation"]["legacy_review_migration"],
+                    {"from_schema": 5, "input_digest": schema5_digest},
+                )
                 rs.validate_state(migrated)
                 migrated["phase"] = "draft-pr"
                 self.assertEqual(
@@ -3259,10 +3346,9 @@ class PersistenceAndMailboxTests(unittest.TestCase):
 
 class CompactionTests(unittest.TestCase):
     def test_task_compaction_is_bounded(self):
-        value = assigned_state()
+        value = premerge_state()
         value["phase"] = "task-done"
         value["task"]["merge_sha"] = SHA_C
-        value["review"]["round"] = 4
         rs.compact_completed_task(
             value,
             issue_url="https://github.com/owner/project/issues/11",
@@ -3271,8 +3357,49 @@ class CompactionTests(unittest.TestCase):
             completed_at="2026-07-14T03:00:00Z",
         )
         self.assertIsNone(value["task"])
-        self.assertEqual(value["completed_tasks"][0]["review_rounds"], 4)
+        self.assertEqual(value["completed_tasks"][0]["review_rounds"], 2)
+        self.assertEqual(value["completed_tasks"][0]["terminal_review"]["outcome"], "FINAL_SUPERVISOR_PASS")
+        self.assertEqual(value["completed_tasks"][0]["terminal_review"]["round"], 2)
         self.assertNotIn("changed_files", value["completed_tasks"][0])
+
+    def test_task_compaction_retains_exhausted_worker_finalized_outcome(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22", "pr_ready": True})
+        value["phase"] = "ready"
+        begin_review(value, "supervisor-budget", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-budget",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fix this"],
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_C,
+            clean=True,
+            tests_passed=True,
+            dispositions=[{"finding": "fix this", "disposition": "FIXED", "evidence": "test"}],
+        )
+        rs.begin_worker_merge_readiness(value)
+        rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_C, clean=True)
+        value["phase"] = "task-done"
+        value["task"]["merge_sha"] = SHA_D
+        rs.compact_completed_task(
+            value,
+            issue_url="https://github.com/owner/project/issues/11",
+            pr_url="https://github.com/owner/project/pull/22",
+            merge_sha=SHA_D,
+            completed_at="2026-07-14T03:00:00Z",
+        )
+        terminal = value["completed_tasks"][0]["terminal_review"]
+        self.assertEqual(terminal["outcome"], "REVIEW_BUDGET_EXHAUSTED_WORKER_FINALIZED")
+        self.assertEqual(terminal["reviewed_candidate_sha"], SHA_B)
+        self.assertEqual(terminal["candidate_sha"], SHA_C)
 
     def test_scope_compaction_writes_one_summary(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -3716,8 +3843,9 @@ class GuardTests(unittest.TestCase):
             set_review_budget(value, 1)
             rs.set_candidate(value, SHA_B, clean=True)
             value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
-            value["phase"] = "draft-pr"
-            begin_review(value, "supervisor-budget")
+            value["task"]["pr_ready"] = True
+            value["phase"] = "ready"
+            begin_review(value, "supervisor-budget", final=True)
             rs.accept_supervisor_result(
                 value,
                 thread_id="supervisor-budget",
