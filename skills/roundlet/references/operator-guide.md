@@ -69,7 +69,7 @@ python3 <installed-roundlet>/scripts/orchestration_state.py role-config \
   --skill-root <installed-roundlet>
 ```
 
-`defaults` supplies model and reasoning effort for the next activation only. At activation, Roundlet validates the complete installed digest, copies those values into the durable role-model snapshot, and binds the snapshot digest into scope. Do not edit the file during an activation to change an existing Orchestrator, Worker, or Supervisor: active receipts continue to be checked against the stored snapshot. The `legacy_profiles` section is migration-only and must never be selected for a new activation.
+`defaults.roles` supplies model and reasoning effort, and `defaults.review.max_supervisor_cycles` supplies the total Supervisor budget, for the next activation only. At activation, Roundlet validates the complete installed digest, copies both snapshots into durable scope, and never rereads this file for an active role. Do not edit the file during an activation to change an existing Orchestrator, Worker, Supervisor, or review budget. The `legacy_profiles` section is migration-only and must never be selected for a new activation.
 
 ## Prepare one target repository
 
@@ -250,6 +250,7 @@ Do not attach the heartbeat until one bounded manual path proves:
 - curated comment and draft PR connector mutations in an owner-approved smoke target;
 - fresh read-only Supervisor with the activation snapshot values and archive;
 - FINDINGS repair or PASS follow-up using the same Worker;
+- budget preflight before the Supervisor callback, plus the final-worker-repair exhaustion path with exact finding dispositions and ready read-back;
 - ready transition, fresh final review, expected-head merge gate without necessarily merging a production change;
 - maintenance pause, durable checkpoint, one-signal resume, and existing schedule reactivation behavior;
 - mailbox interruption recovery and no duplicate mutations;
@@ -278,14 +279,16 @@ Scheduled local work requires the machine to remain powered on, the desktop app 
 Expect this lifecycle:
 
 ```text
-select -> Worker -> draft PR -> fresh Supervisor
-  FINDINGS -> same Worker repair -> fresh Supervisor (repeat)
+select -> Worker -> draft PR -> preflight -> fresh Supervisor
+  FINDINGS before budget -> same Worker repair -> preflight -> fresh Supervisor
+  FINDINGS at budget -> archive -> final Worker handoff -> mark ready/read-back -> READY_TO_MERGE
   PASS -> same Worker disposition -> ready -> fresh final Supervisor
-  final PASS + READY_TO_MERGE + live gates
+  last permitted initial PASS -> ready/read-back -> terminal exact PASS
+  final PASS or finalized budget exhaustion + live gates
   -> merge commit -> exact issue close -> proven cleanup -> sync -> select
 ```
 
-Every candidate change invalidates PASS. Every Supervisor uses a new task. Immediately read every Worker/Supervisor back from the task service and durably bind the exact returned model/reasoning/project/parent/fork/permission/tool/network/task ID and UTC creation time; this is external capability evidence, not a value the Orchestrator may invent. Archive and record each Supervisor immediately after consuming its result, before creating the next one. A bounded recent-ID/creation-receipt ledger and rolling archive digest retain freshness evidence without imposing a review-round limit. Before creating any Worker branch, worktree, or task, verify `create_task_branches` both at the external callback boundary and in durable assignment. After draft PR creation or recovery, connector read-back must prove the exact PR is open/still draft and bind base/head repository names and IDs, base branch/SHA, head ref/SHA. The Worker task persists until merge/cleanup. The root Orchestrator alone mediates connector reads and writes.
+Every candidate change invalidates PASS. Every Supervisor uses a new task. Before that task exists, run deterministic budget preflight; it must block a creation callback at the configured limit. Immediately read every Worker/Supervisor back from the task service and durably bind the exact returned model/reasoning/project/parent/fork/permission/tool/network/task ID and UTC creation time; this is external capability evidence, not a value the Orchestrator may invent. Archive and record each Supervisor immediately after consuming its result, before creating another or accepting final-worker repair. A bounded recent-ID/creation-receipt ledger and rolling archive digest retain freshness evidence. At budget exhaustion, retain reviewed and final candidate identities separately, require an exact ordered finding/disposition digest match, and do not claim the PR ready without the authorized gateway and exact live read-back. Before creating any Worker branch, worktree, or task, verify `create_task_branches` both at the external callback boundary and in durable assignment. After draft PR creation or recovery, connector read-back must prove the exact PR is open/still draft and bind base/head repository names and IDs, base branch/SHA, head ref/SHA. The Worker task persists until merge/cleanup. The root Orchestrator alone mediates connector reads and writes.
 
 Use curated GitHub comments. Keep raw child prompts, raw transcripts, hidden reasoning, credentials, local paths, checkpoint internals, and internal ranking chains local and bounded.
 

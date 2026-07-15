@@ -375,8 +375,8 @@ def select_from_connector(value, snapshots, manifest):
     return rs.select_next_task(value, sealed)
 
 
-def assigned_state(*, umbrellas=None):
-    value = state(umbrellas=umbrellas)
+def assigned_state(*, umbrellas=None, digest=DIGEST):
+    value = state(umbrellas=umbrellas, digest=digest)
     set_selection(value, umbrella=(umbrellas or [10])[0])
     rs.assign_task(
         value,
@@ -565,6 +565,33 @@ def set_operation(value, operation, enabled):
         orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
         role_model_snapshot=value["activation"]["role_model_snapshot"],
         role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
+        review_policy_snapshot=value["activation"]["review_policy_snapshot"],
+        review_policy_snapshot_digest=value["activation"]["review_policy_snapshot_digest"],
+        legacy_unbounded_review=value["activation"]["legacy_unbounded_review"],
+    )
+
+
+def set_review_budget(value, maximum, *, legacy_unbounded=False):
+    activation = value["activation"]
+    activation["review_policy_snapshot"] = {"max_supervisor_cycles": maximum}
+    activation["review_policy_snapshot_digest"] = rs.digest_json(
+        activation["review_policy_snapshot"]
+    )
+    activation["legacy_unbounded_review"] = legacy_unbounded
+    activation["scope_digest"] = rs.compute_scope_digest(
+        activation["repository"],
+        activation["base_branch"],
+        activation["umbrella_issues"],
+        activation["allowed_operations"],
+        value["skill"]["content_digest"],
+        owner_actor=activation["owner_actor"],
+        capability_preflight=activation["capability_preflight"],
+        orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+        role_model_snapshot=activation["role_model_snapshot"],
+        role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+        review_policy_snapshot=activation["review_policy_snapshot"],
+        review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+        legacy_unbounded_review=activation["legacy_unbounded_review"],
     )
 
 
@@ -1149,22 +1176,7 @@ class StateMachineTests(unittest.TestCase):
 
     def test_review_budget_exhaustion_requires_worker_finalization(self):
         value = assigned_state()
-        value["activation"]["review_policy_snapshot"] = {"max_supervisor_cycles": 1}
-        value["activation"]["review_policy_snapshot_digest"] = rs.digest_json(value["activation"]["review_policy_snapshot"])
-        value["activation"]["scope_digest"] = rs.compute_scope_digest(
-            value["activation"]["repository"],
-            value["activation"]["base_branch"],
-            value["activation"]["umbrella_issues"],
-            value["activation"]["allowed_operations"],
-            value["skill"]["content_digest"],
-            owner_actor=value["activation"]["owner_actor"],
-            capability_preflight=value["activation"]["capability_preflight"],
-            orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
-            role_model_snapshot=value["activation"]["role_model_snapshot"],
-            role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
-            review_policy_snapshot=value["activation"]["review_policy_snapshot"],
-            review_policy_snapshot_digest=value["activation"]["review_policy_snapshot_digest"],
-        )
+        set_review_budget(value, 1)
         rs.set_candidate(value, SHA_B, clean=True)
         value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
         value["phase"] = "draft-pr"
@@ -1177,6 +1189,25 @@ class StateMachineTests(unittest.TestCase):
             non_blocking_items=["fix this"],
         )
         self.assertEqual(value["phase"], "final-worker-repair")
+        rs.validate_mailbox_envelope(
+            {
+                "protocol_version": value["versions"]["protocol"],
+                "review_contract_version": value["versions"]["review_contract"],
+                "activation_id": value["activation"]["id"],
+                "repository": "owner/project",
+                "repository_id": 123,
+                "selected_issue": 11,
+                "source_role": "worker",
+                "source_thread_id": "worker-11",
+                "phase": "final-worker-repair",
+                "base_sha": SHA_A,
+                "candidate_sha": SHA_C,
+                "idempotency_key": "final-worker-0001",
+                "timestamp": "2026-07-14T00:00:01Z",
+            },
+            value,
+            "worker-handoff",
+        )
         rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
         value["task"]["active_role"] = None
         value["phase"] = "worker-repair"
@@ -1187,11 +1218,182 @@ class StateMachineTests(unittest.TestCase):
         rs.record_worker_final_dispositions(
             value,
             worker_thread_id="worker-11",
-            head_sha=SHA_B,
+            head_sha=SHA_C,
             clean=True,
+            tests_passed=True,
             dispositions=[{"finding": "fix this", "disposition": "FIXED", "evidence": "test"}],
         )
+        self.assertEqual(value["review"]["exhaustion"]["reviewed_candidate_sha"], SHA_B)
+        self.assertEqual(value["review"]["exhaustion"]["final_candidate_sha"], SHA_C)
+        self.assertEqual(value["task"]["candidate_sha"], SHA_C)
+        self.assertEqual(value["phase"], "draft-pr")
+        record_ready(value)
         self.assertEqual(value["phase"], "ready")
+        rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_C, clean=True)
+        self.assertEqual(value["phase"], "pre-merge")
+        self.assertEqual(rs.verify_premerge_gates(value, premerge_live(value)), [])
+
+    def test_supervisor_budget_preflight_blocks_creation_callback(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["phase"] = "draft-pr"
+        value["review"].update(
+            {
+                "round": 1,
+                "archived_supervisor_count": 1,
+                "last_supervisor_created_at": "2026-07-14T00:00:00.000001Z",
+            }
+        )
+        calls = []
+        with self.assertRaises(rs.GuardError):
+            rs.create_supervisor_after_preflight(
+                value,
+                final=False,
+                create_task=lambda preflight: calls.append(preflight) or {},
+            )
+        self.assertEqual(calls, [])
+
+    def test_exhausted_findings_require_exact_identity_and_archival(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
+        value["phase"] = "draft-pr"
+        begin_review(value, "supervisor-budget")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-budget",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["real finding"],
+        )
+        with self.assertRaisesRegex(rs.GuardError, "archived"):
+            rs.record_worker_final_dispositions(
+                value,
+                worker_thread_id="worker-11",
+                head_sha=SHA_C,
+                clean=True,
+                tests_passed=True,
+                dispositions=[{"finding": "real finding", "disposition": "FIXED", "evidence": "test"}],
+            )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+        with self.assertRaisesRegex(rs.GuardError, "tests"):
+            rs.record_worker_final_dispositions(
+                value,
+                worker_thread_id="worker-11",
+                head_sha=SHA_C,
+                clean=True,
+                tests_passed=False,
+                dispositions=[{"finding": "real finding", "disposition": "FIXED", "evidence": "test"}],
+            )
+        with self.assertRaisesRegex(rs.GuardError, "bind each exhausted finding"):
+            rs.record_worker_final_dispositions(
+                value,
+                worker_thread_id="worker-11",
+                head_sha=SHA_C,
+                clean=True,
+                tests_passed=True,
+                dispositions=[{"finding": "different arbitrary finding", "disposition": "FIXED", "evidence": "test"}],
+            )
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_C,
+            clean=True,
+            tests_passed=True,
+            dispositions=[{"finding": "real finding", "disposition": "FIXED", "evidence": "test"}],
+        )
+        tampered = copy.deepcopy(value)
+        tampered["review"]["exhaustion"]["worker_findings_digest"] = "0" * 64
+        with self.assertRaisesRegex(rs.ValidationError, "finding identities"):
+            rs.validate_state(tampered)
+
+    def test_ready_stage_exhaustion_accepts_repaired_head(self):
+        value = assigned_state()
+        set_review_budget(value, 2)
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        begin_review(value, "supervisor-initial")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-initial",
+            candidate_sha=SHA_B,
+            result="PASS",
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-initial")
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_ready(value)
+        begin_review(value, "supervisor-final", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-final",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["ready-stage finding"],
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-final")
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_C,
+            clean=True,
+            tests_passed=True,
+            dispositions=[{"finding": "ready-stage finding", "disposition": "FIXED", "evidence": "test"}],
+        )
+        self.assertEqual(value["phase"], "ready")
+        self.assertIsNone(value["task"]["active_role"])
+        rs.begin_worker_merge_readiness(value)
+        rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_C, clean=True)
+        self.assertEqual(value["phase"], "pre-merge")
+
+    def test_last_round_initial_pass_becomes_terminal_after_ready_readback(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        begin_review(value, "supervisor-only")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-only",
+            candidate_sha=SHA_B,
+            result="PASS",
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-only")
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_ready(value)
+        self.assertEqual(value["review"]["pass_identity"]["stage"], "final")
+        self.assertEqual(value["task"]["active_role"], "worker")
+        rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_B, clean=True)
+        self.assertEqual(value["phase"], "pre-merge")
+
+    def test_default_budget_draft_pass_on_round_five_is_not_stranded(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for review_round in range(1, 5):
+            thread_id = f"supervisor-{review_round}"
+            begin_review(value, thread_id)
+            rs.accept_supervisor_result(
+                value,
+                thread_id=thread_id,
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=[f"finding-{review_round}"],
+            )
+            rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
+            rs.set_candidate(value, SHA_B, clean=True)
+        begin_review(value, "supervisor-5")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-5",
+            candidate_sha=SHA_B,
+            result="PASS",
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-5")
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_ready(value)
+        self.assertEqual(value["review"]["pass_identity"]["stage"], "final")
         rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_B, clean=True)
         self.assertEqual(value["phase"], "pre-merge")
 
@@ -1202,6 +1404,7 @@ class StateMachineTests(unittest.TestCase):
         value["phase"] = "draft-pr"
         value["activation"]["review_policy_snapshot"] = {"max_supervisor_cycles": 64}
         value["activation"]["review_policy_snapshot_digest"] = rs.digest_json(value["activation"]["review_policy_snapshot"])
+        value["activation"]["legacy_unbounded_review"] = True
         value["activation"]["scope_digest"] = rs.compute_scope_digest(
             value["activation"]["repository"],
             value["activation"]["base_branch"],
@@ -1215,8 +1418,9 @@ class StateMachineTests(unittest.TestCase):
             role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
             review_policy_snapshot=value["activation"]["review_policy_snapshot"],
             review_policy_snapshot_digest=value["activation"]["review_policy_snapshot_digest"],
+            legacy_unbounded_review=value["activation"]["legacy_unbounded_review"],
         )
-        for review_round in range(1, 65):
+        for review_round in range(1, 201):
             thread_id = f"supervisor-{review_round}"
             begin_review(value, thread_id)
             rs.accept_supervisor_result(
@@ -1229,8 +1433,8 @@ class StateMachineTests(unittest.TestCase):
             rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
             rs.set_candidate(value, SHA_B, clean=True)
         rs.validate_state(value)
-        self.assertEqual(value["review"]["round"], 64)
-        self.assertEqual(value["review"]["archived_supervisor_count"], 64)
+        self.assertEqual(value["review"]["round"], 200)
+        self.assertEqual(value["review"]["archived_supervisor_count"], 200)
         self.assertLessEqual(len(value["review"]["supervisor_thread_ids"]), 64)
         self.assertEqual(value["review"]["unarchived_supervisor_thread_ids"], [])
         self.assertLess(len(rs.canonical_json(value).encode("utf-8")), rs.MAX_STATE_BYTES)
@@ -1379,6 +1583,64 @@ class MaintenanceTests(unittest.TestCase):
         )
         self.assertEqual(value["phase"], "worker-running")
         self.assertEqual(value["task"]["active_role"], "worker")
+
+    def test_final_worker_repair_maintenance_round_trip_preserves_policy_scope(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
+        value["phase"] = "draft-pr"
+        begin_review(value, "supervisor-budget")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-budget",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fix this"],
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+        rs.request_maintenance(value, "upgrade")
+        rs.drain_worker_for_maintenance(
+            value,
+            worker_thread_id="worker-11",
+            candidate_sha=SHA_B,
+            clean=True,
+        )
+        rs.create_maintenance_checkpoint(
+            value,
+            checkpoint_id="checkpoint-001",
+            schedule_id="schedule-1",
+            schedule_state="paused",
+        )
+        rs.resume_maintenance(
+            value,
+            checkpoint_id="checkpoint-001",
+            installed_roundlet_digest=value["skill"]["content_digest"],
+            current_versions=value["versions"],
+            repository_identity=identity(),
+            schedule_id="schedule-1",
+        )
+        self.assertEqual(value["phase"], "final-worker-repair")
+        self.assertEqual(value["task"]["active_role"], "worker")
+        rs.validate_state(value)
+
+    def test_current_state_rejects_legacy_unbound_scope_digest(self):
+        value = state()
+        activation = value["activation"]
+        activation["scope_digest"] = rs.compute_scope_digest(
+            activation["repository"],
+            activation["base_branch"],
+            activation["umbrella_issues"],
+            activation["allowed_operations"],
+            value["skill"]["content_digest"],
+            owner_actor=activation["owner_actor"],
+            capability_preflight=activation["capability_preflight"],
+            orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+            role_model_snapshot=activation["role_model_snapshot"],
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+        )
+        with self.assertRaisesRegex(rs.ScopeError, "scope digest"):
+            rs.validate_state(value)
 
     def test_invalidated_follow_up_resumes_at_fresh_review_boundary(self):
         value = assigned_state()
@@ -1641,6 +1903,33 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(migrated["versions"]["schema"], rs.SCHEMA_VERSION)
         self.assertEqual(migrated["completed_tasks"], [])
         self.assertEqual(migrated["skill"]["source_repository"], "ythdelmar68/roundlet")
+
+    def test_schema_five_migration_preserves_round_64_and_higher_as_unbounded(self):
+        for review_round in (64, 65, 200):
+            with self.subTest(review_round=review_round):
+                old = assigned_state()
+                rs.set_candidate(old, SHA_B, clean=True)
+                old["versions"].update(
+                    {"schema": 5, "protocol": "3", "review_contract": "3", "policy": "4"}
+                )
+                old["activation"].pop("review_policy_snapshot")
+                old["activation"].pop("review_policy_snapshot_digest")
+                old["activation"].pop("legacy_unbounded_review")
+                old["review"].update(
+                    {
+                        "round": review_round,
+                        "archived_supervisor_count": review_round,
+                        "last_supervisor_created_at": "2026-07-14T00:00:00.000001Z",
+                    }
+                )
+                migrated = rs._migrate_state_document(old)
+                self.assertTrue(migrated["activation"]["legacy_unbounded_review"])
+                rs.validate_state(migrated)
+                migrated["phase"] = "draft-pr"
+                self.assertEqual(
+                    rs.preflight_supervisor_creation(migrated)["generation"],
+                    review_round + 1,
+                )
 
     def test_schema_migration_rejects_unverifiable_legacy_review_history(self):
         old = state()
@@ -3358,6 +3647,9 @@ class GuardTests(unittest.TestCase):
             orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
             role_model_snapshot=value["activation"]["role_model_snapshot"],
             role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
+            review_policy_snapshot=value["activation"]["review_policy_snapshot"],
+            review_policy_snapshot_digest=value["activation"]["review_policy_snapshot_digest"],
+            legacy_unbounded_review=value["activation"]["legacy_unbounded_review"],
         )
         record_merge(value)
         record_close(value)
@@ -3416,6 +3708,47 @@ class GuardTests(unittest.TestCase):
             commands = [call[0] for call in runner.calls]
             self.assertIn(["git", "push", "origin", "codex/issue-11"], commands)
             self.assertFalse(any("--force" in command for command in commands))
+
+    def test_guarded_push_accepts_completed_final_repair_candidate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            digest = rs.skill_content_digest(SKILL_ROOT)
+            value = assigned_state(digest=digest)
+            set_review_budget(value, 1)
+            rs.set_candidate(value, SHA_B, clean=True)
+            value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
+            value["phase"] = "draft-pr"
+            begin_review(value, "supervisor-budget")
+            rs.accept_supervisor_result(
+                value,
+                thread_id="supervisor-budget",
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=["fix this"],
+            )
+            rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+            rs.record_worker_final_dispositions(
+                value,
+                worker_thread_id="worker-11",
+                head_sha=SHA_C,
+                clean=True,
+                tests_passed=True,
+                dispositions=[{"finding": "fix this", "disposition": "FIXED", "evidence": "test"}],
+            )
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            runner = ScriptedRunner(candidate=SHA_C)
+            guard = rs.GuardedGit(
+                store,
+                activation_id="activation-0001",
+                installed_digest=digest,
+                skill_root=SKILL_ROOT,
+                runner=runner,
+            )
+            guard.push_task_branch()
+            self.assertIn(
+                (["git", "push", "origin", "codex/issue-11"], "/repo-worktrees/issue-11"),
+                runner.calls,
+            )
 
     def test_guarded_push_rejects_cross_repository_worktree_before_push(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -3546,6 +3879,9 @@ class GuardTests(unittest.TestCase):
                 orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
                 role_model_snapshot=value["activation"]["role_model_snapshot"],
                 role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
+                review_policy_snapshot=value["activation"]["review_policy_snapshot"],
+                review_policy_snapshot_digest=value["activation"]["review_policy_snapshot_digest"],
+                legacy_unbounded_review=value["activation"]["legacy_unbounded_review"],
             )
             record_merge(value)
             record_close(value)
