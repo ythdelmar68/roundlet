@@ -49,7 +49,7 @@ Stop before creating a worktree, child task, or schedule unless all checks pass:
 1. Resolve one Git root, Git common directory, canonical origin owner/name, repository ID when available, and base branch.
 2. Fetch exactly `origin/<base>` and require a clean orchestration checkout with `HEAD == <base> == origin/<base>` by full SHA.
 3. Inspect all current-repository worktrees. Block on dirty, unmerged, uniquely owned, ambiguous, or conflicting work; never modify another checkout to satisfy preflight.
-4. Verify the exact installed Roundlet digest and trusted current-repository policy. Read and validate `assets/role-models.json`, then bind its `defaults` as the immutable activation role-model snapshot; do not reread it for an active role.
+4. From one exact reviewed installation root, validate `assets/role-models.json` and compute the installed Roundlet digest. Use its validated `defaults` only to create and read back the Orchestrator; `new_state` then repeats the stable-root check and binds those defaults as the immutable activation snapshot. Do not reread configuration for an active role.
 5. Verify GitHub connector reads and each authorized mutation against this repository only.
 6. Verify unattended Git fetch/push, guarded cleanup, thread management, schedule update, merge-with-expected-head, and issue-close capabilities.
 7. Require service evidence that per-task model, reasoning, parent/fork identity, project, permission profile, filesystem write, connector, `gh`, web, and network capabilities are observable and enforceable. Block activation if Worker or Supervisor isolation cannot be proven.
@@ -60,7 +60,7 @@ Prefer the narrowest working sandbox and reviewed rules. Treat `approval_policy 
 
 ## Activate bounded state
 
-Normalize the activation with `normalize_activation_request`, resolve identity with `resolve_repository_identity`, and initialize `state.json` with `new_state(..., skill_root=<exact-reviewed-installed-roundlet>)` plus `StateStore.initialize`. Supply the connector-verified owner actor, capability preflight (including enforceable connector-read adapter receipts), and service-returned Orchestrator creation receipt. Obtain the validated defaults, activation snapshot, and exact installed digest from that same stable installed root; create the Orchestrator with its bound snapshot values.
+Normalize the activation with `normalize_activation_request` and resolve identity with `resolve_repository_identity`. From `<exact-reviewed-installed-roundlet>`, run `role-config` and `skill-digest`, then create and read back the Orchestrator using the validated default model and reasoning effort. Next call `new_state(..., skill_root=<exact-reviewed-installed-roundlet>, installed_roundlet_digest=..., orchestrator_creation_receipt=...)`, which repeats stable-root validation and creates the activation snapshot; initialize `state.json` with `StateStore.initialize`. Supply the connector-verified owner actor and capability preflight (including enforceable connector-read adapter receipts).
 
 Keep only:
 

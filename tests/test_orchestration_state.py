@@ -1785,6 +1785,87 @@ class MaintenanceTests(unittest.TestCase):
             "1abf4ccb59ac1e523fdc625e2d926f2271aa3a5a1dd5d7dc94d3820a9f79b4e7",
         )
 
+    def test_policy3_durable_migration_rebinds_new_digest_and_can_resume(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "roundlet"
+            shutil.copytree(SKILL_ROOT, root)
+            (root / "references" / "operator-guide.md").write_text(
+                (root / "references" / "operator-guide.md").read_text() + "\nUpdated review evidence.\n"
+            )
+            new_digest = rs.skill_content_digest(root)
+            self.assertNotEqual(new_digest, DIGEST)
+
+            value = self._paused()
+            value["skill"]["content_digest"] = "a" * 64
+            value["maintenance"]["installed_digest"] = "a" * 64
+            downgrade_to_policy3(value)
+            value["maintenance"]["stored_versions"] = copy.deepcopy(value["versions"])
+            store = rs.StateStore(temporary)
+            rs.atomic_write_json(store.path, value)
+
+            migrated = store.migrate(
+                activation_id="activation-0001", checkpoint_id="checkpoint-001", schedule_id="schedule-1",
+                expected_installed_digest=new_digest, expected_from_schema=4, target_version=rs.SCHEMA_VERSION,
+                skill_root=root,
+            )
+            self.assertEqual(migrated["skill"]["content_digest"], new_digest)
+            self.assertEqual(migrated["maintenance"]["installed_digest"], new_digest)
+            self.assertEqual(
+                migrated["maintenance"]["migration_receipt"]["original_installed_digest"], "a" * 64
+            )
+            self.assertEqual(
+                migrated["maintenance"]["migration_receipt"]["migrated_installed_digest"], new_digest
+            )
+            rs.resume_maintenance(
+                migrated,
+                checkpoint_id="checkpoint-001",
+                installed_roundlet_digest=new_digest,
+                current_versions=migrated["versions"],
+                repository_identity=identity(),
+                schedule_id="schedule-1",
+            )
+            self.assertEqual(migrated["phase"], "worker-running")
+
+    def test_policy3_migration_rejects_unpinned_legacy_profile_without_or_with_mixed_receipts(self):
+        for with_task in (False, True):
+            with self.subTest(with_task=with_task), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary) / "roundlet"
+                shutil.copytree(SKILL_ROOT, root)
+                path = root / "assets" / "role-models.json"
+                config = json.loads(path.read_text())
+                config["legacy_profiles"]["policy_3"]["worker"]["reasoning_effort"] = "low"
+                path.write_text(json.dumps(config))
+                new_digest = rs.skill_content_digest(root)
+
+                if with_task:
+                    value = self._paused()
+                    value["review"]["supervisor_creation_receipts"] = [
+                        policy3_role_receipt("supervisor", "supervisor-1")
+                    ]
+                else:
+                    value = state()
+                    rs.request_maintenance(value, "upgrade")
+                    rs.create_maintenance_checkpoint(
+                        value,
+                        checkpoint_id="checkpoint-001",
+                        schedule_id="schedule-1",
+                        schedule_state="paused",
+                    )
+                    self.assertIsNone(value["task"])
+                downgrade_to_policy3(value)
+                value["maintenance"]["stored_versions"] = copy.deepcopy(value["versions"])
+                store = rs.StateStore(temporary)
+                rs.atomic_write_json(store.path, value)
+                before = store.path.read_bytes()
+
+                with self.assertRaisesRegex(rs.MigrationError, "unrecognized policy-3 legacy profile"):
+                    store.migrate(
+                        activation_id="activation-0001", checkpoint_id="checkpoint-001", schedule_id="schedule-1",
+                        expected_installed_digest=new_digest, expected_from_schema=4, target_version=rs.SCHEMA_VERSION,
+                        skill_root=root,
+                    )
+                self.assertEqual(store.path.read_bytes(), before)
+
     def test_unknown_migration_fails(self):
         value = state()
         value["versions"]["schema"] = 99

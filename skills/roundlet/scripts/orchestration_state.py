@@ -80,6 +80,9 @@ ROLE_MODEL_CONFIG_NAME = "role-models.json"
 ROLE_MODEL_CONFIG_RELATIVE_PATH = Path("assets") / ROLE_MODEL_CONFIG_NAME
 REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
 MODEL_ID = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
+# Canonical digest of the immutable policy-3 role profile.  Pinning the digest
+# keeps migration compatible without carrying duplicate model literals in code.
+POLICY3_ROLE_MODEL_SNAPSHOT_DIGEST = "be1680d41063b90e22fef16e5a207fa6aea59004624be5e5bfb08d8de07c77bf"
 
 SCHEMA_VERSION = 5
 PROTOCOL_VERSION = "3"
@@ -2978,6 +2981,8 @@ def _migrate_state_document(
             legacy_snapshot = _validate_role_model_snapshot(config["legacy_profiles"]["policy_3"])
         except (KeyError, RoundletError, TypeError) as exc:
             raise MigrationError("role-model configuration lacks the policy-3 legacy profile") from exc
+        if role_model_snapshot_digest(legacy_snapshot) != POLICY3_ROLE_MODEL_SNAPSHOT_DIGEST:
+            raise MigrationError("role-model configuration has an unrecognized policy-3 legacy profile")
         activation = result.get("activation")
         if not isinstance(activation, MutableMapping):
             raise MigrationError("schema-4 activation identity is missing")
@@ -2987,6 +2992,9 @@ def _migrate_state_document(
         validate_legacy_policy3_state(result, legacy_snapshot)
         activation["role_model_snapshot"] = legacy_snapshot
         activation["role_model_snapshot_digest"] = digest_json(legacy_snapshot)
+        original_installed_digest = require_content_digest(
+            result["skill"].get("content_digest"), "schema-4 installed digest"
+        )
         if installed_roundlet_digest is not None:
             result["skill"]["content_digest"] = require_content_digest(installed_roundlet_digest)
         versions.update(
@@ -3015,12 +3023,17 @@ def _migrate_state_document(
         if result.get("phase") == "paused-maintenance":
             if maintenance.get("stored_versions") != schema4_versions:
                 raise MigrationError("paused checkpoint versions do not match schema-4 input")
+            # The checkpoint becomes bound to the reviewed target installation;
+            # retain its prior binding in the receipt for migration evidence.
+            maintenance["installed_digest"] = result["skill"]["content_digest"]
             maintenance["migrated_from_versions"] = original_versions
             maintenance["stored_versions"] = copy.deepcopy(dict(versions))
             maintenance["migration_receipt"] = {
                 "from_schema": original_versions.get("schema"),
                 "to_schema": 5,
                 "input_digest": digest_json(document),
+                "original_installed_digest": original_installed_digest,
+                "migrated_installed_digest": result["skill"]["content_digest"],
                 "migrated_at": utc_now(),
             }
         current = 5

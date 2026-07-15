@@ -58,7 +58,7 @@ python3 <installed-roundlet>/scripts/orchestration_state.py skill-digest \
   --skill-root <installed-roundlet>
 ```
 
-For a new activation, call `new_state(..., skill_root=<installed-roundlet>)` with the exact reviewed installation root. It obtains the validated configuration/defaults and installed digest from one stable root observation, creates the Orchestrator from those defaults, and binds them as the activation snapshot. Do not load the configuration and digest from separate paths or observations. The guarded CLI later compares this digest to both the activation and installed files.
+For a new activation, use this exact order with one reviewed `<installed-roundlet>` root: run `role-config` and `skill-digest`; create and read back the Orchestrator using the validated default model and reasoning effort; then call `new_state(..., skill_root=<installed-roundlet>, installed_roundlet_digest=..., orchestrator_creation_receipt=...)`. `new_state` repeats the stable-root validation and binds the defaults as the activation snapshot; it does not create an Orchestrator. Do not load the configuration and digest from separate paths or observations. The guarded CLI later compares this digest to both the activation and installed files.
 
 ## Configure role models
 
