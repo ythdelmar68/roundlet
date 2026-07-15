@@ -48,18 +48,14 @@ GITHUB_OPERATION_FLAGS = {
 }
 MAX_GITHUB_MUTATION_RECEIPTS = 32
 
-ROLE_CAPABILITY_PROFILES = {
+ROLE_ISOLATION_PROFILES = {
     "orchestrator": {
-        "model": "gpt-5.6-sol",
-        "reasoning_effort": "xhigh",
         "environment_type": "local",
         "forked": False,
         "filesystem_write": True,
         "github_connector": True,
     },
     "worker": {
-        "model": "gpt-5.5",
-        "reasoning_effort": "xhigh",
         "environment_type": "worktree",
         "forked": False,
         "filesystem_write": True,
@@ -69,8 +65,6 @@ ROLE_CAPABILITY_PROFILES = {
         "gh_access": False,
     },
     "supervisor": {
-        "model": "gpt-5.6-sol",
-        "reasoning_effort": "xhigh",
         "environment_type": "local",
         "forked": False,
         "filesystem_write": False,
@@ -81,10 +75,16 @@ ROLE_CAPABILITY_PROFILES = {
     },
 }
 
-SCHEMA_VERSION = 4
+ROLE_NAMES = frozenset(ROLE_ISOLATION_PROFILES)
+ROLE_MODEL_CONFIG_NAME = "role-models.json"
+ROLE_MODEL_CONFIG_RELATIVE_PATH = Path("assets") / ROLE_MODEL_CONFIG_NAME
+REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
+MODEL_ID = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
+
+SCHEMA_VERSION = 5
 PROTOCOL_VERSION = "3"
 REVIEW_CONTRACT_VERSION = "3"
-POLICY_VERSION = "3"
+POLICY_VERSION = "4"
 VERSION_KEYS = {"schema", "protocol", "review_contract", "policy"}
 LOCAL_CLEANUP_KEYS = {
     "worktree_removed",
@@ -255,6 +255,59 @@ def digest_json(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
 
 
+def _validate_role_model_snapshot(snapshot: Mapping[str, Any]) -> dict[str, dict[str, str]]:
+    """Validate the only configurable portion of a role profile."""
+    if not isinstance(snapshot, Mapping) or set(snapshot) != ROLE_NAMES:
+        raise ValidationError("role model snapshot must contain exactly the three Roundlet roles")
+    normalized: dict[str, dict[str, str]] = {}
+    for role in sorted(ROLE_NAMES):
+        profile = snapshot.get(role)
+        if not isinstance(profile, Mapping) or set(profile) != {"model", "reasoning_effort"}:
+            raise ValidationError(f"{role} model profile must contain exactly model and reasoning_effort")
+        model = profile.get("model")
+        effort = profile.get("reasoning_effort")
+        if not isinstance(model, str) or not MODEL_ID.fullmatch(model):
+            raise ValidationError(f"{role} model ID is malformed")
+        if not isinstance(effort, str) or effort not in REASONING_EFFORTS:
+            raise ValidationError(f"{role} reasoning effort is unsupported")
+        normalized[role] = {"model": model, "reasoning_effort": effort}
+    return normalized
+
+
+def load_role_model_config(skill_root: str | os.PathLike[str]) -> dict[str, Any]:
+    """Read the strict, dependency-free model configuration from one skill payload."""
+    path = Path(skill_root).resolve() / ROLE_MODEL_CONFIG_RELATIVE_PATH
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise ValidationError("Roundlet role-model configuration is missing") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValidationError("Roundlet role-model configuration is unreadable") from exc
+    if not isinstance(raw, Mapping) or set(raw) != {"schema_version", "defaults", "legacy_profiles"}:
+        raise ValidationError("role-model configuration has unknown or missing fields")
+    if raw.get("schema_version") != 1:
+        raise ValidationError("role-model configuration schema is unsupported")
+    defaults = _validate_role_model_snapshot(raw.get("defaults", {}))
+    legacy_raw = raw.get("legacy_profiles")
+    if not isinstance(legacy_raw, Mapping) or set(legacy_raw) != {"policy_3"}:
+        raise ValidationError("role-model configuration legacy profiles are unsupported")
+    legacy_profiles = {"policy_3": _validate_role_model_snapshot(legacy_raw["policy_3"])}
+    canonical = {
+        "schema_version": 1,
+        "defaults": defaults,
+        "legacy_profiles": legacy_profiles,
+    }
+    return {**canonical, "config_digest": digest_json(canonical)}
+
+
+def role_model_snapshot_digest(snapshot: Mapping[str, Any]) -> str:
+    return digest_json(_validate_role_model_snapshot(snapshot))
+
+
+def _packaged_role_models() -> dict[str, Any]:
+    return load_role_model_config(Path(__file__).resolve().parents[1])
+
+
 def fold_archive_digest(previous_digest: str, entries: Sequence[Mapping[str, Any]]) -> str:
     require_content_digest(previous_digest, "archive digest")
     return digest_json({"previous_digest": previous_digest, "entries": list(entries)})
@@ -317,11 +370,15 @@ def validate_role_creation_receipt(
     thread_id: str,
     project_identity: str,
     parent_thread_id: str | None,
+    role_model_snapshot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Require service-returned capability metadata; prompts are not capability proof."""
-    profile = ROLE_CAPABILITY_PROFILES.get(role)
-    if profile is None:
+    isolation_profile = ROLE_ISOLATION_PROFILES.get(role)
+    if isolation_profile is None:
         raise ValidationError("unknown Roundlet role capability profile")
+    snapshot = _validate_role_model_snapshot(
+        role_model_snapshot if role_model_snapshot is not None else _packaged_role_models()["defaults"]
+    )
     required_keys = {
         "verified_by_service",
         "role",
@@ -348,7 +405,7 @@ def validate_role_creation_receipt(
         raise ScopeError(f"{role} receipt is bound to another thread or project")
     if receipt.get("parent_thread_id") != parent_thread_id:
         raise ScopeError(f"{role} parent/fork identity is mismatched")
-    for key, expected in profile.items():
+    for key, expected in {**isolation_profile, **snapshot[role]}.items():
         if receipt.get(key) != expected:
             raise ScopeError(f"{role} capability {key} is not isolated as required")
     permission = receipt.get("permission_profile")
@@ -649,10 +706,15 @@ def compute_scope_digest(
     owner_actor: Mapping[str, Any],
     capability_preflight: Mapping[str, Any],
     orchestrator_creation_receipt: Mapping[str, Any],
+    role_model_snapshot: Mapping[str, Any],
+    role_model_snapshot_digest: str,
     protocol_version: str = PROTOCOL_VERSION,
     policy_version: str = POLICY_VERSION,
 ) -> str:
     require_content_digest(installed_roundlet_digest)
+    snapshot = _validate_role_model_snapshot(role_model_snapshot)
+    if role_model_snapshot_digest != digest_json(snapshot):
+        raise ScopeError("role model snapshot digest does not match the snapshot")
     normalized_repo = {
         "owner_name": normalize_owner_name(str(repository["owner_name"])),
         "repository_id": repository.get("repository_id"),
@@ -669,6 +731,7 @@ def compute_scope_digest(
         "owner_actor": validate_owner_actor(owner_actor),
         "capability_preflight": validate_capability_preflight(capability_preflight),
         "orchestrator_creation_receipt_digest": digest_json(orchestrator_creation_receipt),
+        "role_model_snapshot_digest": role_model_snapshot_digest,
         "installed_roundlet_digest": installed_roundlet_digest,
         "protocol_version": str(protocol_version),
         "policy_version": str(policy_version),
@@ -686,6 +749,7 @@ def new_state(
     owner_actor: Mapping[str, Any],
     capability_preflight: Mapping[str, Any],
     orchestrator_creation_receipt: Mapping[str, Any],
+    skill_root: str | os.PathLike[str] | None = None,
     now: str | None = None,
 ) -> dict[str, Any]:
     normalized = normalize_activation_request(request)
@@ -698,6 +762,11 @@ def new_state(
     if not isinstance(orchestrator_thread_id, str) or not orchestrator_thread_id.strip():
         raise ValidationError("orchestrator_thread_id is required")
     digest = require_content_digest(installed_roundlet_digest)
+    config = load_role_model_config(skill_root) if skill_root is not None else _packaged_role_models()
+    if skill_root is not None and skill_content_digest(skill_root) != digest:
+        raise GuardError("installed digest does not match the supplied Roundlet skill root")
+    role_snapshot = config["defaults"]
+    snapshot_digest = role_model_snapshot_digest(role_snapshot)
     timestamp = now or utc_now()
     normalized_owner = validate_owner_actor(owner_actor)
     normalized_preflight = validate_capability_preflight(capability_preflight)
@@ -707,6 +776,7 @@ def new_state(
         thread_id=orchestrator_thread_id,
         project_identity=identity.git_common_dir_fingerprint,
         parent_thread_id=None,
+        role_model_snapshot=role_snapshot,
     )
     repository = {
         **identity.scope_fields(),
@@ -722,6 +792,8 @@ def new_state(
         owner_actor=normalized_owner,
         capability_preflight=normalized_preflight,
         orchestrator_creation_receipt=orchestrator_receipt,
+        role_model_snapshot=role_snapshot,
+        role_model_snapshot_digest=snapshot_digest,
     )
     state = {
         "skill": {
@@ -741,6 +813,8 @@ def new_state(
             "orchestrator_creation_receipt": orchestrator_receipt,
             "owner_actor": normalized_owner,
             "capability_preflight": normalized_preflight,
+            "role_model_snapshot": role_snapshot,
+            "role_model_snapshot_digest": snapshot_digest,
             "repository": repository,
             "base_branch": identity.base_branch,
             "base_sha": identity.head_sha,
@@ -816,12 +890,17 @@ def validate_state(state: Mapping[str, Any]) -> None:
     normalize_owner_name(str(repository.get("owner_name", "")))
     owner_actor = validate_owner_actor(activation.get("owner_actor", {}))
     capability_preflight = validate_capability_preflight(activation.get("capability_preflight", {}))
+    role_snapshot = _validate_role_model_snapshot(activation.get("role_model_snapshot", {}))
+    snapshot_digest = activation.get("role_model_snapshot_digest")
+    if snapshot_digest != digest_json(role_snapshot):
+        raise ScopeError("activation role-model snapshot digest is mismatched")
     validate_role_creation_receipt(
         activation.get("orchestrator_creation_receipt", {}),
         role="orchestrator",
         thread_id=str(activation.get("orchestrator_thread_id", "")),
         project_identity=str(repository.get("git_common_dir_fingerprint", "")),
         parent_thread_id=None,
+        role_model_snapshot=role_snapshot,
     )
     digest = state.get("skill", {}).get("content_digest")
     require_content_digest(digest)
@@ -835,6 +914,8 @@ def validate_state(state: Mapping[str, Any]) -> None:
             owner_actor=owner_actor,
             capability_preflight=capability_preflight,
             orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
+            role_model_snapshot=role_snapshot,
+            role_model_snapshot_digest=str(snapshot_digest),
             protocol_version=str(versions.get("protocol")),
             policy_version=str(versions.get("policy")),
         )
@@ -877,6 +958,7 @@ def validate_state(state: Mapping[str, Any]) -> None:
             thread_id=str(task.get("worker_thread_id", "")),
             project_identity=str(repository.get("git_common_dir_fingerprint", "")),
             parent_thread_id=activation.get("orchestrator_thread_id"),
+            role_model_snapshot=role_snapshot,
         )
         if task.get("branch") is not None:
             branch = validate_branch_name(task["branch"])
@@ -912,6 +994,7 @@ def validate_state(state: Mapping[str, Any]) -> None:
             thread_id=str(receipt.get("thread_id", "")),
             project_identity=str(repository.get("git_common_dir_fingerprint", "")),
             parent_thread_id=activation.get("orchestrator_thread_id"),
+            role_model_snapshot=role_snapshot,
         )
         receipt_thread_ids.append(normalized["thread_id"])
     if receipt_thread_ids and receipt_thread_ids != thread_ids[-len(receipt_thread_ids) :]:
@@ -1322,6 +1405,7 @@ class StateStore:
         expected_installed_digest: str,
         expected_from_schema: int,
         target_version: int = SCHEMA_VERSION,
+        skill_root: str | os.PathLike[str] | None = None,
     ) -> dict[str, Any]:
         """Durably migrate only inside the exact reviewed paused-maintenance checkpoint."""
         with self.single_writer():
@@ -1337,8 +1421,10 @@ class StateStore:
             if maintenance.get("schedule_id") != schedule_id or maintenance.get("schedule_state") != "paused":
                 raise MigrationError("migration requires the exact paused schedule receipt")
             digest = require_content_digest(expected_installed_digest, "expected installed digest")
-            if original.get("skill", {}).get("content_digest") != digest or maintenance.get("installed_digest") != digest:
-                raise MigrationError("migration installed digest differs from the reviewed checkpoint")
+            if maintenance.get("installed_digest") != original.get("skill", {}).get("content_digest"):
+                raise MigrationError("migration checkpoint does not bind the original installed digest")
+            if skill_root is not None and skill_content_digest(skill_root) != digest:
+                raise MigrationError("migration skill root does not match the reviewed installed digest")
             if maintenance.get("stored_versions") != versions:
                 raise MigrationError("migration checkpoint versions differ from the stored document")
             if versions.get("schema") != expected_from_schema or target_version <= expected_from_schema:
@@ -1347,7 +1433,14 @@ class StateStore:
                 raise MigrationError("migration requires every mutation receipt to be reconciled")
             if original.get("github_mutations", {}).get("pending") is not None:
                 raise MigrationError("migration requires every GitHub mutation to be reconciled")
-            migrated = _migrate_state_document(original, target_version)
+            migrated = _migrate_state_document(
+                original,
+                target_version,
+                role_model_config=(
+                    load_role_model_config(skill_root) if skill_root is not None else _packaged_role_models()
+                ),
+                installed_roundlet_digest=digest,
+            )
             validate_state(migrated)
             atomic_write_json(self.path, migrated, max_bytes=MAX_STATE_BYTES)
             return migrated
@@ -1432,6 +1525,7 @@ def assign_task(
         thread_id=worker_thread_id,
         project_identity=state["activation"]["repository"]["git_common_dir_fingerprint"],
         parent_thread_id=state["activation"]["orchestrator_thread_id"],
+        role_model_snapshot=state["activation"]["role_model_snapshot"],
     )
     state["task"] = {
         "umbrella_issue": umbrella,
@@ -1532,6 +1626,7 @@ def begin_supervisor(
         thread_id=thread_id,
         project_identity=state["activation"]["repository"]["git_common_dir_fingerprint"],
         parent_thread_id=state["activation"]["orchestrator_thread_id"],
+        role_model_snapshot=state["activation"]["role_model_snapshot"],
     )
     created_at = service_receipt.get("created_at")
     created_time = parse_utc_timestamp(created_at, "Supervisor creation receipt timestamp")
@@ -2545,6 +2640,8 @@ def resume_maintenance(
             owner_actor=state["activation"]["owner_actor"],
             capability_preflight=state["activation"]["capability_preflight"],
             orchestrator_creation_receipt=state["activation"]["orchestrator_creation_receipt"],
+            role_model_snapshot=state["activation"]["role_model_snapshot"],
+            role_model_snapshot_digest=state["activation"]["role_model_snapshot_digest"],
             protocol_version=str(state["versions"]["protocol"]),
             policy_version=str(state["versions"]["policy"]),
         )
@@ -2584,7 +2681,13 @@ def resume_maintenance(
         raise
 
 
-def _migrate_state_document(document: Mapping[str, Any], target_version: int = SCHEMA_VERSION) -> dict[str, Any]:
+def _migrate_state_document(
+    document: Mapping[str, Any],
+    target_version: int = SCHEMA_VERSION,
+    *,
+    role_model_config: Mapping[str, Any] | None = None,
+    installed_roundlet_digest: str | None = None,
+) -> dict[str, Any]:
     if not isinstance(document, Mapping):
         raise MigrationError("state migration input must be an object")
     result = copy.deepcopy(dict(document))
@@ -2593,6 +2696,11 @@ def _migrate_state_document(document: Mapping[str, Any], target_version: int = S
         raise MigrationError("state versions are missing")
     current = versions.get("schema")
     original_versions = copy.deepcopy(dict(versions))
+    config = (
+        load_role_model_config(Path(__file__).resolve().parents[1])
+        if role_model_config is None
+        else dict(role_model_config)
+    )
     if current == target_version:
         return result
     if current == 1 and target_version >= 2:
@@ -2669,6 +2777,7 @@ def _migrate_state_document(document: Mapping[str, Any], target_version: int = S
                     activation.get("repository", {}).get("git_common_dir_fingerprint", "")
                 ),
                 parent_thread_id=None,
+                role_model_snapshot=config["legacy_profiles"]["policy_3"],
             )
         except RoundletError as exc:
             raise MigrationError(
@@ -2723,7 +2832,7 @@ def _migrate_state_document(document: Mapping[str, Any], target_version: int = S
                 "schema": 4,
                 "protocol": PROTOCOL_VERSION,
                 "review_contract": REVIEW_CONTRACT_VERSION,
-                "policy": POLICY_VERSION,
+                "policy": "3",
             }
         )
         if result.get("phase") == "paused-maintenance":
@@ -2736,6 +2845,90 @@ def _migrate_state_document(document: Mapping[str, Any], target_version: int = S
                 "migrated_at": utc_now(),
             }
         current = 4
+    if current == 4 and target_version >= 5:
+        schema4_versions = copy.deepcopy(dict(versions))
+        if versions.get("policy") != "3":
+            raise MigrationError("schema-4 state does not use the required policy-3 role profile")
+        try:
+            legacy_snapshot = _validate_role_model_snapshot(config["legacy_profiles"]["policy_3"])
+        except (KeyError, RoundletError, TypeError) as exc:
+            raise MigrationError("role-model configuration lacks the policy-3 legacy profile") from exc
+        activation = result.get("activation")
+        if not isinstance(activation, MutableMapping):
+            raise MigrationError("schema-4 activation identity is missing")
+        repository = activation.get("repository")
+        if not isinstance(repository, Mapping):
+            raise MigrationError("schema-4 repository identity is missing")
+        try:
+            validate_role_creation_receipt(
+                activation.get("orchestrator_creation_receipt", {}),
+                role="orchestrator",
+                thread_id=str(activation.get("orchestrator_thread_id", "")),
+                project_identity=str(repository.get("git_common_dir_fingerprint", "")),
+                parent_thread_id=None,
+                role_model_snapshot=legacy_snapshot,
+            )
+            task = result.get("task")
+            if isinstance(task, Mapping):
+                validate_role_creation_receipt(
+                    task.get("worker_creation_receipt", {}),
+                    role="worker",
+                    thread_id=str(task.get("worker_thread_id", "")),
+                    project_identity=str(repository.get("git_common_dir_fingerprint", "")),
+                    parent_thread_id=activation.get("orchestrator_thread_id"),
+                    role_model_snapshot=legacy_snapshot,
+                )
+            review = result.get("review", {})
+            for receipt in review.get("supervisor_creation_receipts", []):
+                validate_role_creation_receipt(
+                    receipt,
+                    role="supervisor",
+                    thread_id=str(receipt.get("thread_id", "")),
+                    project_identity=str(repository.get("git_common_dir_fingerprint", "")),
+                    parent_thread_id=activation.get("orchestrator_thread_id"),
+                    role_model_snapshot=legacy_snapshot,
+                )
+        except RoundletError as exc:
+            raise MigrationError("schema-4 role receipts do not match the policy-3 legacy profile") from exc
+        activation["role_model_snapshot"] = legacy_snapshot
+        activation["role_model_snapshot_digest"] = digest_json(legacy_snapshot)
+        if installed_roundlet_digest is not None:
+            result["skill"]["content_digest"] = require_content_digest(installed_roundlet_digest)
+        versions.update(
+            {
+                "schema": 5,
+                "protocol": PROTOCOL_VERSION,
+                "review_contract": REVIEW_CONTRACT_VERSION,
+                "policy": POLICY_VERSION,
+            }
+        )
+        result["activation"]["scope_digest"] = compute_scope_digest(
+            repository,
+            activation.get("base_branch"),
+            activation.get("umbrella_issues", []),
+            activation.get("allowed_operations", {}),
+            result["skill"]["content_digest"],
+            owner_actor=activation.get("owner_actor", {}),
+            capability_preflight=activation.get("capability_preflight", {}),
+            orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
+            role_model_snapshot=legacy_snapshot,
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+            protocol_version=PROTOCOL_VERSION,
+            policy_version=POLICY_VERSION,
+        )
+        maintenance = result.get("maintenance", {})
+        if result.get("phase") == "paused-maintenance":
+            if maintenance.get("stored_versions") != schema4_versions:
+                raise MigrationError("paused checkpoint versions do not match schema-4 input")
+            maintenance["migrated_from_versions"] = original_versions
+            maintenance["stored_versions"] = copy.deepcopy(dict(versions))
+            maintenance["migration_receipt"] = {
+                "from_schema": original_versions.get("schema"),
+                "to_schema": 5,
+                "input_digest": digest_json(document),
+                "migrated_at": utc_now(),
+            }
+        current = 5
     if current != target_version:
         raise MigrationError(f"no supported migration from schema {current} to {target_version}")
     return result
@@ -4993,9 +5186,13 @@ def build_parser() -> argparse.ArgumentParser:
     migrate.add_argument("--expected-installed-digest", required=True)
     migrate.add_argument("--expected-from-schema", required=True, type=int)
     migrate.add_argument("--target-schema", required=True, type=int)
+    migrate.add_argument("--skill-root", required=True)
 
     digest = sub.add_parser("skill-digest", help="Print the deterministic installed skill content digest")
     digest.add_argument("--skill-root", required=True)
+
+    role_config = sub.add_parser("role-config", help="Print validated Roundlet role-model configuration")
+    role_config.add_argument("--skill-root", required=True)
 
     for name in GUARDED_CLI_COMMANDS:
         guarded = sub.add_parser(name)
@@ -5025,7 +5222,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                 expected_installed_digest=args.expected_installed_digest,
                 expected_from_schema=args.expected_from_schema,
                 target_version=args.target_schema,
+                skill_root=args.skill_root,
             )
+        elif args.command == "role-config":
+            config = load_role_model_config(args.skill_root)
+            print(canonical_json(config))
+            return 0
         elif args.command == "skill-digest":
             print(skill_content_digest(args.skill_root))
             return 0

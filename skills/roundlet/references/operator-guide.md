@@ -60,6 +60,17 @@ python3 <installed-roundlet>/scripts/orchestration_state.py skill-digest \
 
 For a new activation, call `skill_content_digest(<installed-roundlet>)` before creating state. The guarded CLI later compares this digest to both the activation and installed files.
 
+## Configure role models
+
+The only supported role-model setting is `<installed-roundlet>/assets/role-models.json`. Validate it before activation:
+
+```text
+python3 <installed-roundlet>/scripts/orchestration_state.py role-config \
+  --skill-root <installed-roundlet>
+```
+
+`defaults` supplies model and reasoning effort for the next activation only. At activation, Roundlet validates the complete installed digest, copies those values into the durable role-model snapshot, and binds the snapshot digest into scope. Do not edit the file during an activation to change an existing Orchestrator, Worker, or Supervisor: active receipts continue to be checked against the stored snapshot. The `legacy_profiles` section is migration-only and must never be selected for a new activation.
+
 ## Prepare one target repository
 
 Open a dedicated Codex project/worktree for exactly one target repository. Do not pass a repository name to Roundlet.
@@ -186,7 +197,7 @@ Remote task-branch deletion remains a GitHub connector action; do not add a Git 
 
 ## Activate an umbrella scope
 
-Start from the dedicated Orchestrator task with model `gpt-5.6-sol` and reasoning `xhigh`. Use a title such as `Roundlet Orchestrator — owner/repository`.
+Start from the dedicated Orchestrator task with the Orchestrator model and reasoning effort from the validated activation snapshot. Use a title such as `Roundlet Orchestrator — owner/repository`.
 
 Invoke:
 
@@ -234,10 +245,10 @@ Do not attach the heartbeat until one bounded manual path proves:
 - exact repository/base synchronization;
 - connector issue/comment/sub-issue/PR/check reads;
 - deterministic membership/dependency selection;
-- Worker creation with `gpt-5.5` / `xhigh` and network denial;
+- Worker creation with the activation snapshot values and network denial;
 - fixed Worker handoff mailbox and guarded push;
 - curated comment and draft PR connector mutations in an owner-approved smoke target;
-- fresh `gpt-5.6-sol` / `xhigh` read-only Supervisor and archive;
+- fresh read-only Supervisor with the activation snapshot values and archive;
 - FINDINGS repair or PASS follow-up using the same Worker;
 - ready transition, fresh final review, expected-head merge gate without necessarily merging a production change;
 - maintenance pause, durable checkpoint, one-signal resume, and existing schedule reactivation behavior;
@@ -351,7 +362,7 @@ One explicit signal is sufficient. The Orchestrator must then:
 - resume the recorded durable phase;
 - reactivate the same schedule/cadence and restore its normal heartbeat prompt.
 
-For a schema change, invoke `migrate-state`/`StateStore.migrate` only with the exact activation ID, checkpoint ID, schedule ID, reviewed installed digest, expected old schema, and target schema. The persisted phase must be `paused-maintenance`, checkpoint versions/digest must match, schedule state must be `paused`, and all mailbox/connector intents must be reconciled. Any failure leaves the original bytes unchanged. The internal pure transformer is not permission to write a running activation.
+For a schema change, invoke `migrate-state` with the exact activation ID, checkpoint ID, schedule ID, reviewed installed digest, expected old schema, target schema, and `--skill-root <installed-roundlet>`. The command verifies that the supplied root has that digest before it reads the migration-only legacy profile. The persisted phase must be `paused-maintenance`, checkpoint versions/digest must match, schedule state must be `paused`, and all mailbox/connector intents must be reconciled. Any failure leaves the original bytes unchanged. The internal pure transformer is not permission to write a running activation.
 
 Expect:
 

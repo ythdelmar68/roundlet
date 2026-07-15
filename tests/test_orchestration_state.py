@@ -76,18 +76,19 @@ def identity(*, base: str = "main", digest_root: str = "/repo/.git") -> rs.Repos
 
 
 def role_receipt(role, thread_id, *, created_at="2026-07-14T00:00:00Z", parent="orchestrator-1"):
+    model_profile = rs.load_role_model_config(SKILL_ROOT)["defaults"][role]
     profiles = {
-        "orchestrator": ("gpt-5.6-sol", True, True, "workspace-write"),
-        "worker": ("gpt-5.5", True, False, "worktree-write"),
-        "supervisor": ("gpt-5.6-sol", False, False, "read-only"),
+        "orchestrator": (True, True, "workspace-write"),
+        "worker": (True, False, "worktree-write"),
+        "supervisor": (False, False, "read-only"),
     }
-    model, filesystem_write, github_connector, permission = profiles[role]
+    filesystem_write, github_connector, permission = profiles[role]
     return {
         "verified_by_service": True,
         "role": role,
         "thread_id": thread_id,
-        "model": model,
-        "reasoning_effort": "xhigh",
+        "model": model_profile["model"],
+        "reasoning_effort": model_profile["reasoning_effort"],
         "environment_type": "worktree" if role == "worker" else "local",
         "project_identity": identity().git_common_dir_fingerprint,
         "parent_thread_id": None if role == "orchestrator" else parent,
@@ -100,6 +101,28 @@ def role_receipt(role, thread_id, *, created_at="2026-07-14T00:00:00Z", parent="
         "gh_access": role == "orchestrator",
         "created_at": created_at,
     }
+
+
+def policy3_role_receipt(role, thread_id, *, created_at="2026-07-14T00:00:00Z", parent="orchestrator-1"):
+    receipt = role_receipt(role, thread_id, created_at=created_at, parent=parent)
+    receipt.update(rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"][role])
+    return receipt
+
+
+def downgrade_to_policy3(value):
+    activation = value["activation"]
+    activation["orchestrator_creation_receipt"].update(
+        rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]["orchestrator"]
+    )
+    if value.get("task"):
+        value["task"]["worker_creation_receipt"].update(
+            rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]["worker"]
+        )
+    for receipt in value["review"]["supervisor_creation_receipts"]:
+        receipt.update(rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]["supervisor"])
+    activation.pop("role_model_snapshot", None)
+    activation.pop("role_model_snapshot_digest", None)
+    value["versions"].update({"schema": 4, "policy": "3"})
 
 
 def activation_request(*, umbrellas=None, base="main", operations=None):
@@ -522,6 +545,8 @@ def set_operation(value, operation, enabled):
         owner_actor=value["activation"]["owner_actor"],
         capability_preflight=value["activation"]["capability_preflight"],
         orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
+        role_model_snapshot=value["activation"]["role_model_snapshot"],
+        role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
     )
 
 
@@ -1511,6 +1536,7 @@ class MaintenanceTests(unittest.TestCase):
 
     def test_schema_migration(self):
         old = state()
+        downgrade_to_policy3(old)
         old["versions"]["schema"] = 1
         old.pop("completed_tasks")
         old.pop("retry")
@@ -1558,8 +1584,9 @@ class MaintenanceTests(unittest.TestCase):
     def test_paused_schema_migration_can_resume_and_failure_is_atomic(self):
         with tempfile.TemporaryDirectory() as temporary:
             paused = self._paused()
+            downgrade_to_policy3(paused)
             paused["versions"]["schema"] = 1
-            paused["maintenance"]["stored_versions"]["schema"] = 1
+            paused["maintenance"]["stored_versions"] = copy.deepcopy(paused["versions"])
             paused["maintenance"].pop("migrated_from_versions", None)
             paused["maintenance"].pop("migration_receipt", None)
             store = rs.StateStore(temporary)
@@ -1588,6 +1615,7 @@ class MaintenanceTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             paused = self._paused()
+            downgrade_to_policy3(paused)
             paused["versions"]["schema"] = 1
             paused["maintenance"]["stored_versions"]["schema"] = 99
             store = rs.StateStore(temporary)
@@ -2709,6 +2737,85 @@ class CompactionTests(unittest.TestCase):
             self.assertEqual(files, ["last-scope-summary.json", "state.json"])
 
 
+class RoleModelConfigTests(unittest.TestCase):
+    def copy_skill(self, directory):
+        destination = Path(directory) / "roundlet"
+        shutil.copytree(SKILL_ROOT, destination)
+        return destination
+
+    def test_validated_config_and_cli_output_are_canonical(self):
+        config = rs.load_role_model_config(SKILL_ROOT)
+        self.assertEqual(config["config_digest"], rs.digest_json({key: config[key] for key in ("schema_version", "defaults", "legacy_profiles")}))
+        completed = subprocess.run(
+            [sys.executable, str(SKILL_ROOT / "scripts" / "orchestration_state.py"), "role-config", "--skill-root", str(SKILL_ROOT)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(json.loads(completed.stdout), config)
+
+    def test_config_rejects_missing_unknown_or_invalid_role_values(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.copy_skill(temporary)
+            path = root / "assets" / "role-models.json"
+            path.unlink()
+            with self.assertRaisesRegex(rs.ValidationError, "missing"):
+                rs.load_role_model_config(root)
+        for mutation in (
+            lambda value: value.update({"unknown": True}),
+            lambda value: value["defaults"].pop("worker"),
+            lambda value: value["defaults"]["worker"].update({"model": "bad model"}),
+            lambda value: value["defaults"]["worker"].update({"reasoning_effort": "soft"}),
+            lambda value: value.update({"schema_version": 2}),
+        ):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = self.copy_skill(temporary)
+                path = root / "assets" / "role-models.json"
+                value = json.loads(path.read_text())
+                mutation(value)
+                path.write_text(json.dumps(value))
+                with self.assertRaises(rs.ValidationError):
+                    rs.load_role_model_config(root)
+
+    def test_activation_binds_snapshot_to_receipts_and_scope(self):
+        digest = rs.skill_content_digest(SKILL_ROOT)
+        value = rs.new_state(
+            activation_request(), identity(), activation_id="activation-0001", orchestrator_thread_id="orchestrator-1",
+            installed_roundlet_digest=digest, owner_actor=OWNER_ACTOR, capability_preflight=CAPABILITY_PREFLIGHT,
+            orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"), skill_root=SKILL_ROOT,
+        )
+        snapshot = copy.deepcopy(value["activation"]["role_model_snapshot"])
+        self.assertEqual(value["activation"]["role_model_snapshot_digest"], rs.role_model_snapshot_digest(snapshot))
+        value["activation"]["role_model_snapshot"]["worker"]["reasoning_effort"] = "low"
+        with self.assertRaises(rs.ScopeError):
+            rs.validate_state(value)
+
+    def test_config_change_does_not_replace_existing_activation_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.copy_skill(temporary)
+            digest = rs.skill_content_digest(root)
+            value = rs.new_state(
+                activation_request(), identity(), activation_id="activation-0001", orchestrator_thread_id="orchestrator-1",
+                installed_roundlet_digest=digest, owner_actor=OWNER_ACTOR, capability_preflight=CAPABILITY_PREFLIGHT,
+                orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"), skill_root=root,
+            )
+            before = copy.deepcopy(value["activation"]["role_model_snapshot"])
+            path = root / "assets" / "role-models.json"
+            config = json.loads(path.read_text())
+            config["defaults"]["worker"]["reasoning_effort"] = "low"
+            path.write_text(json.dumps(config))
+            rs.validate_state(value)
+            self.assertEqual(value["activation"]["role_model_snapshot"], before)
+
+    def test_policy3_migration_keeps_legacy_snapshot(self):
+        value = assigned_state()
+        downgrade_to_policy3(value)
+        migrated = rs._migrate_state_document(value)
+        legacy = rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]
+        self.assertEqual(migrated["activation"]["role_model_snapshot"], legacy)
+        rs.validate_state(migrated)
+
+
 class SkillDigestTests(unittest.TestCase):
     def copy_skill(self, directory, relative_destination):
         destination = Path(directory) / relative_destination
@@ -2911,6 +3018,8 @@ class GuardTests(unittest.TestCase):
             owner_actor=value["activation"]["owner_actor"],
             capability_preflight=value["activation"]["capability_preflight"],
             orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
+            role_model_snapshot=value["activation"]["role_model_snapshot"],
+            role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
         )
         record_merge(value)
         record_close(value)
@@ -3096,6 +3205,8 @@ class GuardTests(unittest.TestCase):
                 owner_actor=value["activation"]["owner_actor"],
                 capability_preflight=value["activation"]["capability_preflight"],
                 orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
+                role_model_snapshot=value["activation"]["role_model_snapshot"],
+                role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
             )
             record_merge(value)
             record_close(value)
@@ -3256,6 +3367,7 @@ class StaticSkillTests(unittest.TestCase):
             "SKILL.md",
             "agents/openai.yaml",
             "assets/roundlet.rules",
+            "assets/role-models.json",
             "references/operator-guide.md",
             "references/thread-prompts.md",
             "scripts/orchestration_state.py",
@@ -3270,6 +3382,18 @@ class StaticSkillTests(unittest.TestCase):
         self.assertEqual(actual, expected)
         for excluded in ("tests", "AGENTS.md", ".gitignore"):
             self.assertFalse((SKILL_ROOT / excluded).exists())
+
+    def test_role_model_literals_exist_only_in_configuration(self):
+        for path in SKILL_ROOT.rglob("*"):
+            if (
+                not path.is_file()
+                or "__pycache__" in path.parts
+                or path.suffix in {".pyc", ".pyo"}
+                or path == SKILL_ROOT / "assets" / "role-models.json"
+            ):
+                continue
+            with self.subTest(path=path):
+                self.assertNotIn("gpt-5", path.read_text(encoding="utf-8"))
 
     def test_skill_frontmatter_has_only_name_and_description(self):
         text = (SKILL_ROOT / "SKILL.md").read_text()
