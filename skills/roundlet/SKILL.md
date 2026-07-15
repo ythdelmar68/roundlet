@@ -49,7 +49,7 @@ Stop before creating a worktree, child task, or schedule unless all checks pass:
 1. Resolve one Git root, Git common directory, canonical origin owner/name, repository ID when available, and base branch.
 2. Fetch exactly `origin/<base>` and require a clean orchestration checkout with `HEAD == <base> == origin/<base>` by full SHA.
 3. Inspect all current-repository worktrees. Block on dirty, unmerged, uniquely owned, ambiguous, or conflicting work; never modify another checkout to satisfy preflight.
-4. From one exact reviewed installation root, validate `assets/role-models.json` and compute the installed Roundlet digest. Use its validated `defaults` only to create and read back the Orchestrator; `new_state` then repeats the stable-root check and binds those defaults as the immutable activation snapshot. Do not reread configuration for an active role.
+4. From one exact reviewed installation root, validate `assets/roundlet-config.json` and compute the installed Roundlet digest. Use its validated `defaults` only to create and read back the Orchestrator; `new_state` then repeats the stable-root check and binds those defaults as the immutable activation snapshot. Do not reread configuration for an active role.
 5. Verify GitHub connector reads and each authorized mutation against this repository only.
 6. Verify unattended Git fetch/push, guarded cleanup, thread management, schedule update, merge-with-expected-head, and issue-close capabilities.
 7. Require service evidence that per-task model, reasoning, parent/fork identity, project, permission profile, filesystem write, connector, `gh`, web, and network capabilities are observable and enforceable. Block activation if Worker or Supervisor isolation cannot be proven.
@@ -67,6 +67,7 @@ Keep only:
 ```text
 .codex-log/roundlet/
 ├── .single-writer.lock
+├── .legacy-review-authority.json  # migration-only; absent for new activations
 ├── state.json
 ├── mailbox/
 │   ├── github-context.json
@@ -110,21 +111,19 @@ Create a completely fresh read-only Supervisor task for every round:
 - no Worker confidence, previous conclusions, moving branch identity, file writes, GitHub, `gh`, web, or network;
 - strict `RESULT: PASS` or `RESULT: FINDINGS` output.
 
-Immediately read the newly created task back from the task service and pass its exact task ID, service creation timestamp, model/reasoning, project, parent/fork identity, permission profile, filesystem-write state, and connector/`gh`/web/network capabilities to `begin_supervisor` as the immutable creation receipt. Never synthesize or copy that receipt, accept an older/non-monotonic creation time, fork the Worker, reuse a previous Supervisor ID, or accept workspace-write/GitHub-capable metadata.
+Before any Supervisor task-service mutation, call the pure `preflight_supervisor_creation`; it enforces the activation-bound `max_supervisor_cycles` budget without making the final draft-stage review unreachable. Create through `create_supervisor_after_preflight` with its durable single-writer intent and stable idempotency key. If creation may have happened before the receipt was durably recorded, reconcile/read it back; never invoke the task service a second time. Bind its exact task ID, service creation timestamp, model/reasoning, project, parent/fork identity, permission profile, filesystem-write state, and connector/`gh`/web/network capabilities. Never synthesize or copy that receipt, accept an older/non-monotonic creation time, fork the Worker, reuse a previous Supervisor ID, or accept workspace-write/GitHub-capable metadata.
 
-Archive each Supervisor after consuming its result and call `record_supervisor_archived` before starting another. Reject stale candidate/thread/protocol identity. Keep only the bounded recent-ID ledger plus the rolling archive count/digest; the total round count has no fixed limit.
+Archive each Supervisor after consuming its result and call `record_supervisor_archived` before starting another or accepting a budget-exhaustion handoff. Reject stale candidate/thread/protocol identity. Keep only the bounded recent-ID ledger plus the rolling archive count/digest. New activations use the immutable configured limit. A legacy activation remains unbounded only when loaded with the separate authority receipt created by the durable `StateStore.migrate` gateway; embedded schema-5 predecessor JSON alone is never authority.
 
 ## Drive the review state machine
 
 Use `transition_state`, `set_candidate`, `begin_supervisor`, and `accept_supervisor_result`. Keep one active selected task and one active role turn.
 
-1. On `FINDINGS`, post one curated Supervisor summary, send every actionable finding to the same Worker, verify the repair/test/commit handoff, push, and create a fresh Supervisor.
-2. Repeat without a fixed round limit until exact `PASS` or a permanent blocker.
-3. On the first `PASS`, return all non-blocking items to the Worker for fixes or explicit disposition. Any changed candidate invalidates PASS.
-4. Mark the draft PR ready only after PASS follow-up is complete.
-5. Run another fresh Supervisor against the exact ready candidate.
-6. Return final findings to the same repair loop. Require another fresh review after every candidate change.
-7. Enter pre-merge only with an unchanged final PASS and Worker `READY_TO_MERGE`.
+1. On `FINDINGS` before the last permitted round, post one curated summary, send every actionable finding to the same Worker, verify/push the repair handoff, and preflight a fresh Supervisor.
+2. On `FINDINGS` at the limit, record `REVIEW_BUDGET_EXHAUSTED` with the reviewed candidate and exact finding digest; archive that Supervisor; require one atomic final Worker handoff with the repaired candidate, clean/test proof, and one `FIXED` or evidenced `REJECTED` disposition for each exact finding. Never record a Supervisor `PASS` for this path.
+3. If that final handoff is still draft, run `preflight_mark_ready` before any connector mutation, then use the authorized mark-ready gateway and exact live read-back; if already ready, retain its existing live readiness proof. The same preflight must be reused during completion. Then obtain the same Worker's `READY_TO_MERGE` confirmation.
+4. On an initial `PASS`, return non-blocking items to the Worker. Any changed candidate invalidates PASS. Mark the draft PR ready only after an unchanged follow-up, then run a fresh post-ready Supervisor. Before spending the final slot, the Orchestrator may mark the unchanged draft candidate ready and use that slot for the real final Supervisor, or keep it draft so a last-round `FINDINGS` can enter draft exhaustion. A last-slot draft `PASS` cannot satisfy either authorized merge terminal: block without relabeling it or merging.
+5. Enter pre-merge only with either that final exact PASS or archived `REVIEW_BUDGET_EXHAUSTED` plus identity-bound final Worker evidence and `READY_TO_MERGE`.
 
 Use fixed mailboxes and `MailboxStore.consume`. The store holds one activation-scoped single-writer file lock across state read, intent claim, callback, receipt, state advance, and mailbox deletion; a concurrent consumer that did not create the claim must wait/reconcile and never mutate. For each mailbox kind independently, end every idempotency key with a decimal sequence that starts at 1 and increases by exactly 1, such as `worker-handoff-000001`; never reuse, skip, or reset it within an activation. Validate the envelope, reconcile or perform one mutation, verify it where possible, atomically record the intent/high-water mark, receipt, and new state, then delete the mailbox. Byte-aware rolling compaction retains an archive count/digest; any sequence at or below the high-water mark remains consumed even after its full receipt is compacted. Block on ambiguous mutation identity; never retry blindly.
 
@@ -132,7 +131,7 @@ Use fixed mailboxes and `MailboxStore.consume`. The store holds one activation-s
 
 Run every connector write only through `execute_github_mutation`. This gateway validates the enabled operation, exact repository/task/phase/PR identity and gates, records a durable target-bound intent, invokes the connector once, and advances only after exact live-state read-back. Reconcile a pending intent through connector reads; never call the post-mutation receipt helpers separately or retry blindly. Draft creation, ready, merge, issue close, and remote-branch deletion each require this boundary; a false operation flag must prevent the callback.
 
-Immediately before merge, refresh live state and call `assert_premerge_gates`. Require valid scope/membership, exact PR/task identity, base and head repository owner/name plus repository ID, exact base branch/head ref/base SHA/reviewed head SHA, latest fresh PASS, Worker readiness, clean worktree, passing tests/checks, open non-draft and mergeable PR, no conflict/new blocker, and no maintenance request. Reject fork heads even when ref and SHA match.
+Immediately before merge, refresh live state and call `assert_premerge_gates`. Require valid scope/membership, exact PR/task identity, base and head repository owner/name plus repository ID, exact base branch/head ref/base SHA/reviewed head SHA, Worker readiness, clean worktree, passing tests/checks, open non-draft and mergeable PR, no conflict/new blocker, and no maintenance request. The review terminal must be either a fresh final PASS or a fully archived budget-exhaustion record whose finding/disposition digests, final candidate, and final Worker evidence all match. Reject fork heads even when ref and SHA match.
 
 Merge through the gateway with method `merge` and `expected_head_sha` equal to the full candidate SHA. Require connector proof `merged=true`, closed PR state, and full merge SHA before entering issue close. Require connector proof that the exact selected issue is closed with reason `completed` before cleanup.
 
@@ -144,7 +143,7 @@ On final full refresh with no remaining task or owned resources, enter `scope-co
 
 ## Pause and resume maintenance
 
-On `maintenance-pause`, atomically record the request before new dispatch or mutation. Finish or reconcile any atomic mutation, use `drain_worker_for_maintenance` at the Worker's next clean safe boundary, or use `discard_supervisor_for_maintenance` to invalidate/archive an interrupted read-only Supervisor and restore its pre-review phase. Consume/quarantine complete mailboxes and require no active mutating role before `create_maintenance_checkpoint`.
+On `maintenance-pause`, atomically record the request before new dispatch or mutation. Finish or reconcile every atomic mutation, including a pending Supervisor task-creation intent, before requesting, checkpointing, migrating, or resuming maintenance. Use `drain_worker_for_maintenance` at the Worker's next clean safe boundary, or use `discard_supervisor_for_maintenance` to invalidate/archive an interrupted read-only Supervisor and restore its pre-review phase. Consume/quarantine complete mailboxes and require no active mutating role before `create_maintenance_checkpoint`.
 
 Use `create_maintenance_checkpoint`, pause the one heartbeat, and report `PAUSED_FOR_MAINTENANCE`, checkpoint ID, installed digest, current task/PR, and the exact resume prompt. Do not infer that maintenance is complete.
 

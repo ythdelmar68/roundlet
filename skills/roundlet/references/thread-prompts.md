@@ -5,12 +5,13 @@
 1. Shared immutable envelope
 2. Initial Worker implementation
 3. Worker repair
-4. PASS follow-up
-5. Read-only Supervisor review
-6. Final Worker merge-readiness confirmation
-7. Maintenance pause
-8. Maintenance resume
-9. Curated public summaries
+4. Final Worker repair after budget exhaustion
+5. PASS follow-up
+6. Read-only Supervisor review
+7. Final Worker merge-readiness confirmation
+8. Maintenance pause
+9. Maintenance resume
+10. Curated public summaries
 
 Use these as fixed templates, not transcripts. Substitute only bracketed fields. Keep credentials, raw private reasoning, and unrelated repository content out of every prompt and mailbox.
 
@@ -155,6 +156,32 @@ merge_readiness: NOT_REQUESTED
 
 Any new HEAD SHA invalidates all earlier PASS results.
 
+## Final Worker repair after budget exhaustion
+
+Use this only after the last permitted Supervisor returned actionable `FINDINGS`. The Orchestrator must archive that Supervisor first and provide the exact ordered findings plus its reviewed candidate SHA. This is one atomic Worker handoff: do not emit a separate candidate handoff before the dispositions.
+
+```text
+[SHARED IMMUTABLE ENVELOPE AND FRESH PR CONTEXT]
+
+ROLE: WORKER — FINAL REVIEW-BUDGET REPAIR
+
+The review budget is exhausted at round [ROUND]. The archived Supervisor reviewed [REVIEWED_CANDIDATE_SHA] and reported these exact findings, in order:
+[COMPLETE CURATED FINDINGS]
+
+Repair every actionable finding or reject it only with falsifiable evidence. Run the required regression/full checks, create focused Conventional Commits, leave the worktree clean, and do not push or mutate GitHub.
+
+Return exactly one full Worker handoff contract, plus:
+reviewed_candidate_sha: [REVIEWED_CANDIDATE_SHA]
+final_candidate_sha: [FULL_FINAL_HEAD_SHA]
+final_dispositions:
+  - finding: [EXACT FINDING TEXT OR ID]
+    disposition: FIXED | REJECTED
+    evidence: [TEST/FILE/FALSIFIABLE REASON]
+merge_readiness: NOT_REQUESTED
+```
+
+The Orchestrator compares the ordered finding identities and count exactly. If the PR is still draft, it alone uses the mark-ready gateway and waits for exact live read-back before requesting `READY_TO_MERGE`; this path never creates or claims a Supervisor `PASS`.
+
 ## PASS follow-up
 
 Continue the same Worker task after the first exact PASS.
@@ -184,7 +211,7 @@ If any fix changes HEAD, mark the old PASS stale. The Orchestrator must run a fr
 
 Create a completely fresh local-project task with model `[SUPERVISOR_MODEL]` and reasoning effort `[SUPERVISOR_REASONING_EFFORT]`, taken only from the activation snapshot. Do not fork the Worker or reuse any prior Supervisor.
 
-Before sending this prompt, the root Orchestrator must read the created task back from the task service and give `begin_supervisor` the exact service-returned task ID, UTC creation timestamp, model/reasoning, project/parent/fork identity, read-only permission profile, and explicit filesystem/GitHub/`gh`/web/network capability fields for this activation, issue, and next review generation. Never synthesize that creation receipt or treat prompt prohibitions as capability proof. After consuming the result, archive the task and durably call `record_supervisor_archived` before another review.
+Before any task-service creation, the root Orchestrator must pass deterministic budget preflight. Only then read the created task back and give `begin_supervisor` the exact service-returned task ID, UTC creation timestamp, model/reasoning, project/parent/fork identity, read-only permission profile, and explicit filesystem/GitHub/`gh`/web/network capability fields for this activation, issue, and next review generation. Never synthesize that creation receipt or treat prompt prohibitions as capability proof. After consuming the result, archive the task and durably call `record_supervisor_archived` before another review or a final budget-repair handoff.
 
 ```text
 [SHARED IMMUTABLE ENVELOPE AND CONTEXT]

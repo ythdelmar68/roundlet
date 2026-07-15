@@ -32,6 +32,7 @@ SKILL_SOURCE_REPOSITORY = "ythdelmar68/roundlet"
 DOCUMENTATION_ONLY_OPERATOR_GUIDE_PATH = "skills/roundlet/references/operator-guide.md"
 STATE_DIRECTORY = Path(".codex-log/roundlet")
 STATE_FILENAME = "state.json"
+LEGACY_REVIEW_AUTHORITY_FILENAME = ".legacy-review-authority.json"
 SUMMARY_FILENAME = "last-scope-summary.json"
 MAILBOX_NAMES = {
     "github-context": "github-context.json",
@@ -76,7 +77,7 @@ ROLE_ISOLATION_PROFILES = {
 }
 
 ROLE_NAMES = frozenset(ROLE_ISOLATION_PROFILES)
-ROLE_MODEL_CONFIG_NAME = "role-models.json"
+ROLE_MODEL_CONFIG_NAME = "roundlet-config.json"
 ROLE_MODEL_CONFIG_RELATIVE_PATH = Path("assets") / ROLE_MODEL_CONFIG_NAME
 REASONING_EFFORTS = frozenset({"none", "minimal", "low", "medium", "high", "xhigh", "max"})
 MODEL_ID = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
@@ -84,10 +85,10 @@ MODEL_ID = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
 # keeps migration compatible without carrying duplicate model literals in code.
 POLICY3_ROLE_MODEL_SNAPSHOT_DIGEST = "be1680d41063b90e22fef16e5a207fa6aea59004624be5e5bfb08d8de07c77bf"
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 PROTOCOL_VERSION = "3"
-REVIEW_CONTRACT_VERSION = "3"
-POLICY_VERSION = "4"
+REVIEW_CONTRACT_VERSION = "4"
+POLICY_VERSION = "5"
 VERSION_KEYS = {"schema", "protocol", "review_contract", "policy"}
 LOCAL_CLEANUP_KEYS = {
     "worktree_removed",
@@ -114,6 +115,7 @@ PHASES = {
     "draft-pr",
     "supervisor-running",
     "worker-repair",
+    "final-worker-repair",
     "pass-follow-up",
     "ready",
     "final-supervisor",
@@ -149,12 +151,13 @@ LEGAL_TRANSITIONS = {
     "selecting-task": {"waiting-dependency", "worker-running", "scope-complete", "blocked"},
     "waiting-dependency": {"selecting-task", "blocked"},
     "worker-running": {"draft-pr", "blocked"},
-    "draft-pr": {"supervisor-running", "blocked"},
-    "supervisor-running": {"worker-repair", "pass-follow-up", "blocked"},
-    "worker-repair": {"supervisor-running", "final-supervisor", "blocked"},
+    "draft-pr": {"supervisor-running", "ready", "blocked"},
+    "supervisor-running": {"worker-repair", "final-worker-repair", "pass-follow-up", "blocked"},
+    "worker-repair": {"supervisor-running", "final-supervisor", "ready", "blocked"},
+    "final-worker-repair": {"draft-pr", "ready", "blocked"},
     "pass-follow-up": {"worker-repair", "ready", "blocked"},
     "ready": {"final-supervisor", "pre-merge", "blocked"},
-    "final-supervisor": {"worker-repair", "ready", "blocked"},
+    "final-supervisor": {"worker-repair", "final-worker-repair", "ready", "blocked"},
     "pre-merge": {"worker-repair", "merging", "blocked"},
     "merging": {"closing-issue", "blocked"},
     "closing-issue": {"cleanup", "blocked"},
@@ -277,31 +280,44 @@ def _validate_role_model_snapshot(snapshot: Mapping[str, Any]) -> dict[str, dict
     return normalized
 
 
+def _validate_review_policy(policy: Mapping[str, Any]) -> dict[str, int]:
+    if not isinstance(policy, Mapping) or set(policy) != {"max_supervisor_cycles"}:
+        raise ValidationError("review policy must contain exactly max_supervisor_cycles")
+    value = policy.get("max_supervisor_cycles")
+    if type(value) is not int or not 1 <= value <= 64:
+        raise ValidationError("review.max_supervisor_cycles must be an integer from 1 to 64")
+    return {"max_supervisor_cycles": value}
+
+
 def load_role_model_config(skill_root: str | os.PathLike[str]) -> dict[str, Any]:
-    """Read the strict, dependency-free model configuration from one skill payload."""
+    """Read the strict, dependency-free Roundlet configuration from one skill payload."""
     path = Path(skill_root).resolve() / ROLE_MODEL_CONFIG_RELATIVE_PATH
     try:
         content = path.read_bytes().decode("utf-8")
     except FileNotFoundError as exc:
-        raise ValidationError("Roundlet role-model configuration is missing") from exc
+        raise ValidationError("Roundlet configuration is missing") from exc
     except (OSError, UnicodeDecodeError) as exc:
-        raise ValidationError("Roundlet role-model configuration is unreadable") from exc
+        raise ValidationError("Roundlet configuration is unreadable") from exc
     try:
         raw = json.loads(content, object_pairs_hook=_reject_duplicate_json_keys)
     except json.JSONDecodeError as exc:
-        raise ValidationError("Roundlet role-model configuration is unreadable") from exc
+        raise ValidationError("Roundlet configuration is unreadable") from exc
     if not isinstance(raw, Mapping) or set(raw) != {"schema_version", "defaults", "legacy_profiles"}:
-        raise ValidationError("role-model configuration has unknown or missing fields")
-    if type(raw.get("schema_version")) is not int or raw.get("schema_version") != 1:
-        raise ValidationError("role-model configuration schema is unsupported")
-    defaults = _validate_role_model_snapshot(raw.get("defaults", {}))
+        raise ValidationError("Roundlet configuration has unknown or missing fields")
+    if type(raw.get("schema_version")) is not int or raw.get("schema_version") != 2:
+        raise ValidationError("Roundlet configuration schema is unsupported")
+    defaults_raw = raw.get("defaults")
+    if not isinstance(defaults_raw, Mapping) or set(defaults_raw) != {"roles", "review"}:
+        raise ValidationError("Roundlet configuration defaults have unknown or missing fields")
+    defaults = _validate_role_model_snapshot(defaults_raw.get("roles", {}))
+    review_policy = _validate_review_policy(defaults_raw.get("review", {}))
     legacy_raw = raw.get("legacy_profiles")
     if not isinstance(legacy_raw, Mapping) or set(legacy_raw) != {"policy_3"}:
-        raise ValidationError("role-model configuration legacy profiles are unsupported")
+        raise ValidationError("Roundlet configuration legacy profiles are unsupported")
     legacy_profiles = {"policy_3": _validate_role_model_snapshot(legacy_raw["policy_3"])}
     canonical = {
-        "schema_version": 1,
-        "defaults": defaults,
+        "schema_version": 2,
+        "defaults": {"roles": defaults, "review": review_policy},
         "legacy_profiles": legacy_profiles,
     }
     return {**canonical, "config_digest": digest_json(canonical)}
@@ -732,6 +748,9 @@ def compute_scope_digest(
     orchestrator_creation_receipt: Mapping[str, Any],
     role_model_snapshot: Mapping[str, Any],
     role_model_snapshot_digest: str,
+    review_policy_snapshot: Mapping[str, Any] | None = None,
+    review_policy_snapshot_digest: str | None = None,
+    legacy_unbounded_review: bool = False,
     protocol_version: str = PROTOCOL_VERSION,
     policy_version: str = POLICY_VERSION,
 ) -> str:
@@ -739,6 +758,13 @@ def compute_scope_digest(
     snapshot = _validate_role_model_snapshot(role_model_snapshot)
     if role_model_snapshot_digest != digest_json(snapshot):
         raise ScopeError("role model snapshot digest does not match the snapshot")
+    if type(legacy_unbounded_review) is not bool:
+        raise ScopeError("legacy_unbounded_review must be boolean")
+    review_policy = None
+    if review_policy_snapshot is not None or review_policy_snapshot_digest is not None:
+        review_policy = _validate_review_policy(review_policy_snapshot or {})
+        if review_policy_snapshot_digest != digest_json(review_policy):
+            raise ScopeError("review policy snapshot digest does not match the snapshot")
     normalized_repo = {
         "owner_name": normalize_owner_name(str(repository["owner_name"])),
         "repository_id": repository.get("repository_id"),
@@ -756,6 +782,8 @@ def compute_scope_digest(
         "capability_preflight": validate_capability_preflight(capability_preflight),
         "orchestrator_creation_receipt_digest": digest_json(orchestrator_creation_receipt),
         "role_model_snapshot_digest": role_model_snapshot_digest,
+        "review_policy_snapshot_digest": None if review_policy is None else review_policy_snapshot_digest,
+        "legacy_unbounded_review": legacy_unbounded_review,
         "installed_roundlet_digest": installed_roundlet_digest,
         "protocol_version": str(protocol_version),
         "policy_version": str(policy_version),
@@ -893,7 +921,7 @@ def new_state(
         raise ValidationError("orchestrator_thread_id is required")
     digest = require_content_digest(installed_roundlet_digest)
     config = load_stable_role_model_config(skill_root, digest)
-    role_snapshot = config["defaults"]
+    role_snapshot = config["defaults"]["roles"]
     snapshot_digest = role_model_snapshot_digest(role_snapshot)
     timestamp = now or utc_now()
     normalized_owner = validate_owner_actor(owner_actor)
@@ -922,6 +950,9 @@ def new_state(
         orchestrator_creation_receipt=orchestrator_receipt,
         role_model_snapshot=role_snapshot,
         role_model_snapshot_digest=snapshot_digest,
+        review_policy_snapshot=config["defaults"]["review"],
+        review_policy_snapshot_digest=digest_json(config["defaults"]["review"]),
+        legacy_unbounded_review=False,
     )
     state = {
         "skill": {
@@ -943,6 +974,10 @@ def new_state(
             "capability_preflight": normalized_preflight,
             "role_model_snapshot": role_snapshot,
             "role_model_snapshot_digest": snapshot_digest,
+            "review_policy_snapshot": config["defaults"]["review"],
+            "review_policy_snapshot_digest": digest_json(config["defaults"]["review"]),
+            "legacy_unbounded_review": False,
+            "legacy_review_migration": None,
             "repository": repository,
             "base_branch": identity.base_branch,
             "base_sha": identity.head_sha,
@@ -965,6 +1000,8 @@ def new_state(
             "archived_supervisor_count": 0,
             "archived_supervisor_digest": "0" * 64,
             "last_supervisor_created_at": None,
+            "exhaustion": None,
+            "supervisor_creation_intent": None,
         },
         "receipts": {},
         "github_mutations": {"pending": None, "receipts": {}},
@@ -1022,6 +1059,23 @@ def validate_state(state: Mapping[str, Any]) -> None:
     snapshot_digest = activation.get("role_model_snapshot_digest")
     if snapshot_digest != digest_json(role_snapshot):
         raise ScopeError("activation role-model snapshot digest is mismatched")
+    review_policy = _validate_review_policy(activation.get("review_policy_snapshot", {}))
+    if activation.get("review_policy_snapshot_digest") != digest_json(review_policy):
+        raise ScopeError("activation review-policy snapshot digest is mismatched")
+    legacy_unbounded_review = activation.get("legacy_unbounded_review")
+    if type(legacy_unbounded_review) is not bool:
+        raise ScopeError("activation legacy-unbounded review marker is malformed")
+    legacy_migration = activation.get("legacy_review_migration")
+    if legacy_unbounded_review:
+        if not isinstance(legacy_migration, Mapping):
+            raise ScopeError("legacy-unbounded review requires schema-5 migration provenance")
+        authority = getattr(state, "legacy_review_authority", None)
+        if authority != _expected_legacy_review_authority(state):
+            raise ScopeError(
+                "legacy-unbounded review is accepted only from the durable StateStore migration gateway"
+            )
+    elif legacy_migration is not None:
+        raise ScopeError("fresh activations cannot carry legacy review migration provenance")
     validate_role_creation_receipt(
         activation.get("orchestrator_creation_receipt", {}),
         role="orchestrator",
@@ -1032,6 +1086,85 @@ def validate_state(state: Mapping[str, Any]) -> None:
     )
     digest = state.get("skill", {}).get("content_digest")
     require_content_digest(digest)
+    if legacy_unbounded_review:
+        if set(legacy_migration) != {"from_schema", "input_digest", "predecessor"}:
+            raise ScopeError("legacy review migration provenance is incomplete")
+        predecessor = legacy_migration.get("predecessor")
+        if (
+            legacy_migration.get("from_schema") != 5
+            or not isinstance(predecessor, Mapping)
+            or legacy_migration.get("input_digest") != digest_json(predecessor)
+            or set(predecessor) != {"versions", "skill", "activation", "review_summary"}
+        ):
+            raise ScopeError("legacy review migration predecessor digest is unverifiable")
+        predecessor_versions = predecessor.get("versions")
+        predecessor_skill = predecessor.get("skill")
+        predecessor_activation = predecessor.get("activation")
+        predecessor_review = predecessor.get("review_summary")
+        if (
+            predecessor_versions
+            != {"schema": 5, "protocol": PROTOCOL_VERSION, "review_contract": "3", "policy": "4"}
+            or not isinstance(predecessor_skill, Mapping)
+            or predecessor_skill.get("name") != state.get("skill", {}).get("name")
+            or predecessor_skill.get("source_repository") != state.get("skill", {}).get("source_repository")
+            or not CONTENT_DIGEST.fullmatch(str(predecessor_skill.get("content_digest", "")))
+            or not isinstance(predecessor_activation, Mapping)
+            or not isinstance(predecessor_review, Mapping)
+            or set(predecessor_review)
+            != {"round", "archived_supervisor_count", "archived_supervisor_digest", "last_supervisor_created_at"}
+            or any(
+                key in predecessor_activation
+                for key in (
+                    "review_policy_snapshot",
+                    "review_policy_snapshot_digest",
+                    "legacy_unbounded_review",
+                    "legacy_review_migration",
+                )
+            )
+        ):
+            raise ScopeError("legacy review migration predecessor contract is invalid")
+        for key, value in predecessor_activation.items():
+            if key != "scope_digest" and activation.get(key) != value:
+                raise ScopeError("legacy review migration predecessor activation is mismatched")
+        try:
+            predecessor_scope = compute_scope_digest(
+                predecessor_activation["repository"],
+                predecessor_activation["base_branch"],
+                predecessor_activation["umbrella_issues"],
+                predecessor_activation["allowed_operations"],
+                predecessor_skill["content_digest"],
+                owner_actor=predecessor_activation["owner_actor"],
+                capability_preflight=predecessor_activation["capability_preflight"],
+                orchestrator_creation_receipt=predecessor_activation["orchestrator_creation_receipt"],
+                role_model_snapshot=predecessor_activation["role_model_snapshot"],
+                role_model_snapshot_digest=predecessor_activation["role_model_snapshot_digest"],
+                protocol_version=predecessor_versions["protocol"],
+                policy_version=predecessor_versions["policy"],
+            )
+        except (KeyError, TypeError, RoundletError) as exc:
+            raise ScopeError("legacy review migration predecessor activation is incomplete") from exc
+        if predecessor_activation.get("scope_digest") != predecessor_scope:
+            raise ScopeError("legacy review migration predecessor scope is invalid")
+        predecessor_round = predecessor_review.get("round")
+        predecessor_archived = predecessor_review.get("archived_supervisor_count")
+        current_review = state.get("review", {})
+        if (
+            type(predecessor_round) is not int
+            or predecessor_round < 0
+            or type(predecessor_archived) is not int
+            or predecessor_archived < 0
+            or predecessor_archived > predecessor_round
+            or predecessor_round > current_review.get("round", -1)
+            or predecessor_archived > current_review.get("archived_supervisor_count", -1)
+            or not CONTENT_DIGEST.fullmatch(str(predecessor_review.get("archived_supervisor_digest", "")))
+            or (predecessor_round == 0 and predecessor_review.get("last_supervisor_created_at") is not None)
+        ):
+            raise ScopeError("legacy review migration predecessor history is invalid")
+        if predecessor_round > 0:
+            parse_utc_timestamp(
+                predecessor_review.get("last_supervisor_created_at"),
+                "legacy review migration predecessor Supervisor timestamp",
+            )
     try:
         expected_scope = compute_scope_digest(
             repository,
@@ -1044,6 +1177,9 @@ def validate_state(state: Mapping[str, Any]) -> None:
             orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
             role_model_snapshot=role_snapshot,
             role_model_snapshot_digest=str(snapshot_digest),
+            review_policy_snapshot=review_policy,
+            review_policy_snapshot_digest=activation.get("review_policy_snapshot_digest"),
+            legacy_unbounded_review=legacy_unbounded_review,
             protocol_version=str(versions.get("protocol")),
             policy_version=str(versions.get("policy")),
         )
@@ -1064,6 +1200,7 @@ def validate_state(state: Mapping[str, Any]) -> None:
         "draft-pr",
         "supervisor-running",
         "worker-repair",
+        "final-worker-repair",
         "pass-follow-up",
         "ready",
         "final-supervisor",
@@ -1145,8 +1282,83 @@ def validate_state(state: Mapping[str, Any]) -> None:
     review_round = review.get("round")
     if isinstance(review_round, bool) or not isinstance(review_round, int) or review_round < 0:
         raise ValidationError("Supervisor round must be a non-negative integer")
+    max_cycles = review_policy["max_supervisor_cycles"]
+    if not legacy_unbounded_review and review_round > max_cycles:
+        raise ValidationError("Supervisor round exceeds the activation review budget")
     if review_round != archived_count + len(unarchived_thread_ids):
         raise ValidationError("Supervisor round count differs from archived and active receipts")
+    exhaustion = review.get("exhaustion")
+    if exhaustion is not None:
+        if legacy_unbounded_review:
+            raise ValidationError("legacy-unbounded activations cannot record review-budget exhaustion")
+        if not isinstance(exhaustion, Mapping) or set(exhaustion) != {"outcome", "round", "reviewed_candidate_sha", "provisional_candidate_sha", "final_candidate_sha", "installed_roundlet_digest", "review_contract", "findings_count", "findings_digest", "worker_clean", "worker_tests_passed", "worker_dispositions_count", "worker_findings_digest", "worker_dispositions_digest"}:
+            raise ValidationError("review exhaustion evidence is malformed")
+        if exhaustion.get("outcome") != "REVIEW_BUDGET_EXHAUSTED" or exhaustion.get("round") != max_cycles:
+            raise ValidationError("review exhaustion outcome is not bound to the budget")
+        require_full_sha(exhaustion.get("reviewed_candidate_sha"), "exhaustion reviewed candidate_sha")
+        if exhaustion.get("provisional_candidate_sha") is not None:
+            require_full_sha(exhaustion.get("provisional_candidate_sha"), "exhaustion provisional candidate_sha")
+        if exhaustion.get("final_candidate_sha") is not None:
+            require_full_sha(exhaustion.get("final_candidate_sha"), "exhaustion final candidate_sha")
+        if exhaustion.get("installed_roundlet_digest") != digest:
+            raise ValidationError("review exhaustion is stale for the installed Roundlet content")
+        if exhaustion.get("review_contract") != versions.get("review_contract"):
+            raise ValidationError("review exhaustion is stale for the review contract")
+        require_content_digest(exhaustion.get("findings_digest"), "exhaustion findings digest")
+        if type(exhaustion.get("findings_count")) is not int or exhaustion.get("findings_count") < 1:
+            raise ValidationError("exhaustion findings count must be positive")
+        if exhaustion.get("worker_dispositions_count") is not None:
+            require_content_digest(exhaustion.get("worker_findings_digest"), "worker findings digest")
+            require_content_digest(exhaustion.get("worker_dispositions_digest"), "worker dispositions digest")
+            if exhaustion.get("worker_dispositions_count") != exhaustion.get("findings_count"):
+                raise ValidationError("worker final dispositions must match exhausted findings")
+            if exhaustion.get("worker_findings_digest") != exhaustion.get("findings_digest"):
+                raise ValidationError("worker final dispositions do not bind the exhausted finding identities")
+            if exhaustion.get("worker_clean") is not True or exhaustion.get("worker_tests_passed") is not True:
+                raise ValidationError("Worker final dispositions require durable clean/test proof")
+            if exhaustion.get("final_candidate_sha") is None:
+                raise ValidationError("Worker final dispositions require a final candidate SHA")
+        elif (
+            exhaustion.get("final_candidate_sha") is not None
+            or exhaustion.get("worker_findings_digest") is not None
+            or exhaustion.get("worker_clean") is not None
+            or exhaustion.get("worker_tests_passed") is not None
+        ):
+            raise ValidationError("final candidate evidence requires Worker final dispositions")
+    creation_intent = review.get("supervisor_creation_intent")
+    if creation_intent is not None:
+        if not isinstance(creation_intent, Mapping) or set(creation_intent) != {
+            "activation_id", "issue", "generation", "final", "candidate_sha", "installed_roundlet_digest",
+            "review_contract", "idempotency_key", "started_at"
+        }:
+            raise ValidationError("Supervisor creation intent is malformed")
+        intent_preflight = {
+            key: creation_intent.get(key)
+            for key in (
+                "activation_id", "issue", "generation", "final", "candidate_sha",
+                "installed_roundlet_digest", "review_contract",
+            )
+        }
+        if (
+            creation_intent.get("activation_id") != activation.get("id")
+            or creation_intent.get("issue") != (task or {}).get("issue")
+            or creation_intent.get("generation") != review_round + 1
+            or type(creation_intent.get("final")) is not bool
+            or creation_intent.get("candidate_sha") != (task or {}).get("candidate_sha")
+            or creation_intent.get("installed_roundlet_digest") != digest
+            or creation_intent.get("review_contract") != versions.get("review_contract")
+            or not isinstance(creation_intent.get("idempotency_key"), str)
+            or not re.fullmatch(r"[a-f0-9]{64}", creation_intent["idempotency_key"])
+            or creation_intent.get("idempotency_key")
+            != digest_json({"supervisor-create": intent_preflight})
+        ):
+            raise ValidationError("Supervisor creation intent identity is stale")
+        if phase in {
+            "maintenance-requested", "maintenance-draining", "paused-maintenance",
+            "maintenance-validating", "resuming-maintenance",
+        }:
+            raise ValidationError("Supervisor creation intent cannot cross maintenance")
+        parse_utc_timestamp(creation_intent.get("started_at"), "Supervisor creation intent timestamp")
     last_created_at = review.get("last_supervisor_created_at")
     if review.get("round") == 0:
         if last_created_at is not None:
@@ -1251,7 +1463,7 @@ def validate_state(state: Mapping[str, Any]) -> None:
     if isinstance(pending_github, Mapping):
         expected_phase = {
             "create-draft-pr": "worker-running",
-            "mark-ready": "pass-follow-up",
+            "mark-ready": {"pass-follow-up", "draft-pr", "worker-repair"},
             "merge-pr": "merging",
             "close-issue": "closing-issue",
             "delete-remote-branch": "cleanup",
@@ -1259,7 +1471,7 @@ def validate_state(state: Mapping[str, Any]) -> None:
         if (
             pending_github.get("activation_id") != activation.get("id")
             or pending_github.get("target_digest") != digest_json(pending_github["target"])
-            or phase != expected_phase
+            or phase not in (expected_phase if isinstance(expected_phase, set) else {expected_phase})
             or activation.get("allowed_operations", {}).get(
                 GITHUB_OPERATION_FLAGS[pending_github["operation"]]
             )
@@ -1346,10 +1558,39 @@ def read_json(path: str | os.PathLike[str], *, max_bytes: int | None = None) -> 
         raise ValidationError(f"cannot read valid JSON from {path}") from exc
 
 
+class _MigrationAuthorizedState(dict):
+    """In-memory capability proving StateStore loaded a durable migration receipt."""
+
+    def __init__(
+        self,
+        *args: Any,
+        legacy_review_authority: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.legacy_review_authority = (
+            copy.deepcopy(dict(legacy_review_authority))
+            if isinstance(legacy_review_authority, Mapping)
+            else None
+        )
+
+
+def _expected_legacy_review_authority(state: Mapping[str, Any]) -> dict[str, Any]:
+    activation = state.get("activation", {})
+    migration = activation.get("legacy_review_migration", {}) if isinstance(activation, Mapping) else {}
+    return {
+        "schema_version": 1,
+        "activation_id": activation.get("id") if isinstance(activation, Mapping) else None,
+        "from_schema": 5,
+        "predecessor_digest": migration.get("input_digest") if isinstance(migration, Mapping) else None,
+    }
+
+
 class StateStore:
     def __init__(self, state_directory: str | os.PathLike[str]):
         self.directory = Path(state_directory)
         self.path = self.directory / STATE_FILENAME
+        self.legacy_review_authority_path = self.directory / LEGACY_REVIEW_AUTHORITY_FILENAME
 
     @contextmanager
     def single_writer(self):
@@ -1365,14 +1606,36 @@ class StateStore:
 
     def load(self) -> dict[str, Any]:
         state = read_json(self.path, max_bytes=MAX_STATE_BYTES)
+        if state.get("activation", {}).get("legacy_unbounded_review") is True:
+            try:
+                authority = read_json(
+                    self.legacy_review_authority_path,
+                    max_bytes=MAX_RECEIPT_BYTES,
+                )
+            except ValidationError as exc:
+                raise ScopeError(
+                    "legacy review state lacks its durable migration authority receipt"
+                ) from exc
+            if authority != _expected_legacy_review_authority(state):
+                raise ScopeError("legacy review state lacks its exact durable migration authority")
+            state = _MigrationAuthorizedState(state, legacy_review_authority=authority)
         validate_state(state)
         return state
 
     def save(self, state: Mapping[str, Any]) -> None:
+        validate_state(state)
         mutable = copy.deepcopy(dict(state))
         mutable.setdefault("timestamps", {})["updated_at"] = utc_now()
+        if state.get("activation", {}).get("legacy_unbounded_review") is True:
+            authority = getattr(state, "legacy_review_authority", None)
+            mutable = _MigrationAuthorizedState(mutable, legacy_review_authority=authority)
         validate_state(mutable)
         atomic_write_json(self.path, mutable, max_bytes=MAX_STATE_BYTES)
+        if state.get("activation", {}).get("legacy_unbounded_review") is not True:
+            try:
+                self.legacy_review_authority_path.unlink()
+            except FileNotFoundError:
+                pass
 
     def initialize(self, state: Mapping[str, Any], *, replace_completed_scope: bool = False) -> None:
         replacement = copy.deepcopy(dict(state))
@@ -1563,13 +1826,27 @@ class StateStore:
                 raise MigrationError("migration requires every mutation receipt to be reconciled")
             if original.get("github_mutations", {}).get("pending") is not None:
                 raise MigrationError("migration requires every GitHub mutation to be reconciled")
+            if original.get("review", {}).get("supervisor_creation_intent") is not None:
+                raise MigrationError("migration requires the Supervisor creation intent to be reconciled")
             migrated = _migrate_state_document(
                 original,
                 target_version,
                 role_model_config=role_model_config,
                 installed_roundlet_digest=digest,
             )
+            if migrated.get("activation", {}).get("legacy_unbounded_review") is True:
+                authority = _expected_legacy_review_authority(migrated)
+                migrated = _MigrationAuthorizedState(
+                    migrated,
+                    legacy_review_authority=authority,
+                )
             validate_state(migrated)
+            if migrated.get("activation", {}).get("legacy_unbounded_review") is True:
+                atomic_write_json(
+                    self.legacy_review_authority_path,
+                    authority,
+                    max_bytes=MAX_RECEIPT_BYTES,
+                )
             atomic_write_json(self.path, migrated, max_bytes=MAX_STATE_BYTES)
             return migrated
 
@@ -1687,6 +1964,8 @@ def assign_task(
         "archived_supervisor_count": 0,
         "archived_supervisor_digest": "0" * 64,
         "last_supervisor_created_at": None,
+        "exhaustion": None,
+        "supervisor_creation_intent": None,
     }
     transition_state(state, "worker-running")
 
@@ -1713,6 +1992,115 @@ def set_candidate(state: MutableMapping[str, Any], candidate_sha: str, *, clean:
         transition_state(state, "worker-repair")
 
 
+def preflight_supervisor_creation(state: Mapping[str, Any], *, final: bool = False) -> dict[str, Any]:
+    """Validate deterministic review capacity before any external task creation."""
+    task = state.get("task")
+    if not isinstance(task, Mapping) or not task.get("candidate_sha"):
+        raise TransitionError("Supervisor requires an immutable candidate")
+    if task.get("active_role") is not None:
+        raise TransitionError("another role turn is already active")
+    phase = state.get("phase")
+    if final:
+        if phase not in {"ready", "worker-repair"} or task.get("pr_ready") is not True:
+            raise TransitionError("final Supervisor requires a ready PR candidate")
+    elif phase not in {"draft-pr", "worker-repair"} or task.get("pr_ready") is True:
+        raise TransitionError("initial Supervisor requires a draft PR candidate")
+    review = state.get("review")
+    activation = state.get("activation")
+    if not isinstance(review, Mapping) or not isinstance(activation, Mapping):
+        raise ValidationError("active review/activation state is missing")
+    if review.get("exhaustion") is not None:
+        raise GuardError("Supervisor review budget is exhausted")
+    if review.get("unarchived_supervisor_thread_ids"):
+        raise TransitionError("archive the previous Supervisor before creating another")
+    review_round = review.get("round")
+    if type(review_round) is not int or review_round < 0:
+        raise ValidationError("Supervisor round must be a non-negative integer")
+    if activation.get("legacy_unbounded_review") is not True:
+        policy = _validate_review_policy(activation.get("review_policy_snapshot", {}))
+        if review_round >= policy["max_supervisor_cycles"]:
+            raise GuardError("Supervisor review budget is exhausted")
+    installed_digest = require_content_digest(
+        state.get("skill", {}).get("content_digest"), "Supervisor creation installed digest"
+    )
+    review_contract = state.get("versions", {}).get("review_contract")
+    if not isinstance(review_contract, str) or not review_contract:
+        raise ValidationError("Supervisor creation review contract is missing")
+    return {
+        "activation_id": activation.get("id"),
+        "issue": task.get("issue"),
+        "generation": review_round + 1,
+        "final": final,
+        "candidate_sha": task.get("candidate_sha"),
+        "installed_roundlet_digest": installed_digest,
+        "review_contract": review_contract,
+    }
+
+
+def create_supervisor_after_preflight(
+    state: MutableMapping[str, Any],
+    *,
+    final: bool,
+    create_task: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+    reconcile_task: Callable[[Mapping[str, Any]], Mapping[str, Any] | None] | None = None,
+    state_store: StateStore | None = None,
+) -> None:
+    """Create a Supervisor through a durable, reconciled single-writer intent."""
+    if state_store is None:
+        # Run the pure guard first so denied callers cannot distinguish a missing
+        # persistence dependency from a review-budget refusal.
+        preflight_supervisor_creation(state, final=final)
+        raise ValidationError("Supervisor task creation requires the durable StateStore gateway")
+
+    def begin_intent(current: MutableMapping[str, Any]) -> tuple[dict[str, Any], bool]:
+        preflight = preflight_supervisor_creation(current, final=final)
+        review = current["review"]
+        intent = review.get("supervisor_creation_intent")
+        if intent is not None:
+            if (
+                intent.get("generation") != preflight["generation"]
+                or intent.get("final") is not final
+                or intent.get("candidate_sha") != preflight["candidate_sha"]
+            ):
+                raise MailboxError("pending Supervisor creation intent differs from the requested review")
+            return copy.deepcopy(dict(intent)), False
+        intent = {
+            **preflight,
+            "idempotency_key": digest_json({"supervisor-create": preflight}),
+            "started_at": utc_now(),
+        }
+        review["supervisor_creation_intent"] = intent
+        return copy.deepcopy(intent), True
+
+    with state_store.single_writer():
+        durable = state_store.load()
+        intent, invoke_create = begin_intent(durable)
+        state_store.save(durable)
+    if invoke_create:
+        created = create_task(copy.deepcopy(intent))
+    else:
+        if reconcile_task is None:
+            raise MailboxError("pending Supervisor creation requires task-service reconciliation")
+        created = reconcile_task(copy.deepcopy(intent))
+    if not isinstance(created, Mapping) or set(created) != {"thread_id", "creation_receipt"}:
+        raise ValidationError("Supervisor task-service callback returned an invalid creation result")
+    with state_store.single_writer():
+        durable = state_store.load()
+        pending = durable["review"].get("supervisor_creation_intent")
+        if pending != intent:
+            raise MailboxError("Supervisor creation intent changed before reconciliation")
+        begin_supervisor(
+            durable,
+            str(created["thread_id"]),
+            creation_receipt=created["creation_receipt"],
+            final=final,
+        )
+        durable["review"]["supervisor_creation_intent"] = None
+        state_store.save(durable)
+    state.clear()
+    state.update(durable)
+
+
 def begin_supervisor(
     state: MutableMapping[str, Any],
     thread_id: str,
@@ -1720,28 +2108,21 @@ def begin_supervisor(
     creation_receipt: Mapping[str, Any],
     final: bool = False,
 ) -> None:
+    preflight = preflight_supervisor_creation(state, final=final)
     task = state.get("task")
-    if not isinstance(task, MutableMapping) or not task.get("candidate_sha"):
-        raise TransitionError("Supervisor requires an immutable candidate")
-    if task.get("active_role") is not None:
-        raise TransitionError("another role turn is already active")
+    if not isinstance(task, MutableMapping):
+        raise ValidationError("Supervisor task state is missing")
     if not isinstance(thread_id, str) or not thread_id:
         raise ValidationError("Supervisor thread ID is required")
-    phase = state.get("phase")
-    if final:
-        if phase not in {"ready", "worker-repair"} or task.get("pr_ready") is not True:
-            raise TransitionError("final Supervisor requires a ready PR candidate")
-    elif phase not in {"draft-pr", "worker-repair"} or task.get("pr_ready") is True:
-        raise TransitionError("initial Supervisor requires a draft PR candidate")
     review = state["review"]
-    if review.get("unarchived_supervisor_thread_ids"):
-        raise TransitionError("archive the previous Supervisor before creating another")
     if thread_id in review["supervisor_thread_ids"]:
         raise ValidationError("every Supervisor review must use a fresh thread")
     expected_creation = {
         "activation_id": state["activation"]["id"],
         "issue": task["issue"],
-        "generation": review["round"] + 1,
+        "generation": preflight["generation"],
+        "installed_roundlet_digest": preflight["installed_roundlet_digest"],
+        "review_contract": preflight["review_contract"],
         "created": True,
     }
     if not isinstance(creation_receipt, Mapping) or set(creation_receipt) != set(expected_creation) | {"service_receipt"}:
@@ -1810,7 +2191,32 @@ def accept_supervisor_result(
     if result == "FINDINGS":
         review["pass_identity"] = None
         task["active_role"] = "worker"
-        transition_state(state, "worker-repair")
+        if (
+            state["activation"].get("legacy_unbounded_review") is not True
+            and review.get("round") >= state["activation"]["review_policy_snapshot"]["max_supervisor_cycles"]
+        ):
+            findings = list(non_blocking_items or [])
+            if not findings:
+                raise ValidationError("budget-exhausting Supervisor FINDINGS must be actionable")
+            review["exhaustion"] = {
+                "outcome": "REVIEW_BUDGET_EXHAUSTED",
+                "round": review["round"],
+                "reviewed_candidate_sha": candidate,
+                "provisional_candidate_sha": None,
+                "final_candidate_sha": None,
+                "installed_roundlet_digest": state["skill"]["content_digest"],
+                "review_contract": state["versions"]["review_contract"],
+                "findings_count": len(findings),
+                "findings_digest": digest_json(findings),
+                "worker_clean": None,
+                "worker_tests_passed": None,
+                "worker_dispositions_count": None,
+                "worker_findings_digest": None,
+                "worker_dispositions_digest": None,
+            }
+            transition_state(state, "final-worker-repair")
+        else:
+            transition_state(state, "worker-repair")
         return
     items = list(non_blocking_items or [])
     review["pass_identity"] = {
@@ -1902,6 +2308,74 @@ def _require_pending_github_intent(
     return pending
 
 
+def preflight_mark_ready(state: Mapping[str, Any], *, head_sha: str) -> dict[str, bool]:
+    """Authorize the exact ready transition before any connector mutation."""
+    phase = state.get("phase")
+    if phase not in {"pass-follow-up", "draft-pr", "worker-repair"}:
+        raise TransitionError("PR readiness is not expected from the current phase")
+    task = state.get("task")
+    review = state.get("review")
+    activation = state.get("activation")
+    if not isinstance(task, Mapping) or not isinstance(review, Mapping) or not isinstance(activation, Mapping):
+        raise ValidationError("active task/review/activation is missing")
+    if task.get("active_role") is not None:
+        raise TransitionError("Worker handoff is not complete")
+    if activation.get("allowed_operations", {}).get("mark_ready_for_review") is not True:
+        raise ScopeError("ready-for-review transition was not authorized")
+    head = require_full_sha(head_sha, "ready head_sha")
+    if task.get("candidate_sha") != head:
+        raise ScopeError("ready target differs from the current candidate")
+    pass_identity = review.get("pass_identity")
+    exhaustion = review.get("exhaustion")
+    initial_pass = (
+        review.get("last_result") == "PASS"
+        and isinstance(pass_identity, Mapping)
+        and pass_identity.get("candidate_sha") == head
+        and pass_identity.get("stage") == "initial"
+    )
+    if initial_pass and (
+        review.get("archived_supervisor_count") != review.get("round")
+        or review.get("unarchived_supervisor_thread_ids")
+    ):
+        raise GuardError("initial PASS Supervisor must be archived before marking ready")
+    exhausted_final = (
+        isinstance(exhaustion, Mapping)
+        and exhaustion.get("outcome") == "REVIEW_BUDGET_EXHAUSTED"
+        and exhaustion.get("final_candidate_sha") == head
+        and exhaustion.get("worker_dispositions_count") == exhaustion.get("findings_count")
+        and exhaustion.get("worker_clean") is True
+        and exhaustion.get("worker_tests_passed") is True
+        and review.get("archived_supervisor_count") == review.get("round")
+        and not review.get("unarchived_supervisor_thread_ids")
+    )
+    final_slot_ready = (
+        phase in {"draft-pr", "worker-repair"}
+        and activation.get("legacy_unbounded_review") is not True
+        and exhaustion is None
+        and review.get("round") == activation["review_policy_snapshot"]["max_supervisor_cycles"] - 1
+        and review.get("archived_supervisor_count") == review.get("round")
+        and not review.get("unarchived_supervisor_thread_ids")
+    )
+    if phase == "pass-follow-up" and not initial_pass:
+        raise GuardError("ready transition requires an unchanged initial Supervisor PASS")
+    if (
+        phase == "pass-follow-up"
+        and initial_pass
+        and activation.get("legacy_unbounded_review") is not True
+        and review.get("round") >= activation["review_policy_snapshot"]["max_supervisor_cycles"]
+    ):
+        raise GuardError(
+            "last-slot draft PASS cannot be promoted to a final Supervisor PASS; block without merging"
+        )
+    if phase in {"draft-pr", "worker-repair"} and not (exhausted_final or final_slot_ready):
+        raise GuardError("ready transition requires finalized exhausted-review evidence or a reserved final Supervisor slot")
+    return {
+        "initial_pass": initial_pass,
+        "exhausted_final": exhausted_final,
+        "final_slot_ready": final_slot_ready,
+    }
+
+
 def begin_github_mutation_intent(
     state: MutableMapping[str, Any],
     *,
@@ -1937,18 +2411,23 @@ def begin_github_mutation_intent(
     phase = state.get("phase")
     expected_phases = {
         "create-draft-pr": "worker-running",
-        "mark-ready": "pass-follow-up",
+        "mark-ready": {"pass-follow-up", "draft-pr", "worker-repair"},
         "merge-pr": "pre-merge",
         "close-issue": "closing-issue",
         "delete-remote-branch": "cleanup",
     }
-    if phase != expected_phases[operation]:
+    allowed_phases = expected_phases[operation]
+    if isinstance(allowed_phases, str):
+        allowed_phases = {allowed_phases}
+    if phase not in allowed_phases:
         raise TransitionError(f"{operation} is not permitted from phase {phase}")
     if operation in {"create-draft-pr", "mark-ready", "merge-pr"}:
         _validate_exact_pr_identity(state, target)
         if operation != "create-draft-pr":
             if target.get("pr_number") != task.get("pr_number") or target.get("pr_url") != task.get("pr_url"):
                 raise ScopeError("GitHub mutation PR differs from the active task")
+        if operation == "mark-ready":
+            preflight_mark_ready(state, head_sha=str(target.get("head_sha", "")))
         if operation == "merge-pr":
             assert_premerge_gates(state, target)
     elif operation == "close-issue":
@@ -2087,16 +2566,10 @@ def record_pr_ready(
     head_sha: str,
 ) -> None:
     _require_pending_github_intent(state, intent_key=intent_key, operation="mark-ready")
-    if state.get("phase") != "pass-follow-up":
-        raise TransitionError("PR readiness is expected only after initial PASS follow-up")
     task = state.get("task")
     review = state.get("review")
     if not isinstance(task, MutableMapping) or not isinstance(review, MutableMapping):
         raise ValidationError("active task/review is missing")
-    if task.get("active_role") is not None:
-        raise TransitionError("Worker PASS follow-up handoff is not complete")
-    if state["activation"]["allowed_operations"].get("mark_ready_for_review") is not True:
-        raise ScopeError("ready-for-review transition was not authorized")
     assert_repository_target(
         state["activation"]["repository"],
         repository,
@@ -2122,17 +2595,92 @@ def record_pr_ready(
     if draft is not False:
         raise GuardError("ready receipt requires connector read-back proving draft=false")
     head = require_full_sha(head_sha, "ready head_sha")
-    pass_identity = review.get("pass_identity")
-    if (
-        review.get("last_result") != "PASS"
-        or not isinstance(pass_identity, Mapping)
-        or pass_identity.get("candidate_sha") != head
-        or pass_identity.get("stage") != "initial"
-        or task.get("candidate_sha") != head
-    ):
-        raise GuardError("ready transition requires an unchanged initial Supervisor PASS")
+    eligibility = preflight_mark_ready(state, head_sha=head)
     task["pr_ready"] = True
+    if eligibility["exhausted_final"]:
+        task["active_role"] = "worker"
     transition_state(state, "ready")
+
+
+
+def record_worker_final_dispositions(
+    state: MutableMapping[str, Any],
+    *,
+    worker_thread_id: str,
+    head_sha: str,
+    clean: bool,
+    tests_passed: bool,
+    dispositions: Sequence[Mapping[str, Any]],
+) -> None:
+    if state.get("phase") != "final-worker-repair":
+        raise TransitionError("final Worker dispositions are expected only after review budget exhaustion")
+    task = state.get("task")
+    review = state.get("review")
+    if not isinstance(task, MutableMapping) or not isinstance(review, MutableMapping):
+        raise ValidationError("active task/review is missing")
+    if task.get("active_role") != "worker" or worker_thread_id != task.get("worker_thread_id"):
+        raise ScopeError("final dispositions must come from the same active Worker")
+    if not clean:
+        raise GuardError("Worker worktree must be clean after final repair")
+    if tests_passed is not True:
+        raise GuardError("required tests must pass after final repair")
+    head = require_full_sha(head_sha, "Worker final repair head")
+    exhaustion = review.get("exhaustion")
+    if not isinstance(exhaustion, MutableMapping) or exhaustion.get("outcome") != "REVIEW_BUDGET_EXHAUSTED":
+        raise GuardError("final dispositions require durable review-budget exhaustion")
+    normalized = list(dispositions)
+    if len(normalized) != exhaustion.get("findings_count"):
+        raise GuardError("Worker final dispositions must match exhausted findings")
+    for item in normalized:
+        if not isinstance(item, Mapping) or set(item) != {"finding", "disposition", "evidence"}:
+            raise ValidationError("each final disposition must bind finding, disposition, and evidence")
+        if item.get("disposition") not in {"FIXED", "REJECTED"} or not isinstance(item.get("evidence"), str) or not item.get("evidence"):
+            raise ValidationError("final dispositions must be FIXED or REJECTED with evidence")
+    if digest_json([item["finding"] for item in normalized]) != exhaustion.get("findings_digest"):
+        raise GuardError("Worker final dispositions must bind each exhausted finding exactly")
+    if review.get("archived_supervisor_count") != review.get("round") or review.get("unarchived_supervisor_thread_ids"):
+        raise GuardError("budget-exhausting Supervisor must be archived before final Worker handoff")
+    if exhaustion.get("reviewed_candidate_sha") != task.get("candidate_sha"):
+        raise GuardError("final Worker handoff no longer matches the exhausted review candidate")
+    task["candidate_sha"] = head
+    exhaustion["final_candidate_sha"] = head
+    exhaustion["provisional_candidate_sha"] = None
+    exhaustion["worker_clean"] = True
+    exhaustion["worker_tests_passed"] = True
+    exhaustion["worker_dispositions_count"] = len(normalized)
+    exhaustion["worker_findings_digest"] = digest_json([item["finding"] for item in normalized])
+    exhaustion["worker_dispositions_digest"] = digest_json(normalized)
+    if task.get("pr_ready") is True:
+        task["active_role"] = None
+        transition_state(state, "ready")
+    else:
+        task["active_role"] = None
+        transition_state(state, "draft-pr")
+
+
+def begin_worker_merge_readiness(state: MutableMapping[str, Any]) -> None:
+    """Reactivate the same Worker after an exhausted ready-stage repair was pushed."""
+    if state.get("phase") != "ready":
+        raise TransitionError("Worker merge-readiness can begin only for a ready PR")
+    task = state.get("task")
+    review = state.get("review")
+    if not isinstance(task, MutableMapping) or not isinstance(review, Mapping):
+        raise ValidationError("active task/review is missing")
+    if task.get("active_role") is not None:
+        raise TransitionError("another role turn is already active")
+    exhaustion = review.get("exhaustion")
+    if not (
+        isinstance(exhaustion, Mapping)
+        and exhaustion.get("outcome") == "REVIEW_BUDGET_EXHAUSTED"
+        and exhaustion.get("final_candidate_sha") == task.get("candidate_sha")
+        and exhaustion.get("worker_dispositions_count") == exhaustion.get("findings_count")
+        and exhaustion.get("worker_clean") is True
+        and exhaustion.get("worker_tests_passed") is True
+        and review.get("archived_supervisor_count") == review.get("round")
+        and not review.get("unarchived_supervisor_thread_ids")
+    ):
+        raise GuardError("Worker merge-readiness requires finalized exhausted-review evidence")
+    task["active_role"] = "worker"
 
 
 def record_worker_ready_to_merge(
@@ -2154,14 +2702,27 @@ def record_worker_ready_to_merge(
         raise GuardError("Worker worktree must be clean for merge-readiness")
     head = require_full_sha(head_sha, "Worker READY_TO_MERGE head")
     pass_identity = review.get("pass_identity")
-    if (
-        review.get("last_result") != "PASS"
-        or not isinstance(pass_identity, Mapping)
-        or pass_identity.get("stage") != "final"
-        or pass_identity.get("candidate_sha") != head
-        or task.get("candidate_sha") != head
-    ):
-        raise GuardError("Worker readiness requires an unchanged final Supervisor PASS")
+    exhaustion = review.get("exhaustion")
+    exhausted_final = (
+        isinstance(exhaustion, Mapping)
+        and exhaustion.get("outcome") == "REVIEW_BUDGET_EXHAUSTED"
+        and exhaustion.get("final_candidate_sha") == head
+        and exhaustion.get("worker_dispositions_count") == exhaustion.get("findings_count")
+        and exhaustion.get("worker_clean") is True
+        and exhaustion.get("worker_tests_passed") is True
+        and review.get("archived_supervisor_count") == review.get("round")
+        and not review.get("unarchived_supervisor_thread_ids")
+    )
+    final_pass = (
+        review.get("last_result") == "PASS"
+        and isinstance(pass_identity, Mapping)
+        and pass_identity.get("stage") == "final"
+        and pass_identity.get("candidate_sha") == head
+        and review.get("archived_supervisor_count") == review.get("round")
+        and not review.get("unarchived_supervisor_thread_ids")
+    )
+    if task.get("candidate_sha") != head or not (final_pass or exhausted_final):
+        raise GuardError("Worker readiness requires an unchanged final Supervisor PASS or exhausted review budget")
     task["worker_ready_to_merge"] = True
     task["active_role"] = None
     transition_state(state, "pre-merge")
@@ -2472,11 +3033,26 @@ def verify_premerge_gates(state: Mapping[str, Any], live: Mapping[str, Any]) -> 
         errors.append("state phase is not pre-merge")
     if task.get("worker_ready_to_merge") is not True:
         errors.append("Worker did not return durable READY_TO_MERGE")
+    if review.get("archived_supervisor_count") != review.get("round") or review.get("unarchived_supervisor_thread_ids"):
+        errors.append("every Supervisor must be archived before merge")
     if activation.get("allowed_operations", {}).get("merge_commit_after_all_gates") is not True:
         errors.append("merge operation was not authorized")
     pass_identity = review.get("pass_identity")
+    exhaustion = review.get("exhaustion")
+    exhausted_final = (
+        isinstance(exhaustion, Mapping)
+        and exhaustion.get("outcome") == "REVIEW_BUDGET_EXHAUSTED"
+        and exhaustion.get("final_candidate_sha") == task.get("candidate_sha")
+        and exhaustion.get("round") == activation.get("review_policy_snapshot", {}).get("max_supervisor_cycles")
+        and exhaustion.get("worker_dispositions_count") == exhaustion.get("findings_count")
+        and exhaustion.get("worker_clean") is True
+        and exhaustion.get("worker_tests_passed") is True
+        and review.get("archived_supervisor_count") == review.get("round")
+        and not review.get("unarchived_supervisor_thread_ids")
+    )
     if review.get("last_result") != "PASS" or not isinstance(pass_identity, Mapping):
-        errors.append("latest fresh Supervisor result is not PASS")
+        if not exhausted_final:
+            errors.append("latest fresh Supervisor result is not PASS and review budget was not exhausted with Worker finalization")
     candidate = task.get("candidate_sha")
     if live.get("head_sha") != candidate:
         errors.append("PR head differs from the active candidate")
@@ -2500,7 +3076,7 @@ def verify_premerge_gates(state: Mapping[str, Any], live: Mapping[str, Any]) -> 
         errors.append("merge method must be merge")
     if state.get("maintenance", {}).get("requested"):
         errors.append("maintenance is pending")
-    if not isinstance(pass_identity, Mapping) or pass_identity.get("stage") != "final":
+    if not exhausted_final and (not isinstance(pass_identity, Mapping) or pass_identity.get("stage") != "final"):
         errors.append("latest Supervisor PASS is not the fresh post-ready review")
     return errors
 
@@ -2516,6 +3092,8 @@ def request_maintenance(state: MutableMapping[str, Any], reason: str) -> None:
         raise TransitionError("maintenance cannot be requested from this phase")
     if not isinstance(reason, str) or not reason.strip():
         raise ValidationError("maintenance reason is required")
+    if state.get("review", {}).get("supervisor_creation_intent") is not None:
+        raise MailboxError("reconcile pending Supervisor creation before maintenance")
     previous = state["phase"]
     maintenance = state["maintenance"]
     maintenance.update(
@@ -2550,12 +3128,18 @@ def drain_worker_for_maintenance(
         if candidate != task.get("candidate_sha"):
             if state["maintenance"].get("previous_phase") == "ready":
                 raise GuardError("a ready candidate cannot change during maintenance drain")
-            task["candidate_sha"] = candidate
-            state["review"]["pass_identity"] = None
-            state["review"]["last_result"] = None
-            task["worker_ready_to_merge"] = False
-            if state["maintenance"].get("previous_phase") == "pass-follow-up":
-                state["maintenance"]["previous_phase"] = "worker-repair"
+            if state["maintenance"].get("previous_phase") == "final-worker-repair":
+                exhaustion = state["review"].get("exhaustion")
+                if not isinstance(exhaustion, MutableMapping):
+                    raise GuardError("final repair maintenance drain requires exhaustion evidence")
+                exhaustion["provisional_candidate_sha"] = candidate
+            else:
+                task["candidate_sha"] = candidate
+                state["review"]["pass_identity"] = None
+                state["review"]["last_result"] = None
+                task["worker_ready_to_merge"] = False
+                if state["maintenance"].get("previous_phase") == "pass-follow-up":
+                    state["maintenance"]["previous_phase"] = "worker-repair"
     task["active_role"] = None
     state["maintenance"]["resume_worker"] = True
     transition_state(state, "maintenance-draining")
@@ -2611,6 +3195,8 @@ def create_maintenance_checkpoint(
         raise MailboxError("reconcile pending mutation receipts before maintenance checkpoint")
     if state.get("github_mutations", {}).get("pending") is not None:
         raise MailboxError("reconcile pending GitHub mutation before maintenance checkpoint")
+    if state.get("review", {}).get("supervisor_creation_intent") is not None:
+        raise MailboxError("reconcile pending Supervisor creation before maintenance checkpoint")
     if state.get("phase") == "maintenance-requested":
         transition_state(state, "maintenance-draining")
     maintenance = state["maintenance"]
@@ -2705,6 +3291,8 @@ def resume_maintenance(
             raise MailboxError("reconcile pending mutation receipts before maintenance resume")
         if state.get("github_mutations", {}).get("pending") is not None:
             raise MailboxError("reconcile pending GitHub mutation before maintenance resume")
+        if state.get("review", {}).get("supervisor_creation_intent") is not None:
+            raise MailboxError("reconcile pending Supervisor creation before maintenance resume")
         repo = state["activation"]["repository"]
         assert_repository_target(repo, repository_identity.owner_name, target_repository_id=repository_identity.repository_id)
         if repo.get("git_common_dir_fingerprint") != repository_identity.git_common_dir_fingerprint:
@@ -2755,6 +3343,10 @@ def resume_maintenance(
             or not candidate_identity_certain
             or (digest_changed and not documentation_only_verified)
         ):
+            if state["review"].get("exhaustion") is not None:
+                raise GuardError(
+                    "material maintenance change invalidates review-budget exhaustion; start a new activation"
+                )
             state["review"]["pass_identity"] = None
             state["review"]["last_result"] = None
         state["versions"] = dict(current_versions)
@@ -2770,6 +3362,9 @@ def resume_maintenance(
             orchestrator_creation_receipt=state["activation"]["orchestrator_creation_receipt"],
             role_model_snapshot=state["activation"]["role_model_snapshot"],
             role_model_snapshot_digest=state["activation"]["role_model_snapshot_digest"],
+            review_policy_snapshot=state["activation"]["review_policy_snapshot"],
+            review_policy_snapshot_digest=state["activation"]["review_policy_snapshot_digest"],
+            legacy_unbounded_review=state["activation"]["legacy_unbounded_review"],
             protocol_version=str(state["versions"]["protocol"]),
             policy_version=str(state["versions"]["policy"]),
         )
@@ -2796,6 +3391,7 @@ def resume_maintenance(
             if not isinstance(task, MutableMapping) or restored not in {
                 "worker-running",
                 "worker-repair",
+                "final-worker-repair",
                 "pass-follow-up",
                 "ready",
             }:
@@ -2959,7 +3555,7 @@ def _migrate_state_document(
             {
                 "schema": 4,
                 "protocol": PROTOCOL_VERSION,
-                "review_contract": REVIEW_CONTRACT_VERSION,
+                "review_contract": "3",
                 "policy": "3",
             }
         )
@@ -3001,8 +3597,8 @@ def _migrate_state_document(
             {
                 "schema": 5,
                 "protocol": PROTOCOL_VERSION,
-                "review_contract": REVIEW_CONTRACT_VERSION,
-                "policy": POLICY_VERSION,
+                "review_contract": "3",
+                "policy": "4",
             }
         )
         result["activation"]["scope_digest"] = compute_scope_digest(
@@ -3017,7 +3613,7 @@ def _migrate_state_document(
             role_model_snapshot=legacy_snapshot,
             role_model_snapshot_digest=activation["role_model_snapshot_digest"],
             protocol_version=PROTOCOL_VERSION,
-            policy_version=POLICY_VERSION,
+            policy_version="4",
         )
         maintenance = result.get("maintenance", {})
         if result.get("phase") == "paused-maintenance":
@@ -3037,6 +3633,70 @@ def _migrate_state_document(
                 "migrated_at": utc_now(),
             }
         current = 5
+
+    if current == 5 and target_version >= 6:
+        activation = result.get("activation")
+        if not isinstance(activation, MutableMapping):
+            raise MigrationError("schema-5 activation identity is missing")
+        review = result.setdefault("review", {})
+        if not isinstance(review, MutableMapping):
+            raise MigrationError("schema-5 review history is missing")
+        predecessor = {
+            "versions": copy.deepcopy(dict(versions)),
+            "skill": copy.deepcopy(dict(result.get("skill", {}))),
+            "activation": copy.deepcopy(dict(activation)),
+            "review_summary": {
+                "round": review.get("round"),
+                "archived_supervisor_count": review.get("archived_supervisor_count"),
+                "archived_supervisor_digest": review.get("archived_supervisor_digest"),
+                "last_supervisor_created_at": review.get("last_supervisor_created_at"),
+            },
+        }
+        # A schema-5 activation had no review ceiling.  Preserve that behavior
+        # explicitly; 64 is only the validator's maximum for *new* activations.
+        legacy_unbounded = {"max_supervisor_cycles": 64}
+        activation.setdefault("review_policy_snapshot", legacy_unbounded)
+        activation.setdefault("review_policy_snapshot_digest", digest_json(legacy_unbounded))
+        activation["legacy_unbounded_review"] = True
+        activation["legacy_review_migration"] = {
+            "from_schema": 5,
+            "input_digest": digest_json(predecessor),
+            "predecessor": predecessor,
+        }
+        review.setdefault("exhaustion", None)
+        review.setdefault("supervisor_creation_intent", None)
+        versions.update(
+            {
+                "schema": 6,
+                "protocol": PROTOCOL_VERSION,
+                "review_contract": REVIEW_CONTRACT_VERSION,
+                "policy": POLICY_VERSION,
+            }
+        )
+        maintenance = result.get("maintenance")
+        if result.get("phase") == "paused-maintenance" and isinstance(maintenance, MutableMapping):
+            maintenance["stored_versions"] = copy.deepcopy(dict(versions))
+            receipt = maintenance.get("migration_receipt")
+            if isinstance(receipt, MutableMapping):
+                receipt["to_schema"] = 6
+        activation["scope_digest"] = compute_scope_digest(
+            activation["repository"],
+            activation.get("base_branch"),
+            activation.get("umbrella_issues", []),
+            activation.get("allowed_operations", {}),
+            result["skill"]["content_digest"],
+            owner_actor=activation.get("owner_actor", {}),
+            capability_preflight=activation.get("capability_preflight", {}),
+            orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
+            role_model_snapshot=activation.get("role_model_snapshot", {}),
+            role_model_snapshot_digest=activation.get("role_model_snapshot_digest"),
+            review_policy_snapshot=activation.get("review_policy_snapshot"),
+            review_policy_snapshot_digest=activation.get("review_policy_snapshot_digest"),
+            legacy_unbounded_review=activation.get("legacy_unbounded_review"),
+            policy_version=POLICY_VERSION,
+        )
+        current = 6
+
     if current != target_version:
         raise MigrationError(f"no supported migration from schema {current} to {target_version}")
     return result
@@ -4663,6 +5323,7 @@ def validate_mailbox_envelope(payload: Mapping[str, Any], state: Mapping[str, An
             "worker-running",
             "worker-repair",
             "pass-follow-up",
+            "final-worker-repair",
             "ready",
             "maintenance-requested",
         }:
@@ -4806,6 +5467,30 @@ def compact_completed_task(
     if not isinstance(task, Mapping):
         raise ValidationError("completed task is missing")
     merge = require_full_sha(merge_sha, "merge_sha")
+    review = state["review"]
+    pass_identity = review.get("pass_identity")
+    exhaustion = review.get("exhaustion")
+    if isinstance(pass_identity, Mapping) and pass_identity.get("stage") == "final":
+        terminal_review = {
+            "outcome": "FINAL_SUPERVISOR_PASS",
+            "round": pass_identity["review_round"],
+            "candidate_sha": pass_identity["candidate_sha"],
+            "review_contract": pass_identity["review_contract"],
+            "non_blocking_items_digest": digest_json(pass_identity["non_blocking_items"]),
+        }
+    elif isinstance(exhaustion, Mapping) and exhaustion.get("final_candidate_sha") is not None:
+        terminal_review = {
+            "outcome": "REVIEW_BUDGET_EXHAUSTED_WORKER_FINALIZED",
+            "round": exhaustion["round"],
+            "reviewed_candidate_sha": exhaustion["reviewed_candidate_sha"],
+            "candidate_sha": exhaustion["final_candidate_sha"],
+            "findings_digest": exhaustion["findings_digest"],
+            "worker_dispositions_digest": exhaustion["worker_dispositions_digest"],
+            "review_contract": exhaustion["review_contract"],
+            "installed_roundlet_digest": exhaustion["installed_roundlet_digest"],
+        }
+    else:
+        raise GuardError("completed task has no durable terminal review outcome")
     state.setdefault("completed_tasks", []).append(
         {
             "umbrella_issue": task["umbrella_issue"],
@@ -4814,6 +5499,7 @@ def compact_completed_task(
             "pr_url": pr_url,
             "merge_sha": merge,
             "review_rounds": state["review"]["round"],
+            "terminal_review": terminal_review,
             "completed_at": completed_at or utc_now(),
             "final_status": "merged",
         }
@@ -4831,6 +5517,8 @@ def compact_completed_task(
         "archived_supervisor_count": 0,
         "archived_supervisor_digest": "0" * 64,
         "last_supervisor_created_at": None,
+        "exhaustion": None,
+        "supervisor_creation_intent": None,
     }
     receipts = state.get("receipts", {})
     if any(receipt.get("status") != "complete" for receipt in receipts.values()):
@@ -4896,6 +5584,7 @@ def compact_scope(
             "archived_supervisor_count": 0,
             "archived_supervisor_digest": "0" * 64,
             "last_supervisor_created_at": None,
+            "exhaustion": None,
         },
         "receipts": {},
         "github_mutations": {"pending": None, "receipts": {}},
@@ -5052,7 +5741,14 @@ class GuardedGit:
         task = self.state.get("task")
         if not isinstance(task, Mapping):
             raise GuardError("no active task owns a branch")
-        if self.state.get("phase") not in {"worker-running", "worker-repair", "pass-follow-up"}:
+        if self.state.get("phase") not in {
+            "worker-running",
+            "worker-repair",
+            "final-worker-repair",
+            "pass-follow-up",
+            "draft-pr",
+            "ready",
+        }:
             raise GuardError("task push is not allowed in the current phase")
         if self.state.get("maintenance", {}).get("requested"):
             raise GuardError("task push is forbidden while maintenance is pending")

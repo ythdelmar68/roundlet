@@ -77,7 +77,7 @@ def identity(*, base: str = "main", digest_root: str = "/repo/.git") -> rs.Repos
 
 
 def role_receipt(role, thread_id, *, created_at="2026-07-14T00:00:00Z", parent="orchestrator-1"):
-    model_profile = rs.load_role_model_config(SKILL_ROOT)["defaults"][role]
+    model_profile = rs.load_role_model_config(SKILL_ROOT)["defaults"]["roles"][role]
     profiles = {
         "orchestrator": (True, True, "workspace-write"),
         "worker": (True, False, "worktree-write"),
@@ -123,7 +123,16 @@ def downgrade_to_policy3(value):
         receipt.update(rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]["supervisor"])
     activation.pop("role_model_snapshot", None)
     activation.pop("role_model_snapshot_digest", None)
-    value["versions"].update({"schema": 4, "policy": "3"})
+    for key in (
+        "review_policy_snapshot",
+        "review_policy_snapshot_digest",
+        "legacy_unbounded_review",
+        "legacy_review_migration",
+    ):
+        activation.pop(key, None)
+    value["review"].pop("exhaustion", None)
+    value["review"].pop("supervisor_creation_intent", None)
+    value["versions"].update({"schema": 4, "review_contract": "3", "policy": "3"})
     refresh_policy3_scope(value)
 
 
@@ -375,8 +384,8 @@ def select_from_connector(value, snapshots, manifest):
     return rs.select_next_task(value, sealed)
 
 
-def assigned_state(*, umbrellas=None):
-    value = state(umbrellas=umbrellas)
+def assigned_state(*, umbrellas=None, digest=DIGEST):
+    value = state(umbrellas=umbrellas, digest=digest)
     set_selection(value, umbrella=(umbrellas or [10])[0])
     rs.assign_task(
         value,
@@ -419,6 +428,8 @@ def begin_review(value, thread_id, *, final=False):
             "activation_id": value["activation"]["id"],
             "issue": value["task"]["issue"],
             "generation": generation,
+            "installed_roundlet_digest": value["skill"]["content_digest"],
+            "review_contract": value["versions"]["review_contract"],
             "created": True,
             "service_receipt": role_receipt(
                 "supervisor",
@@ -565,6 +576,61 @@ def set_operation(value, operation, enabled):
         orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
         role_model_snapshot=value["activation"]["role_model_snapshot"],
         role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
+        review_policy_snapshot=value["activation"]["review_policy_snapshot"],
+        review_policy_snapshot_digest=value["activation"]["review_policy_snapshot_digest"],
+        legacy_unbounded_review=value["activation"]["legacy_unbounded_review"],
+    )
+
+
+def set_review_budget(value, maximum, *, legacy_unbounded=False):
+    activation = value["activation"]
+    activation["review_policy_snapshot"] = {"max_supervisor_cycles": maximum}
+    activation["review_policy_snapshot_digest"] = rs.digest_json(
+        activation["review_policy_snapshot"]
+    )
+    activation["legacy_unbounded_review"] = legacy_unbounded
+    activation["scope_digest"] = rs.compute_scope_digest(
+        activation["repository"],
+        activation["base_branch"],
+        activation["umbrella_issues"],
+        activation["allowed_operations"],
+        value["skill"]["content_digest"],
+        owner_actor=activation["owner_actor"],
+        capability_preflight=activation["capability_preflight"],
+        orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+        role_model_snapshot=activation["role_model_snapshot"],
+        role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+        review_policy_snapshot=activation["review_policy_snapshot"],
+        review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+        legacy_unbounded_review=activation["legacy_unbounded_review"],
+    )
+
+
+def downgrade_to_schema5_unbounded(value):
+    value["versions"].update({"schema": 5, "protocol": "3", "review_contract": "3", "policy": "4"})
+    activation = value["activation"]
+    for key in (
+        "review_policy_snapshot",
+        "review_policy_snapshot_digest",
+        "legacy_unbounded_review",
+        "legacy_review_migration",
+    ):
+        activation.pop(key, None)
+    value["review"].pop("exhaustion", None)
+    value["review"].pop("supervisor_creation_intent", None)
+    activation["scope_digest"] = rs.compute_scope_digest(
+        activation["repository"],
+        activation["base_branch"],
+        activation["umbrella_issues"],
+        activation["allowed_operations"],
+        value["skill"]["content_digest"],
+        owner_actor=activation["owner_actor"],
+        capability_preflight=activation["capability_preflight"],
+        orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+        role_model_snapshot=activation["role_model_snapshot"],
+        role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+        protocol_version="3",
+        policy_version="4",
     )
 
 
@@ -918,6 +984,36 @@ class StateMachineTests(unittest.TestCase):
         with self.assertRaises(rs.GuardError):
             record_close(value, issue_state="open")
 
+    def test_mark_ready_preflight_blocks_connector_before_side_effect(self):
+        draft = assigned_state()
+        rs.set_candidate(draft, SHA_B, clean=True)
+        record_draft(draft)
+        active_repair = copy.deepcopy(draft)
+        active_repair["phase"] = "worker-repair"
+        active_repair["task"]["active_role"] = "worker"
+        for label, value in (("premature-draft", draft), ("active-worker", active_repair)):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                store = rs.StateStore(temporary)
+                store.initialize(value)
+                target = {
+                    **pr_identity(value),
+                    "pr_number": 22,
+                    "pr_url": "https://github.com/owner/project/pull/22",
+                    "pr_state": "open",
+                    "draft": False,
+                }
+                calls = []
+                with self.assertRaises((rs.GuardError, rs.TransitionError)):
+                    rs.execute_github_mutation(
+                        store,
+                        operation="mark-ready",
+                        idempotency_key=f"mark-ready-{label}",
+                        target=target,
+                        mutate=lambda item: calls.append(item) or target,
+                    )
+                self.assertEqual(calls, [])
+                self.assertIsNone(store.load()["github_mutations"]["pending"])
+
     def test_premerge_cannot_enter_merging_without_gateway_intent(self):
         value = premerge_state()
         with self.assertRaises(rs.TransitionError):
@@ -1095,6 +1191,8 @@ class StateMachineTests(unittest.TestCase):
                             "activation_id": candidate["activation"]["id"],
                             "issue": 11,
                             "generation": 1,
+                            "installed_roundlet_digest": value["skill"]["content_digest"],
+                            "review_contract": value["versions"]["review_contract"],
                             "created": True,
                             "service_receipt": service,
                         },
@@ -1147,12 +1245,245 @@ class StateMachineTests(unittest.TestCase):
         with self.assertRaises(rs.ValidationError):
             begin_review(value, "supervisor-1")
 
-    def test_review_history_stays_bounded_across_two_hundred_fresh_rounds(self):
+    def test_review_budget_exhaustion_requires_worker_finalization(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
+        value["task"]["pr_ready"] = True
+        value["phase"] = "ready"
+        begin_review(value, "supervisor-budget", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-budget",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fix this"],
+        )
+        self.assertEqual(value["phase"], "final-worker-repair")
+        rs.validate_mailbox_envelope(
+            {
+                "protocol_version": value["versions"]["protocol"],
+                "review_contract_version": value["versions"]["review_contract"],
+                "activation_id": value["activation"]["id"],
+                "repository": "owner/project",
+                "repository_id": 123,
+                "selected_issue": 11,
+                "source_role": "worker",
+                "source_thread_id": "worker-11",
+                "phase": "final-worker-repair",
+                "base_sha": SHA_A,
+                "candidate_sha": SHA_C,
+                "idempotency_key": "final-worker-0001",
+                "timestamp": "2026-07-14T00:00:01Z",
+            },
+            value,
+            "worker-handoff",
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+        value["task"]["active_role"] = None
+        value["phase"] = "draft-pr"
+        with self.assertRaises((rs.GuardError, rs.TransitionError)):
+            begin_review(value, "supervisor-too-many")
+        value["phase"] = "final-worker-repair"
+        value["task"]["active_role"] = "worker"
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_C,
+            clean=True,
+            tests_passed=True,
+            dispositions=[{"finding": "fix this", "disposition": "FIXED", "evidence": "test"}],
+        )
+        self.assertEqual(value["review"]["exhaustion"]["reviewed_candidate_sha"], SHA_B)
+        self.assertEqual(value["review"]["exhaustion"]["final_candidate_sha"], SHA_C)
+        self.assertEqual(value["task"]["candidate_sha"], SHA_C)
+        self.assertEqual(value["phase"], "ready")
+        rs.begin_worker_merge_readiness(value)
+        rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_C, clean=True)
+        self.assertEqual(value["phase"], "pre-merge")
+        self.assertEqual(rs.verify_premerge_gates(value, premerge_live(value)), [])
+
+    def test_supervisor_budget_preflight_blocks_creation_callback(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["phase"] = "draft-pr"
+        value["review"].update(
+            {
+                "round": 1,
+                "archived_supervisor_count": 1,
+                "last_supervisor_created_at": "2026-07-14T00:00:00.000001Z",
+            }
+        )
+        calls = []
+        with self.assertRaises(rs.GuardError):
+            rs.create_supervisor_after_preflight(
+                value,
+                final=False,
+                create_task=lambda preflight: calls.append(preflight) or {},
+            )
+        self.assertEqual(calls, [])
+
+    def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
-        value["task"]["pr_number"] = 22
         value["phase"] = "draft-pr"
-        for review_round in range(1, 201):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            creations = []
+            with self.assertRaises(rs.ValidationError):
+                rs.create_supervisor_after_preflight(
+                    value,
+                    final=False,
+                    state_store=store,
+                    create_task=lambda intent: creations.append(intent) or {},
+                )
+            durable = store.load()
+            self.assertIsNotNone(durable["review"]["supervisor_creation_intent"])
+            self.assertEqual(len(creations), 1)
+            rs.create_supervisor_after_preflight(
+                value,
+                final=False,
+                state_store=store,
+                create_task=lambda intent: self.fail("must reconcile instead of creating twice"),
+                reconcile_task=lambda intent: {
+                    "thread_id": "supervisor-reconciled",
+                    "creation_receipt": {
+                        "activation_id": intent["activation_id"],
+                        "issue": intent["issue"],
+                        "generation": intent["generation"],
+                        "installed_roundlet_digest": intent["installed_roundlet_digest"],
+                        "review_contract": intent["review_contract"],
+                        "created": True,
+                        "service_receipt": role_receipt(
+                            "supervisor", "supervisor-reconciled", created_at="2026-07-14T00:00:00.000001Z"
+                        ),
+                    },
+                },
+            )
+            self.assertEqual(len(creations), 1)
+            self.assertEqual(store.load()["review"]["round"], 1)
+
+    def test_exhausted_findings_require_exact_identity_and_archival(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
+        value["task"]["pr_ready"] = True
+        value["phase"] = "ready"
+        begin_review(value, "supervisor-budget", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-budget",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["real finding"],
+        )
+        with self.assertRaisesRegex(rs.GuardError, "archived"):
+            rs.record_worker_final_dispositions(
+                value,
+                worker_thread_id="worker-11",
+                head_sha=SHA_C,
+                clean=True,
+                tests_passed=True,
+                dispositions=[{"finding": "real finding", "disposition": "FIXED", "evidence": "test"}],
+            )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+        with self.assertRaisesRegex(rs.GuardError, "tests"):
+            rs.record_worker_final_dispositions(
+                value,
+                worker_thread_id="worker-11",
+                head_sha=SHA_C,
+                clean=True,
+                tests_passed=False,
+                dispositions=[{"finding": "real finding", "disposition": "FIXED", "evidence": "test"}],
+            )
+        with self.assertRaisesRegex(rs.GuardError, "bind each exhausted finding"):
+            rs.record_worker_final_dispositions(
+                value,
+                worker_thread_id="worker-11",
+                head_sha=SHA_C,
+                clean=True,
+                tests_passed=True,
+                dispositions=[{"finding": "different arbitrary finding", "disposition": "FIXED", "evidence": "test"}],
+            )
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_C,
+            clean=True,
+            tests_passed=True,
+            dispositions=[{"finding": "real finding", "disposition": "FIXED", "evidence": "test"}],
+        )
+        tampered = copy.deepcopy(value)
+        tampered["review"]["exhaustion"]["worker_findings_digest"] = "0" * 64
+        with self.assertRaisesRegex(rs.ValidationError, "finding identities"):
+            rs.validate_state(tampered)
+
+    def test_ready_stage_exhaustion_accepts_repaired_head(self):
+        value = assigned_state()
+        set_review_budget(value, 2)
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        begin_review(value, "supervisor-initial")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-initial",
+            candidate_sha=SHA_B,
+            result="PASS",
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-initial")
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_ready(value)
+        begin_review(value, "supervisor-final", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-final",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["ready-stage finding"],
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-final")
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_C,
+            clean=True,
+            tests_passed=True,
+            dispositions=[{"finding": "ready-stage finding", "disposition": "FIXED", "evidence": "test"}],
+        )
+        self.assertEqual(value["phase"], "ready")
+        self.assertIsNone(value["task"]["active_role"])
+        rs.begin_worker_merge_readiness(value)
+        rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_C, clean=True)
+        self.assertEqual(value["phase"], "pre-merge")
+
+    def test_max_one_reserves_a_real_final_supervisor_after_ready_readback(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        record_ready(value)
+        begin_review(value, "supervisor-only", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-only",
+            candidate_sha=SHA_B,
+            result="PASS",
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-only")
+        self.assertEqual(value["review"]["pass_identity"]["stage"], "final")
+        self.assertEqual(value["task"]["active_role"], "worker")
+        rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_B, clean=True)
+        self.assertEqual(value["phase"], "pre-merge")
+
+    def test_default_budget_reserves_round_five_for_a_real_final_review(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for review_round in range(1, 5):
             thread_id = f"supervisor-{review_round}"
             begin_review(value, thread_id)
             rs.accept_supervisor_result(
@@ -1160,15 +1491,220 @@ class StateMachineTests(unittest.TestCase):
                 thread_id=thread_id,
                 candidate_sha=SHA_B,
                 result="FINDINGS",
+                non_blocking_items=[f"finding-{review_round}"],
             )
             rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
             rs.set_candidate(value, SHA_B, clean=True)
-        rs.validate_state(value)
-        self.assertEqual(value["review"]["round"], 200)
-        self.assertEqual(value["review"]["archived_supervisor_count"], 200)
-        self.assertLessEqual(len(value["review"]["supervisor_thread_ids"]), 64)
-        self.assertEqual(value["review"]["unarchived_supervisor_thread_ids"], [])
-        self.assertLess(len(rs.canonical_json(value).encode("utf-8")), rs.MAX_STATE_BYTES)
+        record_ready(value)
+        begin_review(value, "supervisor-5", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-5",
+            candidate_sha=SHA_B,
+            result="PASS",
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-5")
+        self.assertEqual(value["review"]["pass_identity"]["stage"], "final")
+        rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_B, clean=True)
+        self.assertEqual(value["phase"], "pre-merge")
+
+    def test_default_budget_allows_round_five_ready_findings(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for review_round in range(1, 5):
+            thread_id = f"supervisor-{review_round}"
+            begin_review(value, thread_id)
+            rs.accept_supervisor_result(
+                value,
+                thread_id=thread_id,
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=[f"finding-{review_round}"],
+            )
+            rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
+            rs.set_candidate(value, SHA_B, clean=True)
+        record_ready(value)
+        begin_review(value, "supervisor-5", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-5",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fifth ready finding"],
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-5")
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_C,
+            clean=True,
+            tests_passed=True,
+            dispositions=[
+                {
+                    "finding": "fifth ready finding",
+                    "disposition": "FIXED",
+                    "evidence": "regression test",
+                }
+            ],
+        )
+        self.assertEqual(value["phase"], "ready")
+        self.assertEqual(value["review"]["exhaustion"]["round"], 5)
+
+    def test_default_budget_allows_round_five_draft_findings_and_then_stops(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for review_round in range(1, 5):
+            thread_id = f"supervisor-{review_round}"
+            begin_review(value, thread_id)
+            rs.accept_supervisor_result(
+                value,
+                thread_id=thread_id,
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=[f"finding-{review_round}"],
+            )
+            rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
+            rs.set_candidate(value, SHA_B, clean=True)
+
+        begin_review(value, "supervisor-5")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-5",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fifth draft finding"],
+        )
+        self.assertEqual(value["phase"], "final-worker-repair")
+        self.assertEqual(value["review"]["exhaustion"]["round"], 5)
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-5")
+        denied = copy.deepcopy(value)
+        denied["task"]["active_role"] = None
+        denied["phase"] = "draft-pr"
+        with self.assertRaisesRegex(rs.GuardError, "budget is exhausted"):
+            rs.preflight_supervisor_creation(denied)
+
+    def test_last_slot_draft_pass_cannot_be_promoted_to_final_pass(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        begin_review(value, "supervisor-draft-only")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-draft-only",
+            candidate_sha=SHA_B,
+            result="PASS",
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-draft-only")
+        rs.set_candidate(value, SHA_B, clean=True)
+        with self.assertRaisesRegex(rs.GuardError, "cannot be promoted"):
+            rs.preflight_mark_ready(value, head_sha=SHA_B)
+
+    def test_legacy_review_history_stays_bounded_across_two_hundred_rounds(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"]["pr_number"] = 22
+        value["phase"] = "draft-pr"
+        downgrade_to_schema5_unbounded(value)
+        rs.request_maintenance(value, "schema-6 migration")
+        rs.create_maintenance_checkpoint(
+            value,
+            checkpoint_id="checkpoint-001",
+            schedule_id="schedule-1",
+            schedule_state="paused",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            rs.atomic_write_json(store.path, value)
+            value = store.migrate(
+                activation_id="activation-0001",
+                checkpoint_id="checkpoint-001",
+                schedule_id="schedule-1",
+                expected_installed_digest=DIGEST,
+                expected_from_schema=5,
+                skill_root=SKILL_ROOT,
+            )
+            rs.resume_maintenance(
+                value,
+                checkpoint_id="checkpoint-001",
+                installed_roundlet_digest=DIGEST,
+                current_versions=value["versions"],
+                repository_identity=identity(),
+                schedule_id="schedule-1",
+            )
+            for review_round in range(1, 201):
+                thread_id = f"supervisor-{review_round}"
+                begin_review(value, thread_id)
+                rs.accept_supervisor_result(
+                    value,
+                    thread_id=thread_id,
+                    candidate_sha=SHA_B,
+                    result="FINDINGS",
+                    non_blocking_items=[f"finding-{review_round}"],
+                )
+                rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
+                rs.set_candidate(value, SHA_B, clean=True)
+            store.save(value)
+            value = store.load()
+            rs.validate_state(value)
+            self.assertEqual(value["review"]["round"], 200)
+            self.assertEqual(value["review"]["archived_supervisor_count"], 200)
+            self.assertLessEqual(len(value["review"]["supervisor_thread_ids"]), 64)
+            self.assertEqual(value["review"]["unarchived_supervisor_thread_ids"], [])
+            self.assertLess(len(rs.canonical_json(value).encode("utf-8")), rs.MAX_STATE_BYTES)
+
+    def test_fresh_activation_cannot_select_legacy_unbounded_review(self):
+        value = assigned_state()
+        set_review_budget(value, 64, legacy_unbounded=True)
+        value["activation"]["legacy_review_migration"] = {
+            "from_schema": 5,
+            "input_digest": "0" * 64,
+        }
+        with self.assertRaisesRegex(rs.ScopeError, "durable StateStore migration gateway"):
+            rs.validate_state(value)
+
+    def test_fresh_activation_cannot_forge_a_complete_schema_five_predecessor(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        predecessor_state = copy.deepcopy(value)
+        downgrade_to_schema5_unbounded(predecessor_state)
+        predecessor = {
+            "versions": copy.deepcopy(predecessor_state["versions"]),
+            "skill": copy.deepcopy(predecessor_state["skill"]),
+            "activation": copy.deepcopy(predecessor_state["activation"]),
+            "review_summary": {
+                "round": predecessor_state["review"]["round"],
+                "archived_supervisor_count": predecessor_state["review"]["archived_supervisor_count"],
+                "archived_supervisor_digest": predecessor_state["review"]["archived_supervisor_digest"],
+                "last_supervisor_created_at": predecessor_state["review"]["last_supervisor_created_at"],
+            },
+        }
+        activation = value["activation"]
+        activation["legacy_unbounded_review"] = True
+        activation["legacy_review_migration"] = {
+            "from_schema": 5,
+            "input_digest": rs.digest_json(predecessor),
+            "predecessor": predecessor,
+        }
+        activation["scope_digest"] = rs.compute_scope_digest(
+            activation["repository"],
+            activation["base_branch"],
+            activation["umbrella_issues"],
+            activation["allowed_operations"],
+            value["skill"]["content_digest"],
+            owner_actor=activation["owner_actor"],
+            capability_preflight=activation["capability_preflight"],
+            orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+            role_model_snapshot=activation["role_model_snapshot"],
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+            review_policy_snapshot=activation["review_policy_snapshot"],
+            review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+            legacy_unbounded_review=True,
+        )
+        with self.assertRaisesRegex(rs.ScopeError, "durable StateStore migration gateway"):
+            rs.validate_state(value)
 
     def test_supervisor_creation_time_orders_whole_then_fractional_second(self):
         value = assigned_state()
@@ -1182,6 +1718,8 @@ class StateMachineTests(unittest.TestCase):
                 "activation_id": value["activation"]["id"],
                 "issue": 11,
                 "generation": 1,
+                "installed_roundlet_digest": value["skill"]["content_digest"],
+                "review_contract": value["versions"]["review_contract"],
                 "created": True,
                 "service_receipt": role_receipt(
                     "supervisor", "supervisor-whole", created_at="2026-07-14T00:00:00Z"
@@ -1203,6 +1741,8 @@ class StateMachineTests(unittest.TestCase):
                 "activation_id": value["activation"]["id"],
                 "issue": 11,
                 "generation": 2,
+                "installed_roundlet_digest": value["skill"]["content_digest"],
+                "review_contract": value["versions"]["review_contract"],
                 "created": True,
                 "service_receipt": role_receipt(
                     "supervisor", "supervisor-fractional", created_at="2026-07-14T00:00:00.1Z"
@@ -1315,6 +1855,114 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(value["phase"], "worker-running")
         self.assertEqual(value["task"]["active_role"], "worker")
 
+    def test_final_worker_repair_maintenance_round_trip_preserves_policy_scope(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
+        value["task"]["pr_ready"] = True
+        value["phase"] = "ready"
+        begin_review(value, "supervisor-budget", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-budget",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fix this"],
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+        rs.request_maintenance(value, "upgrade")
+        rs.drain_worker_for_maintenance(
+            value,
+            worker_thread_id="worker-11",
+            candidate_sha=SHA_C,
+            clean=True,
+        )
+        rs.create_maintenance_checkpoint(
+            value,
+            checkpoint_id="checkpoint-001",
+            schedule_id="schedule-1",
+            schedule_state="paused",
+        )
+        rs.resume_maintenance(
+            value,
+            checkpoint_id="checkpoint-001",
+            installed_roundlet_digest=value["skill"]["content_digest"],
+            current_versions=value["versions"],
+            repository_identity=identity(),
+            schedule_id="schedule-1",
+        )
+        self.assertEqual(value["phase"], "final-worker-repair")
+        self.assertEqual(value["task"]["active_role"], "worker")
+        self.assertEqual(value["task"]["candidate_sha"], SHA_B)
+        self.assertEqual(value["review"]["exhaustion"]["provisional_candidate_sha"], SHA_C)
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_C,
+            clean=True,
+            tests_passed=True,
+            dispositions=[{"finding": "fix this", "disposition": "FIXED", "evidence": "test"}],
+        )
+        self.assertEqual(value["review"]["exhaustion"]["final_candidate_sha"], SHA_C)
+        rs.validate_state(value)
+
+    def test_material_maintenance_cannot_preserve_exhausted_terminal_authority(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22", "pr_ready": True})
+        value["phase"] = "ready"
+        begin_review(value, "supervisor-budget", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-budget",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fix this"],
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+        rs.request_maintenance(value, "upgrade")
+        rs.drain_worker_for_maintenance(value, worker_thread_id="worker-11", candidate_sha=None, clean=True)
+        rs.create_maintenance_checkpoint(
+            value, checkpoint_id="checkpoint-001", schedule_id="schedule-1", schedule_state="paused"
+        )
+        for digest, versions in (
+            ("e" * 64, value["versions"]),
+            (value["skill"]["content_digest"], {**value["versions"], "review_contract": "999"}),
+        ):
+            paused = copy.deepcopy(value)
+            with self.subTest(digest=digest, versions=versions):
+                with self.assertRaisesRegex(rs.GuardError, "invalidates review-budget exhaustion"):
+                    rs.resume_maintenance(
+                        paused,
+                        checkpoint_id="checkpoint-001",
+                        installed_roundlet_digest=digest,
+                        current_versions=versions,
+                        repository_identity=identity(),
+                        schedule_id="schedule-1",
+                    )
+                self.assertEqual(paused["phase"], "paused-maintenance")
+                self.assertIsNotNone(paused["review"]["exhaustion"])
+
+    def test_current_state_rejects_legacy_unbound_scope_digest(self):
+        value = state()
+        activation = value["activation"]
+        activation["scope_digest"] = rs.compute_scope_digest(
+            activation["repository"],
+            activation["base_branch"],
+            activation["umbrella_issues"],
+            activation["allowed_operations"],
+            value["skill"]["content_digest"],
+            owner_actor=activation["owner_actor"],
+            capability_preflight=activation["capability_preflight"],
+            orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+            role_model_snapshot=activation["role_model_snapshot"],
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+        )
+        with self.assertRaisesRegex(rs.ScopeError, "scope digest"):
+            rs.validate_state(value)
+
     def test_invalidated_follow_up_resumes_at_fresh_review_boundary(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
@@ -1404,6 +2052,71 @@ class MaintenanceTests(unittest.TestCase):
                 schedule_id="schedule-1",
                 schedule_state="paused",
             )
+
+    def test_pending_supervisor_creation_cannot_cross_maintenance_or_upgrade(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["phase"] = "draft-pr"
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            with self.assertRaises(rs.ValidationError):
+                rs.create_supervisor_after_preflight(
+                    value,
+                    final=False,
+                    state_store=store,
+                    create_task=lambda intent: {},
+                )
+            pending = store.load()
+
+        with self.assertRaisesRegex(rs.MailboxError, "pending Supervisor creation"):
+            rs.request_maintenance(pending, "upgrade")
+
+        checkpoint = copy.deepcopy(pending)
+        checkpoint["phase"] = "maintenance-requested"
+        checkpoint["maintenance"].update(
+            {"requested": True, "previous_phase": "draft-pr", "reason": "upgrade"}
+        )
+        with self.assertRaisesRegex(rs.MailboxError, "pending Supervisor creation"):
+            rs.create_maintenance_checkpoint(
+                checkpoint,
+                checkpoint_id="checkpoint-001",
+                schedule_id="schedule-1",
+                schedule_state="paused",
+            )
+
+        paused = self._paused()
+        paused["review"]["supervisor_creation_intent"] = pending["review"]["supervisor_creation_intent"]
+        with self.assertRaisesRegex(rs.MailboxError, "pending Supervisor creation"):
+            rs.resume_maintenance(
+                paused,
+                checkpoint_id="checkpoint-001",
+                installed_roundlet_digest="e" * 64,
+                current_versions=paused["versions"],
+                repository_identity=identity(),
+                schedule_id="schedule-1",
+            )
+
+        upgraded = copy.deepcopy(pending)
+        upgraded["skill"]["content_digest"] = "e" * 64
+        activation = upgraded["activation"]
+        activation["scope_digest"] = rs.compute_scope_digest(
+            activation["repository"],
+            activation["base_branch"],
+            activation["umbrella_issues"],
+            activation["allowed_operations"],
+            upgraded["skill"]["content_digest"],
+            owner_actor=activation["owner_actor"],
+            capability_preflight=activation["capability_preflight"],
+            orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+            role_model_snapshot=activation["role_model_snapshot"],
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+            review_policy_snapshot=activation["review_policy_snapshot"],
+            review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+            legacy_unbounded_review=activation["legacy_unbounded_review"],
+        )
+        with self.assertRaisesRegex(rs.ValidationError, "creation intent identity is stale"):
+            rs.validate_state(upgraded)
 
     def _paused(self):
         value = assigned_state()
@@ -1577,6 +2290,80 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(migrated["completed_tasks"], [])
         self.assertEqual(migrated["skill"]["source_repository"], "ythdelmar68/roundlet")
 
+    def test_schema_five_migration_preserves_round_64_and_higher_as_unbounded(self):
+        for review_round in (64, 65, 200):
+            with self.subTest(review_round=review_round), tempfile.TemporaryDirectory() as temporary:
+                old = assigned_state()
+                rs.set_candidate(old, SHA_B, clean=True)
+                old["task"]["pr_number"] = 22
+                old["phase"] = "draft-pr"
+                downgrade_to_schema5_unbounded(old)
+                old["review"].update(
+                    {
+                        "round": review_round,
+                        "archived_supervisor_count": review_round,
+                        "last_supervisor_created_at": "2026-07-14T00:00:00.000001Z",
+                    }
+                )
+                rs.request_maintenance(old, "schema-6 migration")
+                rs.create_maintenance_checkpoint(
+                    old,
+                    checkpoint_id="checkpoint-001",
+                    schedule_id="schedule-1",
+                    schedule_state="paused",
+                )
+                store = rs.StateStore(temporary)
+                rs.atomic_write_json(store.path, old)
+                migrated = store.migrate(
+                    activation_id="activation-0001",
+                    checkpoint_id="checkpoint-001",
+                    schedule_id="schedule-1",
+                    expected_installed_digest=DIGEST,
+                    expected_from_schema=5,
+                    skill_root=SKILL_ROOT,
+                )
+                self.assertTrue(migrated["activation"]["legacy_unbounded_review"])
+                rs.validate_state(migrated)
+                rs.resume_maintenance(
+                    migrated,
+                    checkpoint_id="checkpoint-001",
+                    installed_roundlet_digest=DIGEST,
+                    current_versions=migrated["versions"],
+                    repository_identity=identity(),
+                    schedule_id="schedule-1",
+                )
+                self.assertEqual(
+                    rs.preflight_supervisor_creation(migrated)["generation"],
+                    review_round + 1,
+                )
+
+    def test_migrated_legacy_state_cannot_be_replayed_without_external_authority(self):
+        old = assigned_state()
+        old["task"]["active_role"] = None
+        downgrade_to_schema5_unbounded(old)
+        rs.request_maintenance(old, "schema-6 migration")
+        rs.create_maintenance_checkpoint(
+            old,
+            checkpoint_id="checkpoint-001",
+            schedule_id="schedule-1",
+            schedule_state="paused",
+        )
+        with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as replay:
+            source_store = rs.StateStore(source)
+            rs.atomic_write_json(source_store.path, old)
+            source_store.migrate(
+                activation_id="activation-0001",
+                checkpoint_id="checkpoint-001",
+                schedule_id="schedule-1",
+                expected_installed_digest=DIGEST,
+                expected_from_schema=5,
+                skill_root=SKILL_ROOT,
+            )
+            replay_store = rs.StateStore(replay)
+            replay_store.path.write_bytes(source_store.path.read_bytes())
+            with self.assertRaisesRegex(rs.ScopeError, "authority receipt"):
+                replay_store.load()
+
     def test_schema_migration_rejects_unverifiable_legacy_review_history(self):
         old = state()
         old["versions"]["schema"] = 1
@@ -1738,9 +2525,9 @@ class MaintenanceTests(unittest.TestCase):
 
             def mutate_after_load(skill_root):
                 loaded = original_loader(skill_root)
-                path = Path(skill_root) / "assets" / "role-models.json"
+                path = Path(skill_root) / "assets" / "roundlet-config.json"
                 config = json.loads(path.read_text())
-                config["defaults"]["worker"]["reasoning_effort"] = "low"
+                config["defaults"]["roles"]["worker"]["reasoning_effort"] = "low"
                 path.write_text(json.dumps(config))
                 return loaded
 
@@ -1831,7 +2618,7 @@ class MaintenanceTests(unittest.TestCase):
             with self.subTest(with_task=with_task), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary) / "roundlet"
                 shutil.copytree(SKILL_ROOT, root)
-                path = root / "assets" / "role-models.json"
+                path = root / "assets" / "roundlet-config.json"
                 config = json.loads(path.read_text())
                 config["legacy_profiles"]["policy_3"]["worker"]["reasoning_effort"] = "low"
                 path.write_text(json.dumps(config))
@@ -2905,10 +3692,9 @@ class PersistenceAndMailboxTests(unittest.TestCase):
 
 class CompactionTests(unittest.TestCase):
     def test_task_compaction_is_bounded(self):
-        value = assigned_state()
+        value = premerge_state()
         value["phase"] = "task-done"
         value["task"]["merge_sha"] = SHA_C
-        value["review"]["round"] = 4
         rs.compact_completed_task(
             value,
             issue_url="https://github.com/owner/project/issues/11",
@@ -2917,8 +3703,49 @@ class CompactionTests(unittest.TestCase):
             completed_at="2026-07-14T03:00:00Z",
         )
         self.assertIsNone(value["task"])
-        self.assertEqual(value["completed_tasks"][0]["review_rounds"], 4)
+        self.assertEqual(value["completed_tasks"][0]["review_rounds"], 2)
+        self.assertEqual(value["completed_tasks"][0]["terminal_review"]["outcome"], "FINAL_SUPERVISOR_PASS")
+        self.assertEqual(value["completed_tasks"][0]["terminal_review"]["round"], 2)
         self.assertNotIn("changed_files", value["completed_tasks"][0])
+
+    def test_task_compaction_retains_exhausted_worker_finalized_outcome(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22", "pr_ready": True})
+        value["phase"] = "ready"
+        begin_review(value, "supervisor-budget", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-budget",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fix this"],
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_C,
+            clean=True,
+            tests_passed=True,
+            dispositions=[{"finding": "fix this", "disposition": "FIXED", "evidence": "test"}],
+        )
+        rs.begin_worker_merge_readiness(value)
+        rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_C, clean=True)
+        value["phase"] = "task-done"
+        value["task"]["merge_sha"] = SHA_D
+        rs.compact_completed_task(
+            value,
+            issue_url="https://github.com/owner/project/issues/11",
+            pr_url="https://github.com/owner/project/pull/22",
+            merge_sha=SHA_D,
+            completed_at="2026-07-14T03:00:00Z",
+        )
+        terminal = value["completed_tasks"][0]["terminal_review"]
+        self.assertEqual(terminal["outcome"], "REVIEW_BUDGET_EXHAUSTED_WORKER_FINALIZED")
+        self.assertEqual(terminal["reviewed_candidate_sha"], SHA_B)
+        self.assertEqual(terminal["candidate_sha"], SHA_C)
 
     def test_scope_compaction_writes_one_summary(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -2950,36 +3777,56 @@ class RoleModelConfigTests(unittest.TestCase):
     def test_config_rejects_missing_unknown_or_invalid_role_values(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = self.copy_skill(temporary)
-            path = root / "assets" / "role-models.json"
+            path = root / "assets" / "roundlet-config.json"
             path.unlink()
             with self.assertRaisesRegex(rs.ValidationError, "missing"):
                 rs.load_role_model_config(root)
         for mutation in (
             lambda value: value.update({"unknown": True}),
-            lambda value: value["defaults"].pop("worker"),
-            lambda value: value["defaults"]["worker"].update({"model": "bad model"}),
-            lambda value: value["defaults"]["worker"].update({"reasoning_effort": "soft"}),
-            lambda value: value.update({"schema_version": 2}),
+            lambda value: value["defaults"]["roles"].pop("worker"),
+            lambda value: value["defaults"]["roles"]["worker"].update({"model": "bad model"}),
+            lambda value: value["defaults"]["roles"]["worker"].update({"reasoning_effort": "soft"}),
+            lambda value: value.update({"schema_version": 1}),
             lambda value: value.update({"schema_version": True}),
             lambda value: value.update({"schema_version": 1.0}),
         ):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = self.copy_skill(temporary)
-                path = root / "assets" / "role-models.json"
+                path = root / "assets" / "roundlet-config.json"
                 value = json.loads(path.read_text())
                 mutation(value)
                 path.write_text(json.dumps(value))
                 with self.assertRaises(rs.ValidationError):
                     rs.load_role_model_config(root)
 
+
+    def test_config_rejects_invalid_review_policy_values(self):
+        for bad in (True, 0, -1, 1.5, 65):
+            with self.subTest(bad=bad), tempfile.TemporaryDirectory() as temporary:
+                root = self.copy_skill(temporary)
+                path = root / "assets" / "roundlet-config.json"
+                value = json.loads(path.read_text())
+                value["defaults"]["review"]["max_supervisor_cycles"] = bad
+                path.write_text(json.dumps(value))
+                with self.assertRaises(rs.ValidationError):
+                    rs.load_role_model_config(root)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.copy_skill(temporary)
+            path = root / "assets" / "roundlet-config.json"
+            value = json.loads(path.read_text())
+            value["defaults"]["review"]["extra"] = 5
+            path.write_text(json.dumps(value))
+            with self.assertRaises(rs.ValidationError):
+                rs.load_role_model_config(root)
+
     def test_config_rejects_duplicate_keys_and_invalid_utf8(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = self.copy_skill(temporary)
-            path = root / "assets" / "role-models.json"
-            path.write_text('{"schema_version":2,"schema_version":1,"defaults":{},"legacy_profiles":{}}')
+            path = root / "assets" / "roundlet-config.json"
+            path.write_text('{"schema_version":1,"schema_version":1,"defaults":{},"legacy_profiles":{}}}')
             with self.assertRaisesRegex(rs.ValidationError, "duplicate"):
                 rs.load_role_model_config(root)
-            path.write_text('{"schema_version":1,"defaults":{"worker":{"model":"x","model":"y","reasoning_effort":"high"}},"legacy_profiles":{}}')
+            path.write_text('{"schema_version":2,"defaults":{"roles":{"worker":{"model":"x","model":"y","reasoning_effort":"high"}},"legacy_profiles":{}}}')
             with self.assertRaisesRegex(rs.ValidationError, "duplicate"):
                 rs.load_role_model_config(root)
             path.write_bytes(b"\xff")
@@ -3016,9 +3863,9 @@ class RoleModelConfigTests(unittest.TestCase):
 
             def mutate_after_load(skill_root):
                 loaded = original_loader(skill_root)
-                path = Path(skill_root) / "assets" / "role-models.json"
+                path = Path(skill_root) / "assets" / "roundlet-config.json"
                 value = json.loads(path.read_text())
-                value["defaults"]["worker"]["reasoning_effort"] = "low"
+                value["defaults"]["roles"]["worker"]["reasoning_effort"] = "low"
                 path.write_text(json.dumps(value))
                 return loaded
 
@@ -3053,9 +3900,9 @@ class RoleModelConfigTests(unittest.TestCase):
                 orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"), skill_root=root,
             )
             before = copy.deepcopy(value["activation"]["role_model_snapshot"])
-            path = root / "assets" / "role-models.json"
+            path = root / "assets" / "roundlet-config.json"
             config = json.loads(path.read_text())
-            config["defaults"]["worker"]["reasoning_effort"] = "low"
+            config["defaults"]["roles"]["worker"]["reasoning_effort"] = "low"
             path.write_text(json.dumps(config))
             rs.validate_state(value)
             self.assertEqual(value["activation"]["role_model_snapshot"], before)
@@ -3066,7 +3913,8 @@ class RoleModelConfigTests(unittest.TestCase):
         migrated = rs._migrate_state_document(value)
         legacy = rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]
         self.assertEqual(migrated["activation"]["role_model_snapshot"], legacy)
-        rs.validate_state(migrated)
+        with self.assertRaisesRegex(rs.ScopeError, "durable StateStore migration gateway"):
+            rs.validate_state(migrated)
 
 
 class SkillDigestTests(unittest.TestCase):
@@ -3273,6 +4121,9 @@ class GuardTests(unittest.TestCase):
             orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
             role_model_snapshot=value["activation"]["role_model_snapshot"],
             role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
+            review_policy_snapshot=value["activation"]["review_policy_snapshot"],
+            review_policy_snapshot_digest=value["activation"]["review_policy_snapshot_digest"],
+            legacy_unbounded_review=value["activation"]["legacy_unbounded_review"],
         )
         record_merge(value)
         record_close(value)
@@ -3331,6 +4182,48 @@ class GuardTests(unittest.TestCase):
             commands = [call[0] for call in runner.calls]
             self.assertIn(["git", "push", "origin", "codex/issue-11"], commands)
             self.assertFalse(any("--force" in command for command in commands))
+
+    def test_guarded_push_accepts_completed_final_repair_candidate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            digest = rs.skill_content_digest(SKILL_ROOT)
+            value = assigned_state(digest=digest)
+            set_review_budget(value, 1)
+            rs.set_candidate(value, SHA_B, clean=True)
+            value["task"].update({"pr_number": 22, "pr_url": "https://github.com/owner/project/pull/22"})
+            value["task"]["pr_ready"] = True
+            value["phase"] = "ready"
+            begin_review(value, "supervisor-budget", final=True)
+            rs.accept_supervisor_result(
+                value,
+                thread_id="supervisor-budget",
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=["fix this"],
+            )
+            rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-budget")
+            rs.record_worker_final_dispositions(
+                value,
+                worker_thread_id="worker-11",
+                head_sha=SHA_C,
+                clean=True,
+                tests_passed=True,
+                dispositions=[{"finding": "fix this", "disposition": "FIXED", "evidence": "test"}],
+            )
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            runner = ScriptedRunner(candidate=SHA_C)
+            guard = rs.GuardedGit(
+                store,
+                activation_id="activation-0001",
+                installed_digest=digest,
+                skill_root=SKILL_ROOT,
+                runner=runner,
+            )
+            guard.push_task_branch()
+            self.assertIn(
+                (["git", "push", "origin", "codex/issue-11"], "/repo-worktrees/issue-11"),
+                runner.calls,
+            )
 
     def test_guarded_push_rejects_cross_repository_worktree_before_push(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -3461,6 +4354,9 @@ class GuardTests(unittest.TestCase):
                 orchestrator_creation_receipt=value["activation"]["orchestrator_creation_receipt"],
                 role_model_snapshot=value["activation"]["role_model_snapshot"],
                 role_model_snapshot_digest=value["activation"]["role_model_snapshot_digest"],
+                review_policy_snapshot=value["activation"]["review_policy_snapshot"],
+                review_policy_snapshot_digest=value["activation"]["review_policy_snapshot_digest"],
+                legacy_unbounded_review=value["activation"]["legacy_unbounded_review"],
             )
             record_merge(value)
             record_close(value)
@@ -3622,7 +4518,7 @@ class StaticSkillTests(unittest.TestCase):
             "SKILL.md",
             "agents/openai.yaml",
             "assets/roundlet.rules",
-            "assets/role-models.json",
+            "assets/roundlet-config.json",
             "references/operator-guide.md",
             "references/thread-prompts.md",
             "scripts/orchestration_state.py",
@@ -3644,7 +4540,7 @@ class StaticSkillTests(unittest.TestCase):
                 not path.is_file()
                 or "__pycache__" in path.parts
                 or path.suffix in {".pyc", ".pyo"}
-                or path == SKILL_ROOT / "assets" / "role-models.json"
+                or path == SKILL_ROOT / "assets" / "roundlet-config.json"
             ):
                 continue
             with self.subTest(path=path):
