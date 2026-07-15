@@ -3224,6 +3224,7 @@ class GuardTests(unittest.TestCase):
 class StaticSkillTests(unittest.TestCase):
     def test_repository_layout_contract(self):
         expected = {
+            ".github/workflows/ci.yml",
             ".gitignore",
             "AGENTS.md",
             "tests/test_orchestration_state.py",
