@@ -304,6 +304,20 @@ def load_role_model_config(skill_root: str | os.PathLike[str]) -> dict[str, Any]
     return {**canonical, "config_digest": digest_json(canonical)}
 
 
+def load_stable_role_model_config(
+    skill_root: str | os.PathLike[str], expected_digest: str
+) -> dict[str, Any]:
+    """Bind configuration bytes to one stable full-payload digest observation."""
+    expected = require_content_digest(expected_digest, "expected installed digest")
+    first_digest = skill_content_digest(skill_root)
+    if first_digest != expected:
+        raise GuardError("installed skill root does not match the declared digest")
+    config = load_role_model_config(skill_root)
+    if skill_content_digest(skill_root) != first_digest:
+        raise GuardError("installed skill content changed while role configuration was read")
+    return config
+
+
 def role_model_snapshot_digest(snapshot: Mapping[str, Any]) -> str:
     return digest_json(_validate_role_model_snapshot(snapshot))
 
@@ -746,6 +760,43 @@ def compute_scope_digest(
     return digest_json(payload)
 
 
+def compute_policy3_scope_digest(
+    repository: Mapping[str, Any],
+    base_branch: str,
+    umbrella_issues: Sequence[int],
+    allowed_operations: Mapping[str, bool],
+    installed_roundlet_digest: str,
+    *,
+    owner_actor: Mapping[str, Any],
+    capability_preflight: Mapping[str, Any],
+    orchestrator_creation_receipt: Mapping[str, Any],
+) -> str:
+    """Preserve the exact schema-4/policy-3 scope algorithm for migration."""
+    require_content_digest(installed_roundlet_digest)
+    normalized_repo = {
+        "owner_name": normalize_owner_name(str(repository["owner_name"])),
+        "repository_id": repository.get("repository_id"),
+        "git_common_dir_fingerprint": repository["git_common_dir_fingerprint"],
+        "origin_fingerprint": repository["origin_fingerprint"],
+        "origin_push_fingerprint": repository["origin_push_fingerprint"],
+        "origin_host": repository["origin_host"],
+    }
+    return digest_json(
+        {
+            "repository": normalized_repo,
+            "base_branch": validate_branch_name(base_branch, "base_branch"),
+            "umbrella_issues": [require_positive_issue(item) for item in umbrella_issues],
+            "allowed_operations": {key: bool(allowed_operations[key]) for key in ALLOWED_OPERATION_KEYS},
+            "owner_actor": validate_owner_actor(owner_actor),
+            "capability_preflight": validate_capability_preflight(capability_preflight),
+            "orchestrator_creation_receipt_digest": digest_json(orchestrator_creation_receipt),
+            "installed_roundlet_digest": installed_roundlet_digest,
+            "protocol_version": "3",
+            "policy_version": "3",
+        }
+    )
+
+
 def validate_legacy_policy3_state(document: Mapping[str, Any], role_model_snapshot: Mapping[str, Any]) -> None:
     """Reject any tampering before deriving a schema-5 document from schema 4."""
     if not isinstance(document, Mapping):
@@ -799,7 +850,7 @@ def validate_legacy_policy3_state(document: Mapping[str, Any], role_model_snapsh
                 parent_thread_id=activation.get("orchestrator_thread_id"),
                 role_model_snapshot=snapshot,
             )
-        expected_scope = compute_scope_digest(
+        expected_scope = compute_policy3_scope_digest(
             repository,
             activation.get("base_branch"),
             activation.get("umbrella_issues", []),
@@ -808,10 +859,6 @@ def validate_legacy_policy3_state(document: Mapping[str, Any], role_model_snapsh
             owner_actor=owner_actor,
             capability_preflight=capability_preflight,
             orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
-            role_model_snapshot=snapshot,
-            role_model_snapshot_digest=digest_json(snapshot),
-            protocol_version="3",
-            policy_version="3",
         )
     except RoundletError as exc:
         raise MigrationError("schema-4 state cannot prove its legacy activation scope") from exc
@@ -842,9 +889,7 @@ def new_state(
     if not isinstance(orchestrator_thread_id, str) or not orchestrator_thread_id.strip():
         raise ValidationError("orchestrator_thread_id is required")
     digest = require_content_digest(installed_roundlet_digest)
-    config = load_role_model_config(skill_root)
-    if skill_content_digest(skill_root) != digest:
-        raise GuardError("installed digest does not match the supplied Roundlet skill root")
+    config = load_stable_role_model_config(skill_root, digest)
     role_snapshot = config["defaults"]
     snapshot_digest = role_model_snapshot_digest(role_snapshot)
     timestamp = now or utc_now()
@@ -1503,8 +1548,10 @@ class StateStore:
             digest = require_content_digest(expected_installed_digest, "expected installed digest")
             if maintenance.get("installed_digest") != original.get("skill", {}).get("content_digest"):
                 raise MigrationError("migration checkpoint does not bind the original installed digest")
-            if skill_content_digest(skill_root) != digest:
-                raise MigrationError("migration skill root does not match the reviewed installed digest")
+            try:
+                role_model_config = load_stable_role_model_config(skill_root, digest)
+            except RoundletError as exc:
+                raise MigrationError("migration skill root does not match the reviewed installed digest") from exc
             if maintenance.get("stored_versions") != versions:
                 raise MigrationError("migration checkpoint versions differ from the stored document")
             if versions.get("schema") != expected_from_schema or target_version <= expected_from_schema:
@@ -1516,7 +1563,7 @@ class StateStore:
             migrated = _migrate_state_document(
                 original,
                 target_version,
-                role_model_config=load_role_model_config(skill_root),
+                role_model_config=role_model_config,
                 installed_roundlet_digest=digest,
             )
             validate_state(migrated)

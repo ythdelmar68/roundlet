@@ -60,7 +60,7 @@ Prefer the narrowest working sandbox and reviewed rules. Treat `approval_policy 
 
 ## Activate bounded state
 
-Normalize the activation with `normalize_activation_request`, resolve identity with `resolve_repository_identity`, and initialize `state.json` with `new_state` plus `StateStore.initialize`. Supply the connector-verified owner actor, capability preflight (including enforceable connector-read adapter receipts), and service-returned Orchestrator creation receipt. Use an owner-visible stable activation ID and the exact installed digest returned by `skill_content_digest`.
+Normalize the activation with `normalize_activation_request`, resolve identity with `resolve_repository_identity`, and initialize `state.json` with `new_state(..., skill_root=<exact-reviewed-installed-roundlet>)` plus `StateStore.initialize`. Supply the connector-verified owner actor, capability preflight (including enforceable connector-read adapter receipts), and service-returned Orchestrator creation receipt. Obtain the validated defaults, activation snapshot, and exact installed digest from that same stable installed root; create the Orchestrator with its bound snapshot values.
 
 Keep only:
 

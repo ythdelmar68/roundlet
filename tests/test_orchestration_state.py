@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import threading
 import unittest
+from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -129,7 +130,7 @@ def downgrade_to_policy3(value):
 def refresh_policy3_scope(value):
     activation = value["activation"]
     legacy_snapshot = rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]
-    activation["scope_digest"] = rs.compute_scope_digest(
+    activation["scope_digest"] = rs.compute_policy3_scope_digest(
         activation["repository"],
         activation["base_branch"],
         activation["umbrella_issues"],
@@ -138,10 +139,6 @@ def refresh_policy3_scope(value):
         owner_actor=activation["owner_actor"],
         capability_preflight=activation["capability_preflight"],
         orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
-        role_model_snapshot=legacy_snapshot,
-        role_model_snapshot_digest=rs.role_model_snapshot_digest(legacy_snapshot),
-        protocol_version="3",
-        policy_version="3",
     )
 
 
@@ -1724,6 +1721,38 @@ class MaintenanceTests(unittest.TestCase):
                 )
             self.assertEqual(store.path.read_bytes(), before)
 
+    def test_durable_migration_rejects_config_change_during_digest_binding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "roundlet"
+            shutil.copytree(SKILL_ROOT, root)
+            digest = rs.skill_content_digest(root)
+            value = self._paused()
+            value["skill"]["content_digest"] = digest
+            value["maintenance"]["installed_digest"] = digest
+            downgrade_to_policy3(value)
+            value["maintenance"]["stored_versions"] = copy.deepcopy(value["versions"])
+            store = rs.StateStore(temporary)
+            rs.atomic_write_json(store.path, value)
+            before = store.path.read_bytes()
+            original_loader = rs.load_role_model_config
+
+            def mutate_after_load(skill_root):
+                loaded = original_loader(skill_root)
+                path = Path(skill_root) / "assets" / "role-models.json"
+                config = json.loads(path.read_text())
+                config["defaults"]["worker"]["reasoning_effort"] = "low"
+                path.write_text(json.dumps(config))
+                return loaded
+
+            with mock.patch.object(rs, "load_role_model_config", side_effect=mutate_after_load):
+                with self.assertRaisesRegex(rs.MigrationError, "skill root"):
+                    store.migrate(
+                        activation_id="activation-0001", checkpoint_id="checkpoint-001", schedule_id="schedule-1",
+                        expected_installed_digest=digest, expected_from_schema=4, target_version=rs.SCHEMA_VERSION,
+                        skill_root=root,
+                    )
+            self.assertEqual(store.path.read_bytes(), before)
+
     def test_policy3_migration_rejects_corrupt_or_expanded_legacy_scope_atomically(self):
         for corrupt in ("digest", "operation"):
             with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory() as temporary:
@@ -1746,6 +1775,15 @@ class MaintenanceTests(unittest.TestCase):
                         skill_root=SKILL_ROOT,
                     )
                 self.assertEqual(store.path.read_bytes(), before)
+
+    def test_policy3_scope_digest_matches_immutable_base_vector(self):
+        value = assigned_state()
+        value["skill"]["content_digest"] = "a" * 64
+        downgrade_to_policy3(value)
+        self.assertEqual(
+            value["activation"]["scope_digest"],
+            "1abf4ccb59ac1e523fdc625e2d926f2271aa3a5a1dd5d7dc94d3820a9f79b4e7",
+        )
 
     def test_unknown_migration_fails(self):
         value = state()
@@ -2887,6 +2925,29 @@ class RoleModelConfigTests(unittest.TestCase):
             rs.new_state(activation_request(), identity(), **kwargs)
         with self.assertRaises(rs.GuardError):
             rs.new_state(activation_request(), identity(), **{**kwargs, "skill_root": SKILL_ROOT, "installed_roundlet_digest": "d" * 64})
+
+    def test_activation_rejects_config_change_during_digest_binding(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.copy_skill(temporary)
+            digest = rs.skill_content_digest(root)
+            original_loader = rs.load_role_model_config
+            receipt = role_receipt("orchestrator", "orchestrator-1")
+
+            def mutate_after_load(skill_root):
+                loaded = original_loader(skill_root)
+                path = Path(skill_root) / "assets" / "role-models.json"
+                value = json.loads(path.read_text())
+                value["defaults"]["worker"]["reasoning_effort"] = "low"
+                path.write_text(json.dumps(value))
+                return loaded
+
+            with mock.patch.object(rs, "load_role_model_config", side_effect=mutate_after_load):
+                with self.assertRaisesRegex(rs.GuardError, "changed while"):
+                    rs.new_state(
+                        activation_request(), identity(), activation_id="activation-0001", orchestrator_thread_id="orchestrator-1",
+                        installed_roundlet_digest=digest, owner_actor=OWNER_ACTOR, capability_preflight=CAPABILITY_PREFLIGHT,
+                        orchestrator_creation_receipt=receipt, skill_root=root,
+                    )
 
     def test_activation_binds_snapshot_to_receipts_and_scope(self):
         digest = rs.skill_content_digest(SKILL_ROOT)

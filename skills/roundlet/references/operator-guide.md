@@ -58,7 +58,7 @@ python3 <installed-roundlet>/scripts/orchestration_state.py skill-digest \
   --skill-root <installed-roundlet>
 ```
 
-For a new activation, call `skill_content_digest(<installed-roundlet>)` before creating state. The guarded CLI later compares this digest to both the activation and installed files.
+For a new activation, call `new_state(..., skill_root=<installed-roundlet>)` with the exact reviewed installation root. It obtains the validated configuration/defaults and installed digest from one stable root observation, creates the Orchestrator from those defaults, and binds them as the activation snapshot. Do not load the configuration and digest from separate paths or observations. The guarded CLI later compares this digest to both the activation and installed files.
 
 ## Configure role models
 
