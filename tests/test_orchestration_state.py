@@ -10,10 +10,11 @@ import threading
 import unittest
 
 
-ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SKILL_ROOT = REPO_ROOT / "skills" / "roundlet"
 import sys
 
-sys.path.insert(0, str(ROOT / "scripts"))
+sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 
 import orchestration_state as rs
 
@@ -1412,7 +1413,7 @@ class MaintenanceTests(unittest.TestCase):
             reviewed_source_repository_id=999,
             reviewed_source_commit=SHA_C,
             reviewed_source_pr_url="https://github.com/ythdelmar68/roundlet/pull/99",
-            changed_paths=["references/operator-guide.md"],
+            changed_paths=[rs.DOCUMENTATION_ONLY_OPERATOR_GUIDE_PATH],
         )
         rs.resume_maintenance(
             value,
@@ -1424,6 +1425,21 @@ class MaintenanceTests(unittest.TestCase):
             documentation_evidence=evidence,
         )
         self.assertIsNotNone(value["review"]["pass_identity"])
+
+    def test_documentation_only_resume_rejects_legacy_source_path(self):
+        value = self._paused()
+        with self.assertRaisesRegex(rs.ValidationError, "operator-guide documentation path"):
+            rs.documentation_only_resume_evidence(
+                value,
+                installed_roundlet_digest="e" * 64,
+                current_versions=value["versions"],
+                schedule_id="schedule-1",
+                reviewed_source_repository="ythdelmar68/roundlet",
+                reviewed_source_repository_id=999,
+                reviewed_source_commit=SHA_C,
+                reviewed_source_pr_url="https://github.com/ythdelmar68/roundlet/pull/99",
+                changed_paths=["references/operator-guide.md"],
+            )
 
     def test_code_digest_change_invalidates_pass_by_default(self):
         value = self._paused()
@@ -2675,11 +2691,72 @@ class CompactionTests(unittest.TestCase):
             files = sorted(path.name for path in Path(temporary).iterdir())
             self.assertEqual(files, ["last-scope-summary.json", "state.json"])
 
-    def test_skill_digest_is_stable(self):
-        first = rs.skill_content_digest(ROOT)
-        second = rs.skill_content_digest(ROOT)
+
+class SkillDigestTests(unittest.TestCase):
+    def copy_skill(self, directory, relative_destination):
+        destination = Path(directory) / relative_destination
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(
+            SKILL_ROOT,
+            destination,
+            ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
+        )
+        return destination
+
+    def test_skill_digest_is_stable_lowercase_sha256(self):
+        first = rs.skill_content_digest(SKILL_ROOT)
+        second = rs.skill_content_digest(SKILL_ROOT)
         self.assertEqual(first, second)
         self.assertRegex(first, r"^[0-9a-f]{64}$")
+
+    def test_skill_digest_is_independent_of_parent_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            first_root = self.copy_skill(temporary, "first/roundlet")
+            second_root = self.copy_skill(temporary, "second/nested/roundlet")
+            self.assertEqual(
+                rs.skill_content_digest(first_root),
+                rs.skill_content_digest(second_root),
+            )
+
+    def test_skill_digest_changes_for_every_included_file(self):
+        baseline = rs.skill_content_digest(SKILL_ROOT)
+        included_files = [
+            path.relative_to(SKILL_ROOT)
+            for path in SKILL_ROOT.rglob("*")
+            if path.is_file()
+            and "__pycache__" not in path.parts
+            and not path.name.endswith((".pyc", ".pyo"))
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            for index, relative in enumerate(included_files):
+                with self.subTest(path=relative.as_posix()):
+                    copied_root = self.copy_skill(temporary, f"case-{index}/roundlet")
+                    changed = copied_root / relative
+                    changed.write_bytes(changed.read_bytes() + b"\nroundlet-digest-regression\n")
+                    self.assertNotEqual(rs.skill_content_digest(copied_root), baseline)
+
+    def test_skill_digest_changes_when_relative_path_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            copied_root = self.copy_skill(temporary, "roundlet")
+            baseline = rs.skill_content_digest(copied_root)
+            operator_guide = copied_root / "references" / "operator-guide.md"
+            operator_guide.rename(operator_guide.with_name("operator-manual.md"))
+            self.assertNotEqual(rs.skill_content_digest(copied_root), baseline)
+
+    def test_skill_digest_ignores_python_cache_artifacts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            copied_root = self.copy_skill(temporary, "roundlet")
+            baseline = rs.skill_content_digest(copied_root)
+            cache = copied_root / "scripts" / "__pycache__"
+            cache.mkdir()
+            (cache / "orchestration_state.cpython-313.pyc").write_bytes(b"cache")
+            (copied_root / "scripts" / "ignored.pyc").write_bytes(b"cache")
+            (copied_root / "scripts" / "ignored.pyo").write_bytes(b"cache")
+            self.assertEqual(rs.skill_content_digest(copied_root), baseline)
+
+    def test_repository_root_is_not_a_skill_root(self):
+        with self.assertRaisesRegex(rs.ValidationError, "does not contain SKILL.md"):
+            rs.skill_content_digest(REPO_ROOT)
 
 
 class ScriptedRunner(rs.CommandRunner):
@@ -2805,7 +2882,7 @@ class CleanupRunner(ScriptedRunner):
 
 class GuardTests(unittest.TestCase):
     def cleanup_state(self, directory):
-        digest = rs.skill_content_digest(ROOT)
+        digest = rs.skill_content_digest(SKILL_ROOT)
         value = premerge_state()
         value["skill"]["content_digest"] = digest
         value["activation"]["scope_digest"] = rs.compute_scope_digest(
@@ -2830,7 +2907,7 @@ class GuardTests(unittest.TestCase):
         return store, digest
 
     def guarded_state(self, directory):
-        digest = rs.skill_content_digest(ROOT)
+        digest = rs.skill_content_digest(SKILL_ROOT)
         value = rs.new_state(
             activation_request(),
             identity(),
@@ -2867,7 +2944,7 @@ class GuardTests(unittest.TestCase):
                 store,
                 activation_id="activation-0001",
                 installed_digest=digest,
-                skill_root=ROOT,
+                skill_root=SKILL_ROOT,
                 runner=runner,
             )
             guard.push_task_branch()
@@ -2895,7 +2972,7 @@ class GuardTests(unittest.TestCase):
                 store,
                 activation_id="activation-0001",
                 installed_digest=digest,
-                skill_root=ROOT,
+                skill_root=SKILL_ROOT,
                 runner=runner,
             )
             with self.assertRaises((rs.ScopeError, rs.GuardError)):
@@ -2913,7 +2990,7 @@ class GuardTests(unittest.TestCase):
                 store,
                 activation_id="activation-0001",
                 installed_digest=digest,
-                skill_root=ROOT,
+                skill_root=SKILL_ROOT,
                 runner=active_runner,
             )
             with self.assertRaises(rs.GuardError):
@@ -2935,7 +3012,7 @@ class GuardTests(unittest.TestCase):
                 store,
                 activation_id="activation-0001",
                 installed_digest=digest,
-                skill_root=ROOT,
+                skill_root=SKILL_ROOT,
                 runner=runner,
             )
             with self.assertRaises(rs.GuardError):
@@ -2972,7 +3049,7 @@ class GuardTests(unittest.TestCase):
                     store,
                     activation_id="activation-wrong",
                     installed_digest=digest,
-                    skill_root=ROOT,
+                    skill_root=SKILL_ROOT,
                     runner=ScriptedRunner(),
                 )
 
@@ -2984,13 +3061,13 @@ class GuardTests(unittest.TestCase):
                     store,
                     activation_id="activation-0001",
                     installed_digest="f" * 64,
-                    skill_root=ROOT,
+                    skill_root=SKILL_ROOT,
                     runner=ScriptedRunner(),
                 )
 
     def test_detached_sync_can_refresh_for_the_next_selection(self):
         with tempfile.TemporaryDirectory() as temporary:
-            digest = rs.skill_content_digest(ROOT)
+            digest = rs.skill_content_digest(SKILL_ROOT)
             value = premerge_state()
             value["skill"]["content_digest"] = digest
             value["activation"]["scope_digest"] = rs.compute_scope_digest(
@@ -3014,7 +3091,7 @@ class GuardTests(unittest.TestCase):
                 store,
                 activation_id="activation-0001",
                 installed_digest=digest,
-                skill_root=ROOT,
+                skill_root=SKILL_ROOT,
                 runner=runner,
             )
             first.sync_base()
@@ -3023,7 +3100,7 @@ class GuardTests(unittest.TestCase):
                 store,
                 activation_id="activation-0001",
                 installed_digest=digest,
-                skill_root=ROOT,
+                skill_root=SKILL_ROOT,
                 runner=runner,
             )
             second.refresh_base()
@@ -3046,7 +3123,7 @@ class GuardTests(unittest.TestCase):
                 store,
                 activation_id="activation-0001",
                 installed_digest=digest,
-                skill_root=ROOT,
+                skill_root=SKILL_ROOT,
                 runner=runner,
             )
             effective = rs.RepositoryIdentity(
@@ -3068,7 +3145,7 @@ class GuardTests(unittest.TestCase):
                 store,
                 activation_id="activation-0001",
                 installed_digest=digest,
-                skill_root=ROOT,
+                skill_root=SKILL_ROOT,
                 runner=runner,
             )
             guard.remove_task_worktree()
@@ -3086,7 +3163,7 @@ class GuardTests(unittest.TestCase):
                 store,
                 activation_id="activation-0001",
                 installed_digest=digest,
-                skill_root=ROOT,
+                skill_root=SKILL_ROOT,
                 runner=runner,
             )
             with self.assertRaises(rs.GuardError):
@@ -3119,7 +3196,7 @@ class GuardTests(unittest.TestCase):
                 store,
                 activation_id="activation-0001",
                 installed_digest=digest,
-                skill_root=ROOT,
+                skill_root=SKILL_ROOT,
                 runner=runner,
             )
             with self.assertRaisesRegex(rs.GuardError, "porcelain branch differs"):
@@ -3128,30 +3205,51 @@ class GuardTests(unittest.TestCase):
 
 
 class StaticSkillTests(unittest.TestCase):
-    def test_canonical_skeleton(self):
+    def test_repository_layout_contract(self):
         expected = {
             ".gitignore",
             "AGENTS.md",
+            "tests/test_orchestration_state.py",
+        }
+        actual = {
+            path.relative_to(REPO_ROOT).as_posix()
+            for path in REPO_ROOT.rglob("*")
+            if path.is_file()
+            and "skills" not in path.relative_to(REPO_ROOT).parts
+            and ".git" not in path.relative_to(REPO_ROOT).parts
+            and "__pycache__" not in path.parts
+            and not path.name.endswith((".pyc", ".pyo"))
+        }
+        self.assertEqual(actual, expected)
+        self.assertEqual(
+            {path.name for path in (REPO_ROOT / "skills").iterdir()},
+            {"roundlet"},
+        )
+        for old_payload_root in ("SKILL.md", "agents", "assets", "references", "scripts"):
+            self.assertFalse((REPO_ROOT / old_payload_root).exists())
+
+    def test_publishable_skill_contract(self):
+        expected = {
             "SKILL.md",
             "agents/openai.yaml",
             "assets/roundlet.rules",
             "references/operator-guide.md",
             "references/thread-prompts.md",
             "scripts/orchestration_state.py",
-            "tests/test_orchestration_state.py",
         }
         actual = {
-            path.relative_to(ROOT).as_posix()
-            for path in ROOT.rglob("*")
+            path.relative_to(SKILL_ROOT).as_posix()
+            for path in SKILL_ROOT.rglob("*")
             if path.is_file()
-            and ".git" not in path.relative_to(ROOT).parts
             and "__pycache__" not in path.parts
-            and not path.name.endswith(".pyc")
+            and not path.name.endswith((".pyc", ".pyo"))
         }
         self.assertEqual(actual, expected)
+        for excluded in ("tests", "AGENTS.md", ".gitignore"):
+            self.assertFalse((SKILL_ROOT / excluded).exists())
 
     def test_skill_frontmatter_has_only_name_and_description(self):
-        text = (ROOT / "SKILL.md").read_text()
+        text = (SKILL_ROOT / "SKILL.md").read_text()
         match = rs.re.match(r"^---\n(.*?)\n---", text, rs.re.DOTALL)
         self.assertIsNotNone(match)
         keys = [
@@ -3163,7 +3261,7 @@ class StaticSkillTests(unittest.TestCase):
         self.assertLess(len(text.splitlines()), 500)
 
     def test_openai_yaml_contract(self):
-        text = (ROOT / "agents/openai.yaml").read_text()
+        text = (SKILL_ROOT / "agents/openai.yaml").read_text()
         self.assertIn('display_name: "Roundlet"', text)
         description = rs.re.search(r'short_description: "([^"]+)"', text).group(1)
         self.assertGreaterEqual(len(description), 25)
@@ -3173,7 +3271,7 @@ class StaticSkillTests(unittest.TestCase):
         self.assertIn("allow_implicit_invocation: false", text)
 
     def test_gitignore_covers_runtime_and_test_artifacts(self):
-        entries = set((ROOT / ".gitignore").read_text().splitlines())
+        entries = set((REPO_ROOT / ".gitignore").read_text().splitlines())
         self.assertTrue({".codex-log/", ".pytest_cache/", "__pycache__/", "*.py[cod]"} <= entries)
 
     def test_no_extraneous_documents_or_icons(self):
@@ -3183,11 +3281,11 @@ class StaticSkillTests(unittest.TestCase):
             "INSTALLATION_GUIDE.md",
             "QUICK_REFERENCE.md",
         }
-        self.assertFalse(any((ROOT / name).exists() for name in forbidden))
-        self.assertFalse(any(path.suffix.lower() in {".png", ".jpg", ".jpeg", ".svg", ".ico"} for path in ROOT.rglob("*")))
+        self.assertFalse(any((REPO_ROOT / name).exists() for name in forbidden))
+        self.assertFalse(any(path.suffix.lower() in {".png", ".jpg", ".jpeg", ".svg", ".ico"} for path in REPO_ROOT.rglob("*")))
 
     def test_agents_policy_stays_source_repository_only(self):
-        text = (ROOT / "AGENTS.md").read_text().casefold()
+        text = (REPO_ROOT / "AGENTS.md").read_text().casefold()
         for runtime_protocol in (
             "github connector",
             ".codex-log/roundlet",
@@ -3197,8 +3295,13 @@ class StaticSkillTests(unittest.TestCase):
         ):
             self.assertNotIn(runtime_protocol, text)
 
+    def test_agents_policy_uses_publishable_skill_root(self):
+        text = (REPO_ROOT / "AGENTS.md").read_text()
+        self.assertIn("`skills/roundlet` as the canonical skill source root", text)
+        self.assertIn("`skill-creator/scripts/quick_validate.py` against `skills/roundlet`", text)
+
     def test_runtime_has_no_prohibited_dependency_markers(self):
-        text = (ROOT / "scripts/orchestration_state.py").read_text().casefold()
+        text = (SKILL_ROOT / "scripts/orchestration_state.py").read_text().casefold()
         for marker in (
             "loop-orchestrator",
             "copilot",
@@ -3210,13 +3313,42 @@ class StaticSkillTests(unittest.TestCase):
             self.assertNotIn(marker, text)
 
     def test_worker_prompt_returns_handoff_and_root_owns_mailbox(self):
-        prompts = (ROOT / "references/thread-prompts.md").read_text()
-        skill = (ROOT / "SKILL.md").read_text()
+        prompts = (SKILL_ROOT / "references/thread-prompts.md").read_text()
+        skill = (SKILL_ROOT / "SKILL.md").read_text()
         self.assertIn("Do not write a mailbox file", prompts)
         self.assertIn("root Orchestrator validates that response", skill)
 
+    def test_skill_internal_links_resolve_within_publishable_root(self):
+        skill = (SKILL_ROOT / "SKILL.md").read_text()
+        local_targets = {
+            target
+            for target in rs.re.findall(r"\]\(([^)]+)\)", skill)
+            if "://" not in target and not target.startswith("#")
+        }
+        self.assertTrue(
+            {
+                "references/operator-guide.md",
+                "references/thread-prompts.md",
+                "assets/roundlet.rules",
+                "scripts/orchestration_state.py",
+            }
+            <= local_targets
+        )
+        for target in local_targets:
+            with self.subTest(target=target):
+                self.assertTrue((SKILL_ROOT / target).is_file())
+
+    def test_operator_installed_paths_and_source_path_contract(self):
+        skill = (SKILL_ROOT / "SKILL.md").read_text()
+        guide = (SKILL_ROOT / "references/operator-guide.md").read_text()
+        self.assertIn("<installed-roundlet>/scripts/orchestration_state.py", guide)
+        self.assertIn("--skill-root <installed-roundlet>", guide)
+        source_path = f"`{rs.DOCUMENTATION_ONLY_OPERATOR_GUIDE_PATH}`"
+        self.assertIn(source_path, skill)
+        self.assertIn(source_path, guide)
+
     def test_rules_do_not_allow_broad_git_or_interpreter_prefixes(self):
-        text = (ROOT / "assets/roundlet.rules").read_text()
+        text = (SKILL_ROOT / "assets/roundlet.rules").read_text()
         self.assertNotIn('pattern = ["git", "push"]', text)
         self.assertNotIn('pattern = ["<PYTHON>"]', text)
         self.assertNotIn('decision = "allow"\n    justification = "Force', text)
@@ -3246,11 +3378,11 @@ class StaticSkillTests(unittest.TestCase):
             "--state-dir": "/tmp/roundlet-state",
             "--activation-id": "activation-0001",
             "--installed-digest": "a" * 64,
-            "--skill-root": str(ROOT),
+            "--skill-root": str(SKILL_ROOT),
         }
         for command in rs.GUARDED_CLI_COMMANDS:
             template = ["<PYTHON>", "<ROUNDLET_SCRIPT>", command]
-            runtime = [sys.executable, str(ROOT / "scripts/orchestration_state.py"), command]
+            runtime = [sys.executable, str(SKILL_ROOT / "scripts/orchestration_state.py"), command]
             for option in rs.GUARDED_CLI_OPTIONS:
                 template.extend([option, template_values[option]])
                 runtime.extend([option, runtime_values[option]])
@@ -3263,7 +3395,7 @@ class StaticSkillTests(unittest.TestCase):
                             "execpolicy",
                             "check",
                             "--rules",
-                            str(ROOT / "assets/roundlet.rules"),
+                            str(SKILL_ROOT / "assets/roundlet.rules"),
                             *template,
                             option,
                             "<OVERRIDE>",
