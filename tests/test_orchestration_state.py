@@ -40,7 +40,7 @@ SHA_A = "a" * 40
 SHA_B = "b" * 40
 SHA_C = "c" * 40
 SHA_D = "d" * 40
-DIGEST = "d" * 64
+DIGEST = rs.skill_content_digest(SKILL_ROOT)
 REFRESH_TIME = "2026-07-14T01:00:00Z"
 OWNER_ACTOR = {
     "id": 7,
@@ -123,6 +123,26 @@ def downgrade_to_policy3(value):
     activation.pop("role_model_snapshot", None)
     activation.pop("role_model_snapshot_digest", None)
     value["versions"].update({"schema": 4, "policy": "3"})
+    refresh_policy3_scope(value)
+
+
+def refresh_policy3_scope(value):
+    activation = value["activation"]
+    legacy_snapshot = rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]
+    activation["scope_digest"] = rs.compute_scope_digest(
+        activation["repository"],
+        activation["base_branch"],
+        activation["umbrella_issues"],
+        activation["allowed_operations"],
+        value["skill"]["content_digest"],
+        owner_actor=activation["owner_actor"],
+        capability_preflight=activation["capability_preflight"],
+        orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+        role_model_snapshot=legacy_snapshot,
+        role_model_snapshot_digest=rs.role_model_snapshot_digest(legacy_snapshot),
+        protocol_version="3",
+        policy_version="3",
+    )
 
 
 def activation_request(*, umbrellas=None, base="main", operations=None):
@@ -152,6 +172,7 @@ def state(*, umbrellas=None, digest=DIGEST, operations=None):
         owner_actor=OWNER_ACTOR,
         capability_preflight=CAPABILITY_PREFLIGHT,
         orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
+        skill_root=SKILL_ROOT,
         now="2026-07-14T00:00:00Z",
     )
 
@@ -662,6 +683,7 @@ class ActivationTests(unittest.TestCase):
                 owner_actor=OWNER_ACTOR,
                 capability_preflight=CAPABILITY_PREFLIGHT,
                 orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
+                skill_root=SKILL_ROOT,
             )
 
     def test_unsynchronized_identity_blocks(self):
@@ -676,6 +698,7 @@ class ActivationTests(unittest.TestCase):
                 owner_actor=OWNER_ACTOR,
                 capability_preflight=CAPABILITY_PREFLIGHT,
                 orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
+                skill_root=SKILL_ROOT,
             )
 
     def test_repository_target_validation(self):
@@ -702,6 +725,7 @@ class ActivationTests(unittest.TestCase):
                         owner_actor=OWNER_ACTOR,
                         capability_preflight=unverifiable,
                         orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
+                        skill_root=SKILL_ROOT,
                     )
 
     def test_activation_binds_verified_numeric_owner_actor(self):
@@ -716,6 +740,7 @@ class ActivationTests(unittest.TestCase):
                 owner_actor=spoofed,
                 capability_preflight=CAPABILITY_PREFLIGHT,
                 orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
+                skill_root=SKILL_ROOT,
             )
 
 
@@ -1598,6 +1623,7 @@ class MaintenanceTests(unittest.TestCase):
                 expected_installed_digest=DIGEST,
                 expected_from_schema=1,
                 target_version=rs.SCHEMA_VERSION,
+                skill_root=SKILL_ROOT,
             )
             self.assertEqual(
                 migrated["maintenance"]["stored_versions"]["schema"], rs.SCHEMA_VERSION
@@ -1629,6 +1655,7 @@ class MaintenanceTests(unittest.TestCase):
                     expected_installed_digest=DIGEST,
                     expected_from_schema=1,
                     target_version=rs.SCHEMA_VERSION,
+                    skill_root=SKILL_ROOT,
                 )
             self.assertEqual(store.path.read_bytes(), before)
 
@@ -1651,6 +1678,7 @@ class MaintenanceTests(unittest.TestCase):
                         expected_installed_digest=DIGEST,
                         expected_from_schema=1,
                         target_version=rs.SCHEMA_VERSION,
+                        skill_root=SKILL_ROOT,
                     )
                 self.assertEqual(store.path.read_bytes(), before)
 
@@ -1671,8 +1699,53 @@ class MaintenanceTests(unittest.TestCase):
                     expected_installed_digest=DIGEST,
                     expected_from_schema=1,
                     target_version=rs.SCHEMA_VERSION,
+                    skill_root=SKILL_ROOT,
                 )
             self.assertEqual(store.path.read_bytes(), before)
+
+    def test_durable_migration_requires_root_and_matching_digest_atomically(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            value = self._paused()
+            downgrade_to_policy3(value)
+            value["maintenance"]["stored_versions"] = copy.deepcopy(value["versions"])
+            store = rs.StateStore(temporary)
+            rs.atomic_write_json(store.path, value)
+            before = store.path.read_bytes()
+            with self.assertRaises(TypeError):
+                store.migrate(
+                    activation_id="activation-0001", checkpoint_id="checkpoint-001", schedule_id="schedule-1",
+                    expected_installed_digest=DIGEST, expected_from_schema=4, target_version=rs.SCHEMA_VERSION,
+                )
+            with self.assertRaises(rs.MigrationError):
+                store.migrate(
+                    activation_id="activation-0001", checkpoint_id="checkpoint-001", schedule_id="schedule-1",
+                    expected_installed_digest="d" * 64, expected_from_schema=4, target_version=rs.SCHEMA_VERSION,
+                    skill_root=SKILL_ROOT,
+                )
+            self.assertEqual(store.path.read_bytes(), before)
+
+    def test_policy3_migration_rejects_corrupt_or_expanded_legacy_scope_atomically(self):
+        for corrupt in ("digest", "operation"):
+            with self.subTest(corrupt=corrupt), tempfile.TemporaryDirectory() as temporary:
+                value = self._paused()
+                downgrade_to_policy3(value)
+                if corrupt == "digest":
+                    value["activation"]["scope_digest"] = "0" * 64
+                else:
+                    value["activation"]["allowed_operations"]["create_draft_prs"] = False
+                    refresh_policy3_scope(value)
+                    value["activation"]["allowed_operations"]["create_draft_prs"] = True
+                value["maintenance"]["stored_versions"] = copy.deepcopy(value["versions"])
+                store = rs.StateStore(temporary)
+                rs.atomic_write_json(store.path, value)
+                before = store.path.read_bytes()
+                with self.assertRaisesRegex(rs.MigrationError, "legacy scope"):
+                    store.migrate(
+                        activation_id="activation-0001", checkpoint_id="checkpoint-001", schedule_id="schedule-1",
+                        expected_installed_digest=DIGEST, expected_from_schema=4, target_version=rs.SCHEMA_VERSION,
+                        skill_root=SKILL_ROOT,
+                    )
+                self.assertEqual(store.path.read_bytes(), before)
 
     def test_unknown_migration_fails(self):
         value = state()
@@ -2238,6 +2311,7 @@ class PersistenceAndMailboxTests(unittest.TestCase):
                 owner_actor=OWNER_ACTOR,
                 capability_preflight=CAPABILITY_PREFLIGHT,
                 orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
+                skill_root=SKILL_ROOT,
             )
             store.initialize(replacement, replace_completed_scope=True)
             self.assertEqual(store.load()["activation"]["id"], "activation-0002")
@@ -2767,6 +2841,8 @@ class RoleModelConfigTests(unittest.TestCase):
             lambda value: value["defaults"]["worker"].update({"model": "bad model"}),
             lambda value: value["defaults"]["worker"].update({"reasoning_effort": "soft"}),
             lambda value: value.update({"schema_version": 2}),
+            lambda value: value.update({"schema_version": True}),
+            lambda value: value.update({"schema_version": 1.0}),
         ):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = self.copy_skill(temporary)
@@ -2776,6 +2852,41 @@ class RoleModelConfigTests(unittest.TestCase):
                 path.write_text(json.dumps(value))
                 with self.assertRaises(rs.ValidationError):
                     rs.load_role_model_config(root)
+
+    def test_config_rejects_duplicate_keys_and_invalid_utf8(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.copy_skill(temporary)
+            path = root / "assets" / "role-models.json"
+            path.write_text('{"schema_version":2,"schema_version":1,"defaults":{},"legacy_profiles":{}}')
+            with self.assertRaisesRegex(rs.ValidationError, "duplicate"):
+                rs.load_role_model_config(root)
+            path.write_text('{"schema_version":1,"defaults":{"worker":{"model":"x","model":"y","reasoning_effort":"high"}},"legacy_profiles":{}}')
+            with self.assertRaisesRegex(rs.ValidationError, "duplicate"):
+                rs.load_role_model_config(root)
+            path.write_bytes(b"\xff")
+            with self.assertRaisesRegex(rs.ValidationError, "unreadable"):
+                rs.load_role_model_config(root)
+            completed = subprocess.run(
+                [sys.executable, str(root / "scripts" / "orchestration_state.py"), "role-config", "--skill-root", str(root)],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(completed.returncode, 2)
+            self.assertIn("BLOCKED", completed.stderr)
+
+    def test_activation_requires_root_and_matching_digest(self):
+        kwargs = {
+            "activation_id": "activation-0001",
+            "orchestrator_thread_id": "orchestrator-1",
+            "installed_roundlet_digest": DIGEST,
+            "owner_actor": OWNER_ACTOR,
+            "capability_preflight": CAPABILITY_PREFLIGHT,
+            "orchestrator_creation_receipt": role_receipt("orchestrator", "orchestrator-1"),
+        }
+        with self.assertRaises(TypeError):
+            rs.new_state(activation_request(), identity(), **kwargs)
+        with self.assertRaises(rs.GuardError):
+            rs.new_state(activation_request(), identity(), **{**kwargs, "skill_root": SKILL_ROOT, "installed_roundlet_digest": "d" * 64})
 
     def test_activation_binds_snapshot_to_receipts_and_scope(self):
         digest = rs.skill_content_digest(SKILL_ROOT)
@@ -3043,6 +3154,7 @@ class GuardTests(unittest.TestCase):
             owner_actor=OWNER_ACTOR,
             capability_preflight=CAPABILITY_PREFLIGHT,
             orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
+            skill_root=SKILL_ROOT,
             now="2026-07-14T00:00:00Z",
         )
         rs.transition_state(value, "selecting-task")
