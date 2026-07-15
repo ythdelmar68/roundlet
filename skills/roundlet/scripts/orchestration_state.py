@@ -32,6 +32,7 @@ SKILL_SOURCE_REPOSITORY = "ythdelmar68/roundlet"
 DOCUMENTATION_ONLY_OPERATOR_GUIDE_PATH = "skills/roundlet/references/operator-guide.md"
 STATE_DIRECTORY = Path(".codex-log/roundlet")
 STATE_FILENAME = "state.json"
+LEGACY_REVIEW_AUTHORITY_FILENAME = ".legacy-review-authority.json"
 SUMMARY_FILENAME = "last-scope-summary.json"
 MAILBOX_NAMES = {
     "github-context": "github-context.json",
@@ -1068,6 +1069,11 @@ def validate_state(state: Mapping[str, Any]) -> None:
     if legacy_unbounded_review:
         if not isinstance(legacy_migration, Mapping):
             raise ScopeError("legacy-unbounded review requires schema-5 migration provenance")
+        authority = getattr(state, "legacy_review_authority", None)
+        if authority != _expected_legacy_review_authority(state):
+            raise ScopeError(
+                "legacy-unbounded review is accepted only from the durable StateStore migration gateway"
+            )
     elif legacy_migration is not None:
         raise ScopeError("fresh activations cannot carry legacy review migration provenance")
     validate_role_creation_receipt(
@@ -1552,10 +1558,39 @@ def read_json(path: str | os.PathLike[str], *, max_bytes: int | None = None) -> 
         raise ValidationError(f"cannot read valid JSON from {path}") from exc
 
 
+class _MigrationAuthorizedState(dict):
+    """In-memory capability proving StateStore loaded a durable migration receipt."""
+
+    def __init__(
+        self,
+        *args: Any,
+        legacy_review_authority: Mapping[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        self.legacy_review_authority = (
+            copy.deepcopy(dict(legacy_review_authority))
+            if isinstance(legacy_review_authority, Mapping)
+            else None
+        )
+
+
+def _expected_legacy_review_authority(state: Mapping[str, Any]) -> dict[str, Any]:
+    activation = state.get("activation", {})
+    migration = activation.get("legacy_review_migration", {}) if isinstance(activation, Mapping) else {}
+    return {
+        "schema_version": 1,
+        "activation_id": activation.get("id") if isinstance(activation, Mapping) else None,
+        "from_schema": 5,
+        "predecessor_digest": migration.get("input_digest") if isinstance(migration, Mapping) else None,
+    }
+
+
 class StateStore:
     def __init__(self, state_directory: str | os.PathLike[str]):
         self.directory = Path(state_directory)
         self.path = self.directory / STATE_FILENAME
+        self.legacy_review_authority_path = self.directory / LEGACY_REVIEW_AUTHORITY_FILENAME
 
     @contextmanager
     def single_writer(self):
@@ -1571,14 +1606,36 @@ class StateStore:
 
     def load(self) -> dict[str, Any]:
         state = read_json(self.path, max_bytes=MAX_STATE_BYTES)
+        if state.get("activation", {}).get("legacy_unbounded_review") is True:
+            try:
+                authority = read_json(
+                    self.legacy_review_authority_path,
+                    max_bytes=MAX_RECEIPT_BYTES,
+                )
+            except ValidationError as exc:
+                raise ScopeError(
+                    "legacy review state lacks its durable migration authority receipt"
+                ) from exc
+            if authority != _expected_legacy_review_authority(state):
+                raise ScopeError("legacy review state lacks its exact durable migration authority")
+            state = _MigrationAuthorizedState(state, legacy_review_authority=authority)
         validate_state(state)
         return state
 
     def save(self, state: Mapping[str, Any]) -> None:
+        validate_state(state)
         mutable = copy.deepcopy(dict(state))
         mutable.setdefault("timestamps", {})["updated_at"] = utc_now()
+        if state.get("activation", {}).get("legacy_unbounded_review") is True:
+            authority = getattr(state, "legacy_review_authority", None)
+            mutable = _MigrationAuthorizedState(mutable, legacy_review_authority=authority)
         validate_state(mutable)
         atomic_write_json(self.path, mutable, max_bytes=MAX_STATE_BYTES)
+        if state.get("activation", {}).get("legacy_unbounded_review") is not True:
+            try:
+                self.legacy_review_authority_path.unlink()
+            except FileNotFoundError:
+                pass
 
     def initialize(self, state: Mapping[str, Any], *, replace_completed_scope: bool = False) -> None:
         replacement = copy.deepcopy(dict(state))
@@ -1777,7 +1834,19 @@ class StateStore:
                 role_model_config=role_model_config,
                 installed_roundlet_digest=digest,
             )
+            if migrated.get("activation", {}).get("legacy_unbounded_review") is True:
+                authority = _expected_legacy_review_authority(migrated)
+                migrated = _MigrationAuthorizedState(
+                    migrated,
+                    legacy_review_authority=authority,
+                )
             validate_state(migrated)
+            if migrated.get("activation", {}).get("legacy_unbounded_review") is True:
+                atomic_write_json(
+                    self.legacy_review_authority_path,
+                    authority,
+                    max_bytes=MAX_RECEIPT_BYTES,
+                )
             atomic_write_json(self.path, migrated, max_bytes=MAX_STATE_BYTES)
             return migrated
 
@@ -1951,8 +2020,6 @@ def preflight_supervisor_creation(state: Mapping[str, Any], *, final: bool = Fal
         policy = _validate_review_policy(activation.get("review_policy_snapshot", {}))
         if review_round >= policy["max_supervisor_cycles"]:
             raise GuardError("Supervisor review budget is exhausted")
-        if not final and review_round + 1 >= policy["max_supervisor_cycles"]:
-            raise GuardError("reserve one Supervisor review cycle for the ready PR")
     installed_digest = require_content_digest(
         state.get("skill", {}).get("content_digest"), "Supervisor creation installed digest"
     )
@@ -2291,6 +2358,15 @@ def preflight_mark_ready(state: Mapping[str, Any], *, head_sha: str) -> dict[str
     )
     if phase == "pass-follow-up" and not initial_pass:
         raise GuardError("ready transition requires an unchanged initial Supervisor PASS")
+    if (
+        phase == "pass-follow-up"
+        and initial_pass
+        and activation.get("legacy_unbounded_review") is not True
+        and review.get("round") >= activation["review_policy_snapshot"]["max_supervisor_cycles"]
+    ):
+        raise GuardError(
+            "last-slot draft PASS cannot be promoted to a final Supervisor PASS; block without merging"
+        )
     if phase in {"draft-pr", "worker-repair"} and not (exhausted_final or final_slot_ready):
         raise GuardError("ready transition requires finalized exhausted-review evidence or a reserved final Supervisor slot")
     return {

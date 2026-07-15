@@ -1508,14 +1508,11 @@ class StateMachineTests(unittest.TestCase):
         rs.record_worker_ready_to_merge(value, worker_thread_id="worker-11", head_sha=SHA_B, clean=True)
         self.assertEqual(value["phase"], "pre-merge")
 
-    def test_review_history_stays_bounded_across_two_hundred_fresh_rounds(self):
+    def test_default_budget_allows_round_five_ready_findings(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
-        value["task"]["pr_number"] = 22
-        value["phase"] = "draft-pr"
-        downgrade_to_schema5_unbounded(value)
-        value = rs._migrate_state_document(value)
-        for review_round in range(1, 201):
+        record_draft(value)
+        for review_round in range(1, 5):
             thread_id = f"supervisor-{review_round}"
             begin_review(value, thread_id)
             rs.accept_supervisor_result(
@@ -1527,12 +1524,136 @@ class StateMachineTests(unittest.TestCase):
             )
             rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
             rs.set_candidate(value, SHA_B, clean=True)
-        rs.validate_state(value)
-        self.assertEqual(value["review"]["round"], 200)
-        self.assertEqual(value["review"]["archived_supervisor_count"], 200)
-        self.assertLessEqual(len(value["review"]["supervisor_thread_ids"]), 64)
-        self.assertEqual(value["review"]["unarchived_supervisor_thread_ids"], [])
-        self.assertLess(len(rs.canonical_json(value).encode("utf-8")), rs.MAX_STATE_BYTES)
+        record_ready(value)
+        begin_review(value, "supervisor-5", final=True)
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-5",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fifth ready finding"],
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-5")
+        rs.record_worker_final_dispositions(
+            value,
+            worker_thread_id="worker-11",
+            head_sha=SHA_C,
+            clean=True,
+            tests_passed=True,
+            dispositions=[
+                {
+                    "finding": "fifth ready finding",
+                    "disposition": "FIXED",
+                    "evidence": "regression test",
+                }
+            ],
+        )
+        self.assertEqual(value["phase"], "ready")
+        self.assertEqual(value["review"]["exhaustion"]["round"], 5)
+
+    def test_default_budget_allows_round_five_draft_findings_and_then_stops(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for review_round in range(1, 5):
+            thread_id = f"supervisor-{review_round}"
+            begin_review(value, thread_id)
+            rs.accept_supervisor_result(
+                value,
+                thread_id=thread_id,
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=[f"finding-{review_round}"],
+            )
+            rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
+            rs.set_candidate(value, SHA_B, clean=True)
+
+        begin_review(value, "supervisor-5")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-5",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fifth draft finding"],
+        )
+        self.assertEqual(value["phase"], "final-worker-repair")
+        self.assertEqual(value["review"]["exhaustion"]["round"], 5)
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-5")
+        denied = copy.deepcopy(value)
+        denied["task"]["active_role"] = None
+        denied["phase"] = "draft-pr"
+        with self.assertRaisesRegex(rs.GuardError, "budget is exhausted"):
+            rs.preflight_supervisor_creation(denied)
+
+    def test_last_slot_draft_pass_cannot_be_promoted_to_final_pass(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        begin_review(value, "supervisor-draft-only")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-draft-only",
+            candidate_sha=SHA_B,
+            result="PASS",
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-draft-only")
+        rs.set_candidate(value, SHA_B, clean=True)
+        with self.assertRaisesRegex(rs.GuardError, "cannot be promoted"):
+            rs.preflight_mark_ready(value, head_sha=SHA_B)
+
+    def test_legacy_review_history_stays_bounded_across_two_hundred_rounds(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["task"]["pr_number"] = 22
+        value["phase"] = "draft-pr"
+        downgrade_to_schema5_unbounded(value)
+        rs.request_maintenance(value, "schema-6 migration")
+        rs.create_maintenance_checkpoint(
+            value,
+            checkpoint_id="checkpoint-001",
+            schedule_id="schedule-1",
+            schedule_state="paused",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            rs.atomic_write_json(store.path, value)
+            value = store.migrate(
+                activation_id="activation-0001",
+                checkpoint_id="checkpoint-001",
+                schedule_id="schedule-1",
+                expected_installed_digest=DIGEST,
+                expected_from_schema=5,
+                skill_root=SKILL_ROOT,
+            )
+            rs.resume_maintenance(
+                value,
+                checkpoint_id="checkpoint-001",
+                installed_roundlet_digest=DIGEST,
+                current_versions=value["versions"],
+                repository_identity=identity(),
+                schedule_id="schedule-1",
+            )
+            for review_round in range(1, 201):
+                thread_id = f"supervisor-{review_round}"
+                begin_review(value, thread_id)
+                rs.accept_supervisor_result(
+                    value,
+                    thread_id=thread_id,
+                    candidate_sha=SHA_B,
+                    result="FINDINGS",
+                    non_blocking_items=[f"finding-{review_round}"],
+                )
+                rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
+                rs.set_candidate(value, SHA_B, clean=True)
+            store.save(value)
+            value = store.load()
+            rs.validate_state(value)
+            self.assertEqual(value["review"]["round"], 200)
+            self.assertEqual(value["review"]["archived_supervisor_count"], 200)
+            self.assertLessEqual(len(value["review"]["supervisor_thread_ids"]), 64)
+            self.assertEqual(value["review"]["unarchived_supervisor_thread_ids"], [])
+            self.assertLess(len(rs.canonical_json(value).encode("utf-8")), rs.MAX_STATE_BYTES)
 
     def test_fresh_activation_cannot_select_legacy_unbounded_review(self):
         value = assigned_state()
@@ -1541,7 +1662,48 @@ class StateMachineTests(unittest.TestCase):
             "from_schema": 5,
             "input_digest": "0" * 64,
         }
-        with self.assertRaisesRegex(rs.ScopeError, "provenance is incomplete"):
+        with self.assertRaisesRegex(rs.ScopeError, "durable StateStore migration gateway"):
+            rs.validate_state(value)
+
+    def test_fresh_activation_cannot_forge_a_complete_schema_five_predecessor(self):
+        value = assigned_state()
+        set_review_budget(value, 1)
+        predecessor_state = copy.deepcopy(value)
+        downgrade_to_schema5_unbounded(predecessor_state)
+        predecessor = {
+            "versions": copy.deepcopy(predecessor_state["versions"]),
+            "skill": copy.deepcopy(predecessor_state["skill"]),
+            "activation": copy.deepcopy(predecessor_state["activation"]),
+            "review_summary": {
+                "round": predecessor_state["review"]["round"],
+                "archived_supervisor_count": predecessor_state["review"]["archived_supervisor_count"],
+                "archived_supervisor_digest": predecessor_state["review"]["archived_supervisor_digest"],
+                "last_supervisor_created_at": predecessor_state["review"]["last_supervisor_created_at"],
+            },
+        }
+        activation = value["activation"]
+        activation["legacy_unbounded_review"] = True
+        activation["legacy_review_migration"] = {
+            "from_schema": 5,
+            "input_digest": rs.digest_json(predecessor),
+            "predecessor": predecessor,
+        }
+        activation["scope_digest"] = rs.compute_scope_digest(
+            activation["repository"],
+            activation["base_branch"],
+            activation["umbrella_issues"],
+            activation["allowed_operations"],
+            value["skill"]["content_digest"],
+            owner_actor=activation["owner_actor"],
+            capability_preflight=activation["capability_preflight"],
+            orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+            role_model_snapshot=activation["role_model_snapshot"],
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+            review_policy_snapshot=activation["review_policy_snapshot"],
+            review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+            legacy_unbounded_review=True,
+        )
+        with self.assertRaisesRegex(rs.ScopeError, "durable StateStore migration gateway"):
             rs.validate_state(value)
 
     def test_supervisor_creation_time_orders_whole_then_fractional_second(self):
@@ -2130,9 +2292,11 @@ class MaintenanceTests(unittest.TestCase):
 
     def test_schema_five_migration_preserves_round_64_and_higher_as_unbounded(self):
         for review_round in (64, 65, 200):
-            with self.subTest(review_round=review_round):
+            with self.subTest(review_round=review_round), tempfile.TemporaryDirectory() as temporary:
                 old = assigned_state()
                 rs.set_candidate(old, SHA_B, clean=True)
+                old["task"]["pr_number"] = 22
+                old["phase"] = "draft-pr"
                 downgrade_to_schema5_unbounded(old)
                 old["review"].update(
                     {
@@ -2141,29 +2305,64 @@ class MaintenanceTests(unittest.TestCase):
                         "last_supervisor_created_at": "2026-07-14T00:00:00.000001Z",
                     }
                 )
-                predecessor = {
-                    "versions": copy.deepcopy(old["versions"]),
-                    "skill": copy.deepcopy(old["skill"]),
-                    "activation": copy.deepcopy(old["activation"]),
-                    "review_summary": {
-                        "round": review_round,
-                        "archived_supervisor_count": review_round,
-                        "archived_supervisor_digest": old["review"]["archived_supervisor_digest"],
-                        "last_supervisor_created_at": old["review"]["last_supervisor_created_at"],
-                    },
-                }
-                migrated = rs._migrate_state_document(old)
-                self.assertTrue(migrated["activation"]["legacy_unbounded_review"])
-                self.assertEqual(
-                    migrated["activation"]["legacy_review_migration"],
-                    {"from_schema": 5, "input_digest": rs.digest_json(predecessor), "predecessor": predecessor},
+                rs.request_maintenance(old, "schema-6 migration")
+                rs.create_maintenance_checkpoint(
+                    old,
+                    checkpoint_id="checkpoint-001",
+                    schedule_id="schedule-1",
+                    schedule_state="paused",
                 )
+                store = rs.StateStore(temporary)
+                rs.atomic_write_json(store.path, old)
+                migrated = store.migrate(
+                    activation_id="activation-0001",
+                    checkpoint_id="checkpoint-001",
+                    schedule_id="schedule-1",
+                    expected_installed_digest=DIGEST,
+                    expected_from_schema=5,
+                    skill_root=SKILL_ROOT,
+                )
+                self.assertTrue(migrated["activation"]["legacy_unbounded_review"])
                 rs.validate_state(migrated)
-                migrated["phase"] = "draft-pr"
+                rs.resume_maintenance(
+                    migrated,
+                    checkpoint_id="checkpoint-001",
+                    installed_roundlet_digest=DIGEST,
+                    current_versions=migrated["versions"],
+                    repository_identity=identity(),
+                    schedule_id="schedule-1",
+                )
                 self.assertEqual(
                     rs.preflight_supervisor_creation(migrated)["generation"],
                     review_round + 1,
                 )
+
+    def test_migrated_legacy_state_cannot_be_replayed_without_external_authority(self):
+        old = assigned_state()
+        old["task"]["active_role"] = None
+        downgrade_to_schema5_unbounded(old)
+        rs.request_maintenance(old, "schema-6 migration")
+        rs.create_maintenance_checkpoint(
+            old,
+            checkpoint_id="checkpoint-001",
+            schedule_id="schedule-1",
+            schedule_state="paused",
+        )
+        with tempfile.TemporaryDirectory() as source, tempfile.TemporaryDirectory() as replay:
+            source_store = rs.StateStore(source)
+            rs.atomic_write_json(source_store.path, old)
+            source_store.migrate(
+                activation_id="activation-0001",
+                checkpoint_id="checkpoint-001",
+                schedule_id="schedule-1",
+                expected_installed_digest=DIGEST,
+                expected_from_schema=5,
+                skill_root=SKILL_ROOT,
+            )
+            replay_store = rs.StateStore(replay)
+            replay_store.path.write_bytes(source_store.path.read_bytes())
+            with self.assertRaisesRegex(rs.ScopeError, "authority receipt"):
+                replay_store.load()
 
     def test_schema_migration_rejects_unverifiable_legacy_review_history(self):
         old = state()
@@ -3714,7 +3913,8 @@ class RoleModelConfigTests(unittest.TestCase):
         migrated = rs._migrate_state_document(value)
         legacy = rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]
         self.assertEqual(migrated["activation"]["role_model_snapshot"], legacy)
-        rs.validate_state(migrated)
+        with self.assertRaisesRegex(rs.ScopeError, "durable StateStore migration gateway"):
+            rs.validate_state(migrated)
 
 
 class SkillDigestTests(unittest.TestCase):
