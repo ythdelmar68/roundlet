@@ -29,6 +29,7 @@ from urllib.parse import urlparse
 
 SKILL_NAME = "roundlet"
 SKILL_SOURCE_REPOSITORY = "ythdelmar68/roundlet"
+DOCUMENTATION_ONLY_OPERATOR_GUIDE_PATH = "skills/roundlet/references/operator-guide.md"
 STATE_DIRECTORY = Path(".codex-log/roundlet")
 STATE_FILENAME = "state.json"
 SUMMARY_FILENAME = "last-scope-summary.json"
@@ -2427,7 +2428,7 @@ def documentation_only_resume_evidence(
     if not isinstance(changed_paths, Sequence) or isinstance(changed_paths, (str, bytes)):
         raise ValidationError("documentation-only changed paths must be a list")
     normalized_paths = list(changed_paths)
-    if normalized_paths != ["references/operator-guide.md"]:
+    if normalized_paths != [DOCUMENTATION_ONLY_OPERATOR_GUIDE_PATH]:
         raise ValidationError("PASS preservation permits only the reviewed operator-guide documentation path")
     repository = normalize_owner_name(reviewed_source_repository)
     if not re.fullmatch(rf"https://github\.com/{re.escape(repository)}/pull/[1-9]\d*", reviewed_source_pr_url):

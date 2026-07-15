@@ -8,17 +8,17 @@
 
 ## Source layout
 
-- Keep the repository root as the canonical skill source root.
-- Keep deterministic Python implementation dependency-free in `scripts/orchestration_state.py`.
-- Keep detailed operator and role documentation one level below `references/`; keep `SKILL.md` concise and imperative.
+- Keep `skills/roundlet` as the canonical skill source root.
+- Keep deterministic Python implementation dependency-free in `skills/roundlet/scripts/orchestration_state.py`.
+- Keep detailed operator and role documentation one level below `skills/roundlet/references/`; keep `skills/roundlet/SKILL.md` concise and imperative.
 - Do not add a README, changelog, installation guide, quick reference, transcript archive, duplicate operator guide, unnecessary icon, or empty optional directory.
 - Do not commit credentials, `.env` files, runtime state, test caches, or generated build artifacts.
 
 ## Verification
 
 - Run `python3 -m unittest discover -s tests -v`.
-- Run the current system `skill-creator/scripts/quick_validate.py` against the repository root.
-- Validate `agents/openai.yaml`, the rules template, prohibited runtime dependencies, bounded artifacts, and the guarded CLI smoke paths.
+- Run the current system `skill-creator/scripts/quick_validate.py` against `skills/roundlet`.
+- Validate `skills/roundlet/agents/openai.yaml`, the rules template, prohibited runtime dependencies, bounded artifacts, and the guarded CLI smoke paths.
 - Forward-test material workflow revisions with fresh, minimally primed threads when it can be done without live mutations.
 
 ## Version control

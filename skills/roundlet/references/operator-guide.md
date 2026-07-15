@@ -346,7 +346,7 @@ One explicit signal is sufficient. The Orchestrator must then:
 - reconcile the same Worker, its worktree/branch/base/candidate/clean state, and complete unconsumed mailbox;
 - discard incomplete/stale Supervisor identity and create a fresh one when required;
 - invalidate PASS for candidate uncertainty or changed review/gate semantics;
-- preserve PASS only when connector read-back proves a merged PR in the independent reviewed Roundlet source repository changed exactly `references/operator-guide.md`, and the candidate, schedule, pending action, receipts, and protocol/review/policy contract are unchanged;
+- preserve PASS only when connector read-back proves a merged PR in the independent reviewed Roundlet source repository changed exactly `skills/roundlet/references/operator-guide.md`, and the candidate, schedule, pending action, receipts, and protocol/review/policy contract are unchanged;
 - repair mutation receipts before a new visible action;
 - resume the recorded durable phase;
 - reactivate the same schedule/cadence and restore its normal heartbeat prompt.
