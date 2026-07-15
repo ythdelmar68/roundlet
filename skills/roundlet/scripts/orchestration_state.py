@@ -85,10 +85,10 @@ MODEL_ID = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
 # keeps migration compatible without carrying duplicate model literals in code.
 POLICY3_ROLE_MODEL_SNAPSHOT_DIGEST = "be1680d41063b90e22fef16e5a207fa6aea59004624be5e5bfb08d8de07c77bf"
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 PROTOCOL_VERSION = "3"
-REVIEW_CONTRACT_VERSION = "4"
-POLICY_VERSION = "5"
+REVIEW_CONTRACT_VERSION = "5"
+POLICY_VERSION = "6"
 VERSION_KEYS = {"schema", "protocol", "review_contract", "policy"}
 LOCAL_CLEANUP_KEYS = {
     "worktree_removed",
@@ -281,12 +281,22 @@ def _validate_role_model_snapshot(snapshot: Mapping[str, Any]) -> dict[str, dict
 
 
 def _validate_review_policy(policy: Mapping[str, Any]) -> dict[str, int]:
-    if not isinstance(policy, Mapping) or set(policy) != {"max_supervisor_cycles"}:
-        raise ValidationError("review policy must contain exactly max_supervisor_cycles")
+    if not isinstance(policy, Mapping) or set(policy) != {
+        "max_supervisor_cycles", "converge_after_supervisor_cycles"
+    }:
+        raise ValidationError("review policy must contain exactly max_supervisor_cycles and converge_after_supervisor_cycles")
     value = policy.get("max_supervisor_cycles")
+    converge_after = policy.get("converge_after_supervisor_cycles")
     if type(value) is not int or not 1 <= value <= 64:
         raise ValidationError("review.max_supervisor_cycles must be an integer from 1 to 64")
-    return {"max_supervisor_cycles": value}
+    if type(converge_after) is not int or not 1 <= converge_after <= value:
+        raise ValidationError(
+            "review.converge_after_supervisor_cycles must be an integer from 1 through max_supervisor_cycles"
+        )
+    return {
+        "max_supervisor_cycles": value,
+        "converge_after_supervisor_cycles": converge_after,
+    }
 
 
 def load_role_model_config(skill_root: str | os.PathLike[str]) -> dict[str, Any]:
@@ -304,7 +314,7 @@ def load_role_model_config(skill_root: str | os.PathLike[str]) -> dict[str, Any]
         raise ValidationError("Roundlet configuration is unreadable") from exc
     if not isinstance(raw, Mapping) or set(raw) != {"schema_version", "defaults", "legacy_profiles"}:
         raise ValidationError("Roundlet configuration has unknown or missing fields")
-    if type(raw.get("schema_version")) is not int or raw.get("schema_version") != 2:
+    if type(raw.get("schema_version")) is not int or raw.get("schema_version") != 3:
         raise ValidationError("Roundlet configuration schema is unsupported")
     defaults_raw = raw.get("defaults")
     if not isinstance(defaults_raw, Mapping) or set(defaults_raw) != {"roles", "review"}:
@@ -316,7 +326,7 @@ def load_role_model_config(skill_root: str | os.PathLike[str]) -> dict[str, Any]
         raise ValidationError("Roundlet configuration legacy profiles are unsupported")
     legacy_profiles = {"policy_3": _validate_role_model_snapshot(legacy_raw["policy_3"])}
     canonical = {
-        "schema_version": 2,
+        "schema_version": 3,
         "defaults": {"roles": defaults, "review": review_policy},
         "legacy_profiles": legacy_profiles,
     }
@@ -1329,16 +1339,17 @@ def validate_state(state: Mapping[str, Any]) -> None:
     if creation_intent is not None:
         if not isinstance(creation_intent, Mapping) or set(creation_intent) != {
             "activation_id", "issue", "generation", "final", "candidate_sha", "installed_roundlet_digest",
-            "review_contract", "idempotency_key", "started_at"
+            "review_contract", "guidance", "guidance_digest", "idempotency_key", "started_at"
         }:
             raise ValidationError("Supervisor creation intent is malformed")
         intent_preflight = {
             key: creation_intent.get(key)
             for key in (
                 "activation_id", "issue", "generation", "final", "candidate_sha",
-                "installed_roundlet_digest", "review_contract",
+                "installed_roundlet_digest", "review_contract", "guidance", "guidance_digest",
             )
         }
+        expected_guidance = supervisor_review_guidance(state)
         if (
             creation_intent.get("activation_id") != activation.get("id")
             or creation_intent.get("issue") != (task or {}).get("issue")
@@ -1347,6 +1358,8 @@ def validate_state(state: Mapping[str, Any]) -> None:
             or creation_intent.get("candidate_sha") != (task or {}).get("candidate_sha")
             or creation_intent.get("installed_roundlet_digest") != digest
             or creation_intent.get("review_contract") != versions.get("review_contract")
+            or creation_intent.get("guidance") != expected_guidance
+            or creation_intent.get("guidance_digest") != digest_json(expected_guidance)
             or not isinstance(creation_intent.get("idempotency_key"), str)
             or not re.fullmatch(r"[a-f0-9]{64}", creation_intent["idempotency_key"])
             or creation_intent.get("idempotency_key")
@@ -1992,6 +2005,40 @@ def set_candidate(state: MutableMapping[str, Any], candidate_sha: str, *, clean:
         transition_state(state, "worker-repair")
 
 
+def supervisor_review_guidance(state: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the activation-bound, round-aware Supervisor prompt policy."""
+    activation = state.get("activation")
+    review = state.get("review")
+    if not isinstance(activation, Mapping) or not isinstance(review, Mapping):
+        raise ValidationError("Supervisor guidance requires activation and review state")
+    policy = _validate_review_policy(activation.get("review_policy_snapshot", {}))
+    completed = review.get("round")
+    if type(completed) is not int or completed < 0:
+        raise ValidationError("Supervisor guidance requires a non-negative completed review count")
+    threshold = policy["converge_after_supervisor_cycles"]
+    legacy_unbounded = activation.get("legacy_unbounded_review") is True
+    converging = not legacy_unbounded and completed >= threshold
+    mode = "CONVERGING" if converging else "COMPLETE"
+    directive = (
+        "After {threshold} complete Supervisor reviews, begin progressively converging the review. "
+        "Prioritize regressions against earlier findings and independently reproducible blocking "
+        "correctness, safety, authority, or contract failures. Do not expand into speculative or "
+        "non-blocking cleanup. Do not suppress a newly discovered blocking finding."
+        .format(threshold=threshold)
+        if converging
+        else "Perform a complete independent review of the supplied contract. Report every newly "
+        "discovered actionable P0/P1/P2 correctness, safety, authority, or contract failure."
+    )
+    return {
+        "current_cycle": completed + 1,
+        "completed_cycles": completed,
+        "max_cycles": policy["max_supervisor_cycles"],
+        "converge_after_cycles": threshold,
+        "mode": mode,
+        "directive": directive,
+    }
+
+
 def preflight_supervisor_creation(state: Mapping[str, Any], *, final: bool = False) -> dict[str, Any]:
     """Validate deterministic review capacity before any external task creation."""
     task = state.get("task")
@@ -2026,6 +2073,7 @@ def preflight_supervisor_creation(state: Mapping[str, Any], *, final: bool = Fal
     review_contract = state.get("versions", {}).get("review_contract")
     if not isinstance(review_contract, str) or not review_contract:
         raise ValidationError("Supervisor creation review contract is missing")
+    guidance = supervisor_review_guidance(state)
     return {
         "activation_id": activation.get("id"),
         "issue": task.get("issue"),
@@ -2034,6 +2082,8 @@ def preflight_supervisor_creation(state: Mapping[str, Any], *, final: bool = Fal
         "candidate_sha": task.get("candidate_sha"),
         "installed_roundlet_digest": installed_digest,
         "review_contract": review_contract,
+        "guidance": guidance,
+        "guidance_digest": digest_json(guidance),
     }
 
 
@@ -2061,6 +2111,8 @@ def create_supervisor_after_preflight(
                 intent.get("generation") != preflight["generation"]
                 or intent.get("final") is not final
                 or intent.get("candidate_sha") != preflight["candidate_sha"]
+                or intent.get("guidance") != preflight["guidance"]
+                or intent.get("guidance_digest") != preflight["guidance_digest"]
             ):
                 raise MailboxError("pending Supervisor creation intent differs from the requested review")
             return copy.deepcopy(dict(intent)), False
@@ -3654,7 +3706,10 @@ def _migrate_state_document(
         }
         # A schema-5 activation had no review ceiling.  Preserve that behavior
         # explicitly; 64 is only the validator's maximum for *new* activations.
-        legacy_unbounded = {"max_supervisor_cycles": 64}
+        legacy_unbounded = {
+            "max_supervisor_cycles": 64,
+            "converge_after_supervisor_cycles": 64,
+        }
         activation.setdefault("review_policy_snapshot", legacy_unbounded)
         activation.setdefault("review_policy_snapshot_digest", digest_json(legacy_unbounded))
         activation["legacy_unbounded_review"] = True
@@ -3696,6 +3751,61 @@ def _migrate_state_document(
             policy_version=POLICY_VERSION,
         )
         current = 6
+
+    if current == 6 and target_version >= 7:
+        activation = result.get("activation")
+        if not isinstance(activation, MutableMapping):
+            raise MigrationError("schema-6 activation identity is missing")
+        prior_policy = activation.get("review_policy_snapshot")
+        if not isinstance(prior_policy, Mapping) or set(prior_policy) not in (
+            {"max_supervisor_cycles"},
+            {"max_supervisor_cycles", "converge_after_supervisor_cycles"},
+        ):
+            raise MigrationError("schema-6 review policy cannot establish a convergence threshold")
+        maximum = prior_policy.get("max_supervisor_cycles")
+        if type(maximum) is not int or not 1 <= maximum <= 64:
+            raise MigrationError("schema-6 review policy maximum is invalid")
+        # Existing bounded activations retain their old non-converging behavior.
+        # Legacy-unbounded activations also remain COMPLETE regardless of this
+        # placeholder threshold (enforced by supervisor_review_guidance).
+        review_policy = {
+            "max_supervisor_cycles": maximum,
+            "converge_after_supervisor_cycles": maximum,
+        }
+        activation["review_policy_snapshot"] = review_policy
+        activation["review_policy_snapshot_digest"] = digest_json(review_policy)
+        versions.update(
+            {
+                "schema": 7,
+                "protocol": PROTOCOL_VERSION,
+                "review_contract": REVIEW_CONTRACT_VERSION,
+                "policy": POLICY_VERSION,
+            }
+        )
+        maintenance = result.get("maintenance")
+        if result.get("phase") == "paused-maintenance" and isinstance(maintenance, MutableMapping):
+            maintenance["stored_versions"] = copy.deepcopy(dict(versions))
+            receipt = maintenance.get("migration_receipt")
+            if isinstance(receipt, MutableMapping):
+                receipt["to_schema"] = 7
+        activation["scope_digest"] = compute_scope_digest(
+            activation["repository"],
+            activation.get("base_branch"),
+            activation.get("umbrella_issues", []),
+            activation.get("allowed_operations", {}),
+            result["skill"]["content_digest"],
+            owner_actor=activation.get("owner_actor", {}),
+            capability_preflight=activation.get("capability_preflight", {}),
+            orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
+            role_model_snapshot=activation.get("role_model_snapshot", {}),
+            role_model_snapshot_digest=activation.get("role_model_snapshot_digest"),
+            review_policy_snapshot=review_policy,
+            review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+            legacy_unbounded_review=activation.get("legacy_unbounded_review"),
+            protocol_version=PROTOCOL_VERSION,
+            policy_version=POLICY_VERSION,
+        )
+        current = 7
 
     if current != target_version:
         raise MigrationError(f"no supported migration from schema {current} to {target_version}")

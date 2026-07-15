@@ -213,6 +213,21 @@ Create a completely fresh local-project task with model `[SUPERVISOR_MODEL]` and
 
 Before any task-service creation, the root Orchestrator must pass deterministic budget preflight. Only then read the created task back and give `begin_supervisor` the exact service-returned task ID, UTC creation timestamp, model/reasoning, project/parent/fork identity, read-only permission profile, and explicit filesystem/GitHub/`gh`/web/network capability fields for this activation, issue, and next review generation. Never synthesize that creation receipt or treat prompt prohibitions as capability proof. After consuming the result, archive the task and durably call `record_supervisor_archived` before another review or a final budget-repair handoff.
 
+The preflight result is the only source for the following policy block. Pass its exact fields to the task-creation request and the Supervisor prompt; do not reread configuration or reconstruct a threshold for an active activation.
+
+```text
+REVIEW CONVERGENCE POLICY
+current_supervisor_cycle: [CURRENT_SUPERVISOR_CYCLE]
+completed_supervisor_cycles: [COMPLETED_SUPERVISOR_CYCLES]
+max_supervisor_cycles: [MAX_SUPERVISOR_CYCLES]
+converge_after_supervisor_cycles: [CONVERGE_AFTER_SUPERVISOR_CYCLES]
+review_mode: [REVIEW_MODE]
+
+[REVIEW_CONVERGENCE_DIRECTIVE]
+```
+
+`COMPLETE` requires broad independent falsification of the whole supplied contract. `CONVERGING` rechecks earlier repairs and independently reproducible blocking correctness, safety, authority, or contract failures; it must not expand into speculative/non-blocking cleanup and must still report every newly discovered actionable P0/P1/P2 failure.
+
 ```text
 [SHARED IMMUTABLE ENVELOPE AND CONTEXT]
 

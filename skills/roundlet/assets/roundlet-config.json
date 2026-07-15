@@ -1,5 +1,5 @@
 {
-    "schema_version": 2,
+    "schema_version": 3,
     "defaults": {
         "roles": {
             "orchestrator": {
@@ -16,7 +16,8 @@
             }
         },
         "review": {
-            "max_supervisor_cycles": 5
+            "max_supervisor_cycles": 5,
+            "converge_after_supervisor_cycles": 3
         }
     },
     "legacy_profiles": {

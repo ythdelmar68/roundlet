@@ -582,9 +582,12 @@ def set_operation(value, operation, enabled):
     )
 
 
-def set_review_budget(value, maximum, *, legacy_unbounded=False):
+def set_review_budget(value, maximum, *, converge_after=None, legacy_unbounded=False):
     activation = value["activation"]
-    activation["review_policy_snapshot"] = {"max_supervisor_cycles": maximum}
+    activation["review_policy_snapshot"] = {
+        "max_supervisor_cycles": maximum,
+        "converge_after_supervisor_cycles": maximum if converge_after is None else converge_after,
+    }
     activation["review_policy_snapshot_digest"] = rs.digest_json(
         activation["review_policy_snapshot"]
     )
@@ -1324,6 +1327,60 @@ class StateMachineTests(unittest.TestCase):
                 create_task=lambda preflight: calls.append(preflight) or {},
             )
         self.assertEqual(calls, [])
+
+    def test_supervisor_guidance_is_round_aware_and_reaches_creation_callback(self):
+        value = assigned_state()
+        set_review_budget(value, 5, converge_after=3)
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["phase"] = "draft-pr"
+        self.assertEqual(rs.supervisor_review_guidance(value)["mode"], "COMPLETE")
+        value["review"]["round"] = 3
+        converging = rs.supervisor_review_guidance(value)
+        self.assertEqual(
+            converging,
+            {
+                "current_cycle": 4,
+                "completed_cycles": 3,
+                "max_cycles": 5,
+                "converge_after_cycles": 3,
+                "mode": "CONVERGING",
+                "directive": (
+                    "After 3 complete Supervisor reviews, begin progressively converging the review. "
+                    "Prioritize regressions against earlier findings and independently reproducible blocking "
+                    "correctness, safety, authority, or contract failures. Do not expand into speculative or "
+                    "non-blocking cleanup. Do not suppress a newly discovered blocking finding."
+                ),
+            },
+        )
+        fresh = assigned_state()
+        rs.set_candidate(fresh, SHA_B, clean=True)
+        fresh["phase"] = "draft-pr"
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(fresh)
+            seen = []
+            rs.create_supervisor_after_preflight(
+                fresh,
+                final=False,
+                state_store=store,
+                create_task=lambda intent: seen.append(intent) or {
+                    "thread_id": "supervisor-guidance",
+                    "creation_receipt": {
+                        "activation_id": intent["activation_id"],
+                        "issue": intent["issue"],
+                        "generation": intent["generation"],
+                        "installed_roundlet_digest": intent["installed_roundlet_digest"],
+                        "review_contract": intent["review_contract"],
+                        "created": True,
+                        "service_receipt": role_receipt(
+                            "supervisor", "supervisor-guidance", created_at="2026-07-14T00:00:00.000001Z"
+                        ),
+                    },
+                },
+            )
+        self.assertEqual(seen[0]["guidance"]["converge_after_cycles"], 3)
+        self.assertEqual(seen[0]["guidance"]["mode"], "COMPLETE")
+        self.assertEqual(seen[0]["guidance_digest"], rs.digest_json(seen[0]["guidance"]))
 
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
@@ -2289,6 +2346,21 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(migrated["versions"]["schema"], rs.SCHEMA_VERSION)
         self.assertEqual(migrated["completed_tasks"], [])
         self.assertEqual(migrated["skill"]["source_repository"], "ythdelmar68/roundlet")
+
+    def test_schema_six_migration_preserves_non_converging_review_behavior(self):
+        old = state()
+        old["versions"].update({"schema": 6, "review_contract": "4", "policy": "5"})
+        old["activation"]["review_policy_snapshot"] = {"max_supervisor_cycles": 5}
+        old["activation"]["review_policy_snapshot_digest"] = rs.digest_json(
+            old["activation"]["review_policy_snapshot"]
+        )
+        old["review"]["round"] = 4
+        migrated = rs._migrate_state_document(old)
+        self.assertEqual(
+            migrated["activation"]["review_policy_snapshot"],
+            {"max_supervisor_cycles": 5, "converge_after_supervisor_cycles": 5},
+        )
+        self.assertEqual(rs.supervisor_review_guidance(migrated)["mode"], "COMPLETE")
 
     def test_schema_five_migration_preserves_round_64_and_higher_as_unbounded(self):
         for review_round in (64, 65, 200):
@@ -3815,6 +3887,23 @@ class RoleModelConfigTests(unittest.TestCase):
             path = root / "assets" / "roundlet-config.json"
             value = json.loads(path.read_text())
             value["defaults"]["review"]["extra"] = 5
+            path.write_text(json.dumps(value))
+            with self.assertRaises(rs.ValidationError):
+                rs.load_role_model_config(root)
+        for bad in (True, 0, -1, 1.5, 6):
+            with self.subTest(converge_after=bad), tempfile.TemporaryDirectory() as temporary:
+                root = self.copy_skill(temporary)
+                path = root / "assets" / "roundlet-config.json"
+                value = json.loads(path.read_text())
+                value["defaults"]["review"]["converge_after_supervisor_cycles"] = bad
+                path.write_text(json.dumps(value))
+                with self.assertRaises(rs.ValidationError):
+                    rs.load_role_model_config(root)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = self.copy_skill(temporary)
+            path = root / "assets" / "roundlet-config.json"
+            value = json.loads(path.read_text())
+            value["defaults"]["review"].pop("converge_after_supervisor_cycles")
             path.write_text(json.dumps(value))
             with self.assertRaises(rs.ValidationError):
                 rs.load_role_model_config(root)
