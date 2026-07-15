@@ -18,6 +18,7 @@ Bind every read, mutation, thread, worktree, branch, receipt, and schedule to:
 - connector-verified human owner actor ID/login provenance;
 - allowed operations;
 - service-verified Orchestrator/Worker/Supervisor capability receipts;
+- activation-bound role-model snapshot and its digest;
 - installed Roundlet content digest;
 - state, protocol, review-contract, and policy versions.
 
@@ -48,7 +49,7 @@ Stop before creating a worktree, child task, or schedule unless all checks pass:
 1. Resolve one Git root, Git common directory, canonical origin owner/name, repository ID when available, and base branch.
 2. Fetch exactly `origin/<base>` and require a clean orchestration checkout with `HEAD == <base> == origin/<base>` by full SHA.
 3. Inspect all current-repository worktrees. Block on dirty, unmerged, uniquely owned, ambiguous, or conflicting work; never modify another checkout to satisfy preflight.
-4. Verify the exact installed Roundlet digest and trusted current-repository policy.
+4. From one exact reviewed installation root, validate `assets/role-models.json` and compute the installed Roundlet digest. Use its validated `defaults` only to create and read back the Orchestrator; `new_state` then repeats the stable-root check and binds those defaults as the immutable activation snapshot. Do not reread configuration for an active role.
 5. Verify GitHub connector reads and each authorized mutation against this repository only.
 6. Verify unattended Git fetch/push, guarded cleanup, thread management, schedule update, merge-with-expected-head, and issue-close capabilities.
 7. Require service evidence that per-task model, reasoning, parent/fork identity, project, permission profile, filesystem write, connector, `gh`, web, and network capabilities are observable and enforceable. Block activation if Worker or Supervisor isolation cannot be proven.
@@ -59,7 +60,7 @@ Prefer the narrowest working sandbox and reviewed rules. Treat `approval_policy 
 
 ## Activate bounded state
 
-Normalize the activation with `normalize_activation_request`, resolve identity with `resolve_repository_identity`, and initialize `state.json` with `new_state` plus `StateStore.initialize`. Supply the connector-verified owner actor, capability preflight (including enforceable connector-read adapter receipts), and service-returned Orchestrator creation receipt. Use an owner-visible stable activation ID and the exact installed digest returned by `skill_content_digest`.
+Normalize the activation with `normalize_activation_request` and resolve identity with `resolve_repository_identity`. From `<exact-reviewed-installed-roundlet>`, run `role-config` and `skill-digest`, then create and read back the Orchestrator using the validated default model and reasoning effort. Next call `new_state(..., skill_root=<exact-reviewed-installed-roundlet>, installed_roundlet_digest=..., orchestrator_creation_receipt=...)`, which repeats stable-root validation and creates the activation snapshot; initialize `state.json` with `StateStore.initialize`. Supply the connector-verified owner actor and capability preflight (including enforceable connector-read adapter receipts).
 
 Keep only:
 
@@ -90,7 +91,7 @@ Enter `waiting-dependency` when prerequisites are incomplete. Enter permanent `b
 
 Only when `create_task_branches` is true, create one Worker worktree/task for the selected issue. Validate that authorization before invoking any external Worker/worktree creation callback and again when recording assignment:
 
-- model `gpt-5.5`, reasoning `xhigh`;
+- the Worker model and reasoning effort from the activation role-model snapshot;
 - a current-repository `codex/` branch from the recorded synchronized base;
 - no GitHub connector, `gh`, web, or external network;
 - the immutable context assembled by the Orchestrator;
@@ -104,7 +105,7 @@ After the initial handoff, independently verify branch, commit, clean status, an
 
 Create a completely fresh read-only Supervisor task for every round:
 
-- model `gpt-5.6-sol`, reasoning `xhigh`;
+- the Supervisor model and reasoning effort from the activation role-model snapshot;
 - local project access to immutable base/candidate commits only;
 - no Worker confidence, previous conclusions, moving branch identity, file writes, GitHub, `gh`, web, or network;
 - strict `RESULT: PASS` or `RESULT: FINDINGS` output.

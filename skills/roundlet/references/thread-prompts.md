@@ -33,6 +33,10 @@ candidate_sha: [FULL_CANDIDATE_SHA_OR_NULL]
 branch: [RECORDED_CODEX_BRANCH]
 worktree: [RECORDED_WORKTREE]
 installed_roundlet_digest: [CONTENT_DIGEST]
+worker_model: [WORKER_MODEL]
+worker_reasoning_effort: [WORKER_REASONING_EFFORT]
+supervisor_model: [SUPERVISOR_MODEL]
+supervisor_reasoning_effort: [SUPERVISOR_REASONING_EFFORT]
 
 Authority boundary:
 - Work only in the repository and selected issue above.
@@ -66,7 +70,7 @@ Never ask a child to fetch missing GitHub context. Stop dispatch and let the Orc
 
 ## Initial Worker implementation
 
-Create a new project worktree task with model `gpt-5.5` and reasoning effort `xhigh`. Do not fork an existing task. Before dispatch, read the task back from the service and require a receipt proving the exact task/project/parent identity, model/reasoning, task-worktree write profile, and absence of GitHub connector, `gh`, web, and network authority. Pass it to `assign_task`; block if any field is missing or mismatched.
+Create a new project worktree task with model `[WORKER_MODEL]` and reasoning effort `[WORKER_REASONING_EFFORT]`, taken only from the activation snapshot. Do not fork an existing task. Before dispatch, read the task back from the service and require a receipt proving the exact task/project/parent identity, model/reasoning, task-worktree write profile, and absence of GitHub connector, `gh`, web, and network authority. Pass it to `assign_task`; block if any field is missing or mismatched.
 
 ```text
 [SHARED IMMUTABLE ENVELOPE AND CONTEXT]
@@ -178,7 +182,7 @@ If any fix changes HEAD, mark the old PASS stale. The Orchestrator must run a fr
 
 ## Read-only Supervisor review
 
-Create a completely fresh local-project task with model `gpt-5.6-sol` and reasoning effort `xhigh`. Do not fork the Worker or reuse any prior Supervisor.
+Create a completely fresh local-project task with model `[SUPERVISOR_MODEL]` and reasoning effort `[SUPERVISOR_REASONING_EFFORT]`, taken only from the activation snapshot. Do not fork the Worker or reuse any prior Supervisor.
 
 Before sending this prompt, the root Orchestrator must read the created task back from the task service and give `begin_supervisor` the exact service-returned task ID, UTC creation timestamp, model/reasoning, project/parent/fork identity, read-only permission profile, and explicit filesystem/GitHub/`gh`/web/network capability fields for this activation, issue, and next review generation. Never synthesize that creation receipt or treat prompt prohibitions as capability proof. After consuming the result, archive the task and durably call `record_supervisor_archived` before another review.
 
