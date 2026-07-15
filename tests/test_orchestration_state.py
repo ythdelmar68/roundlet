@@ -19,6 +19,23 @@ sys.path.insert(0, str(SKILL_ROOT / "scripts"))
 import orchestration_state as rs
 
 
+def repository_path_is_outside_skill_tree(path):
+    relative = path.relative_to(REPO_ROOT)
+    return relative.parts[0] != "skills"
+
+
+def resolve_skill_link_target(target):
+    resolved_skill_root = SKILL_ROOT.resolve()
+    resolved_target = (resolved_skill_root / target).resolve()
+    try:
+        resolved_target.relative_to(resolved_skill_root)
+    except ValueError as error:
+        raise ValueError(f"skill link escapes publishable root: {target}") from error
+    if not resolved_target.is_file():
+        raise ValueError(f"skill link does not target a file: {target}")
+    return resolved_target
+
+
 SHA_A = "a" * 40
 SHA_B = "b" * 40
 SHA_C = "c" * 40
@@ -3215,7 +3232,7 @@ class StaticSkillTests(unittest.TestCase):
             path.relative_to(REPO_ROOT).as_posix()
             for path in REPO_ROOT.rglob("*")
             if path.is_file()
-            and "skills" not in path.relative_to(REPO_ROOT).parts
+            and repository_path_is_outside_skill_tree(path)
             and ".git" not in path.relative_to(REPO_ROOT).parts
             and "__pycache__" not in path.parts
             and not path.name.endswith((".pyc", ".pyo"))
@@ -3227,6 +3244,12 @@ class StaticSkillTests(unittest.TestCase):
         )
         for old_payload_root in ("SKILL.md", "agents", "assets", "references", "scripts"):
             self.assertFalse((REPO_ROOT / old_payload_root).exists())
+
+    def test_repository_layout_filter_includes_nested_noncanonical_skills_path(self):
+        self.assertTrue(
+            repository_path_is_outside_skill_tree(REPO_ROOT / "docs" / "skills" / "rogue.txt")
+        )
+        self.assertFalse(repository_path_is_outside_skill_tree(SKILL_ROOT / "SKILL.md"))
 
     def test_publishable_skill_contract(self):
         expected = {
@@ -3336,7 +3359,14 @@ class StaticSkillTests(unittest.TestCase):
         )
         for target in local_targets:
             with self.subTest(target=target):
-                self.assertTrue((SKILL_ROOT / target).is_file())
+                self.assertEqual(
+                    resolve_skill_link_target(target),
+                    (SKILL_ROOT / target).resolve(),
+                )
+
+    def test_skill_internal_links_reject_path_traversal(self):
+        with self.assertRaisesRegex(ValueError, "escapes publishable root"):
+            resolve_skill_link_target("../../AGENTS.md")
 
     def test_operator_installed_paths_and_source_path_contract(self):
         skill = (SKILL_ROOT / "SKILL.md").read_text()
