@@ -123,6 +123,15 @@ def downgrade_to_policy3(value):
         receipt.update(rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]["supervisor"])
     activation.pop("role_model_snapshot", None)
     activation.pop("role_model_snapshot_digest", None)
+    for key in (
+        "review_policy_snapshot",
+        "review_policy_snapshot_digest",
+        "legacy_unbounded_review",
+        "legacy_review_migration",
+    ):
+        activation.pop(key, None)
+    value["review"].pop("exhaustion", None)
+    value["review"].pop("supervisor_creation_intent", None)
     value["versions"].update({"schema": 4, "review_contract": "3", "policy": "3"})
     refresh_policy3_scope(value)
 
@@ -419,6 +428,8 @@ def begin_review(value, thread_id, *, final=False):
             "activation_id": value["activation"]["id"],
             "issue": value["task"]["issue"],
             "generation": generation,
+            "installed_roundlet_digest": value["skill"]["content_digest"],
+            "review_contract": value["versions"]["review_contract"],
             "created": True,
             "service_receipt": role_receipt(
                 "supervisor",
@@ -592,6 +603,34 @@ def set_review_budget(value, maximum, *, legacy_unbounded=False):
         review_policy_snapshot=activation["review_policy_snapshot"],
         review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
         legacy_unbounded_review=activation["legacy_unbounded_review"],
+    )
+
+
+def downgrade_to_schema5_unbounded(value):
+    value["versions"].update({"schema": 5, "protocol": "3", "review_contract": "3", "policy": "4"})
+    activation = value["activation"]
+    for key in (
+        "review_policy_snapshot",
+        "review_policy_snapshot_digest",
+        "legacy_unbounded_review",
+        "legacy_review_migration",
+    ):
+        activation.pop(key, None)
+    value["review"].pop("exhaustion", None)
+    value["review"].pop("supervisor_creation_intent", None)
+    activation["scope_digest"] = rs.compute_scope_digest(
+        activation["repository"],
+        activation["base_branch"],
+        activation["umbrella_issues"],
+        activation["allowed_operations"],
+        value["skill"]["content_digest"],
+        owner_actor=activation["owner_actor"],
+        capability_preflight=activation["capability_preflight"],
+        orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+        role_model_snapshot=activation["role_model_snapshot"],
+        role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+        protocol_version="3",
+        policy_version="4",
     )
 
 
@@ -945,6 +984,36 @@ class StateMachineTests(unittest.TestCase):
         with self.assertRaises(rs.GuardError):
             record_close(value, issue_state="open")
 
+    def test_mark_ready_preflight_blocks_connector_before_side_effect(self):
+        draft = assigned_state()
+        rs.set_candidate(draft, SHA_B, clean=True)
+        record_draft(draft)
+        active_repair = copy.deepcopy(draft)
+        active_repair["phase"] = "worker-repair"
+        active_repair["task"]["active_role"] = "worker"
+        for label, value in (("premature-draft", draft), ("active-worker", active_repair)):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                store = rs.StateStore(temporary)
+                store.initialize(value)
+                target = {
+                    **pr_identity(value),
+                    "pr_number": 22,
+                    "pr_url": "https://github.com/owner/project/pull/22",
+                    "pr_state": "open",
+                    "draft": False,
+                }
+                calls = []
+                with self.assertRaises((rs.GuardError, rs.TransitionError)):
+                    rs.execute_github_mutation(
+                        store,
+                        operation="mark-ready",
+                        idempotency_key=f"mark-ready-{label}",
+                        target=target,
+                        mutate=lambda item: calls.append(item) or target,
+                    )
+                self.assertEqual(calls, [])
+                self.assertIsNone(store.load()["github_mutations"]["pending"])
+
     def test_premerge_cannot_enter_merging_without_gateway_intent(self):
         value = premerge_state()
         with self.assertRaises(rs.TransitionError):
@@ -1122,6 +1191,8 @@ class StateMachineTests(unittest.TestCase):
                             "activation_id": candidate["activation"]["id"],
                             "issue": 11,
                             "generation": 1,
+                            "installed_roundlet_digest": value["skill"]["content_digest"],
+                            "review_contract": value["versions"]["review_contract"],
                             "created": True,
                             "service_receipt": service,
                         },
@@ -1283,6 +1354,8 @@ class StateMachineTests(unittest.TestCase):
                         "activation_id": intent["activation_id"],
                         "issue": intent["issue"],
                         "generation": intent["generation"],
+                        "installed_roundlet_digest": intent["installed_roundlet_digest"],
+                        "review_contract": intent["review_contract"],
                         "created": True,
                         "service_receipt": role_receipt(
                             "supervisor", "supervisor-reconciled", created_at="2026-07-14T00:00:00.000001Z"
@@ -1440,11 +1513,7 @@ class StateMachineTests(unittest.TestCase):
         rs.set_candidate(value, SHA_B, clean=True)
         value["task"]["pr_number"] = 22
         value["phase"] = "draft-pr"
-        value["versions"].update({"schema": 5, "protocol": "3", "review_contract": "3", "policy": "4"})
-        for key in ("review_policy_snapshot", "review_policy_snapshot_digest", "legacy_unbounded_review", "legacy_review_migration"):
-            value["activation"].pop(key, None)
-        value["review"].pop("exhaustion")
-        value["review"].pop("supervisor_creation_intent")
+        downgrade_to_schema5_unbounded(value)
         value = rs._migrate_state_document(value)
         for review_round in range(1, 201):
             thread_id = f"supervisor-{review_round}"
@@ -1468,7 +1537,11 @@ class StateMachineTests(unittest.TestCase):
     def test_fresh_activation_cannot_select_legacy_unbounded_review(self):
         value = assigned_state()
         set_review_budget(value, 64, legacy_unbounded=True)
-        with self.assertRaisesRegex(rs.ScopeError, "migration provenance"):
+        value["activation"]["legacy_review_migration"] = {
+            "from_schema": 5,
+            "input_digest": "0" * 64,
+        }
+        with self.assertRaisesRegex(rs.ScopeError, "provenance is incomplete"):
             rs.validate_state(value)
 
     def test_supervisor_creation_time_orders_whole_then_fractional_second(self):
@@ -1483,6 +1556,8 @@ class StateMachineTests(unittest.TestCase):
                 "activation_id": value["activation"]["id"],
                 "issue": 11,
                 "generation": 1,
+                "installed_roundlet_digest": value["skill"]["content_digest"],
+                "review_contract": value["versions"]["review_contract"],
                 "created": True,
                 "service_receipt": role_receipt(
                     "supervisor", "supervisor-whole", created_at="2026-07-14T00:00:00Z"
@@ -1504,6 +1579,8 @@ class StateMachineTests(unittest.TestCase):
                 "activation_id": value["activation"]["id"],
                 "issue": 11,
                 "generation": 2,
+                "installed_roundlet_digest": value["skill"]["content_digest"],
+                "review_contract": value["versions"]["review_contract"],
                 "created": True,
                 "service_receipt": role_receipt(
                     "supervisor", "supervisor-fractional", created_at="2026-07-14T00:00:00.1Z"
@@ -1814,6 +1891,71 @@ class MaintenanceTests(unittest.TestCase):
                 schedule_state="paused",
             )
 
+    def test_pending_supervisor_creation_cannot_cross_maintenance_or_upgrade(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        value["phase"] = "draft-pr"
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            with self.assertRaises(rs.ValidationError):
+                rs.create_supervisor_after_preflight(
+                    value,
+                    final=False,
+                    state_store=store,
+                    create_task=lambda intent: {},
+                )
+            pending = store.load()
+
+        with self.assertRaisesRegex(rs.MailboxError, "pending Supervisor creation"):
+            rs.request_maintenance(pending, "upgrade")
+
+        checkpoint = copy.deepcopy(pending)
+        checkpoint["phase"] = "maintenance-requested"
+        checkpoint["maintenance"].update(
+            {"requested": True, "previous_phase": "draft-pr", "reason": "upgrade"}
+        )
+        with self.assertRaisesRegex(rs.MailboxError, "pending Supervisor creation"):
+            rs.create_maintenance_checkpoint(
+                checkpoint,
+                checkpoint_id="checkpoint-001",
+                schedule_id="schedule-1",
+                schedule_state="paused",
+            )
+
+        paused = self._paused()
+        paused["review"]["supervisor_creation_intent"] = pending["review"]["supervisor_creation_intent"]
+        with self.assertRaisesRegex(rs.MailboxError, "pending Supervisor creation"):
+            rs.resume_maintenance(
+                paused,
+                checkpoint_id="checkpoint-001",
+                installed_roundlet_digest="e" * 64,
+                current_versions=paused["versions"],
+                repository_identity=identity(),
+                schedule_id="schedule-1",
+            )
+
+        upgraded = copy.deepcopy(pending)
+        upgraded["skill"]["content_digest"] = "e" * 64
+        activation = upgraded["activation"]
+        activation["scope_digest"] = rs.compute_scope_digest(
+            activation["repository"],
+            activation["base_branch"],
+            activation["umbrella_issues"],
+            activation["allowed_operations"],
+            upgraded["skill"]["content_digest"],
+            owner_actor=activation["owner_actor"],
+            capability_preflight=activation["capability_preflight"],
+            orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+            role_model_snapshot=activation["role_model_snapshot"],
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+            review_policy_snapshot=activation["review_policy_snapshot"],
+            review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+            legacy_unbounded_review=activation["legacy_unbounded_review"],
+        )
+        with self.assertRaisesRegex(rs.ValidationError, "creation intent identity is stale"):
+            rs.validate_state(upgraded)
+
     def _paused(self):
         value = assigned_state()
         value["task"]["active_role"] = None
@@ -1991,12 +2133,7 @@ class MaintenanceTests(unittest.TestCase):
             with self.subTest(review_round=review_round):
                 old = assigned_state()
                 rs.set_candidate(old, SHA_B, clean=True)
-                old["versions"].update(
-                    {"schema": 5, "protocol": "3", "review_contract": "3", "policy": "4"}
-                )
-                old["activation"].pop("review_policy_snapshot")
-                old["activation"].pop("review_policy_snapshot_digest")
-                old["activation"].pop("legacy_unbounded_review")
+                downgrade_to_schema5_unbounded(old)
                 old["review"].update(
                     {
                         "round": review_round,
@@ -2004,12 +2141,22 @@ class MaintenanceTests(unittest.TestCase):
                         "last_supervisor_created_at": "2026-07-14T00:00:00.000001Z",
                     }
                 )
-                schema5_digest = rs.digest_json(old)
+                predecessor = {
+                    "versions": copy.deepcopy(old["versions"]),
+                    "skill": copy.deepcopy(old["skill"]),
+                    "activation": copy.deepcopy(old["activation"]),
+                    "review_summary": {
+                        "round": review_round,
+                        "archived_supervisor_count": review_round,
+                        "archived_supervisor_digest": old["review"]["archived_supervisor_digest"],
+                        "last_supervisor_created_at": old["review"]["last_supervisor_created_at"],
+                    },
+                }
                 migrated = rs._migrate_state_document(old)
                 self.assertTrue(migrated["activation"]["legacy_unbounded_review"])
                 self.assertEqual(
                     migrated["activation"]["legacy_review_migration"],
-                    {"from_schema": 5, "input_digest": schema5_digest},
+                    {"from_schema": 5, "input_digest": rs.digest_json(predecessor), "predecessor": predecessor},
                 )
                 rs.validate_state(migrated)
                 migrated["phase"] = "draft-pr"

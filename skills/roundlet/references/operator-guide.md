@@ -69,7 +69,7 @@ python3 <installed-roundlet>/scripts/orchestration_state.py role-config \
   --skill-root <installed-roundlet>
 ```
 
-`defaults.roles` supplies model and reasoning effort, and `defaults.review.max_supervisor_cycles` supplies the total Supervisor budget, for the next activation only. At activation, Roundlet validates the complete installed digest, copies both snapshots into durable scope, and never rereads this file for an active role. Do not edit the file during an activation to change an existing Orchestrator, Worker, Supervisor, or review budget. The `legacy_profiles` section is migration-only and must never be selected for a new activation.
+`defaults.roles` supplies model and reasoning effort, and `defaults.review.max_supervisor_cycles` supplies the total Supervisor budget, for the next activation only. At activation, Roundlet validates the complete installed digest, copies both snapshots into durable scope, and never rereads this file for an active role. Do not edit the file during an activation to change an existing Orchestrator, Worker, Supervisor, or review budget. The `legacy_profiles` section is migration-only and must never be selected for a new activation; an unbounded legacy review exemption additionally requires a bounded schema-5 predecessor whose digest, scope, versions, activation identity, and review summary can be recomputed.
 
 ## Prepare one target repository
 
@@ -135,7 +135,7 @@ Verify the exact authorized writes for:
 - exact selected-issue close after merge;
 - exact recorded remote-branch deletion after cleanup proof.
 
-Route every write through `execute_github_mutation`. Supply one target-bound idempotency key and exact pre-mutation live target. The gateway checks the operation flag, repository/task/phase/PR identity and merge gates, persists intent before the callback, then requires connector live read-back before state advances. For recovery, reconcile the pending intent through connector reads; do not call the post-mutation receipt helpers directly.
+Route every write through `execute_github_mutation`. Supply one target-bound idempotency key and exact pre-mutation live target. The gateway checks the operation flag, repository/task/phase/PR identity and merge gates, persists intent before the callback, then requires connector live read-back before state advances. For `mark-ready`, it also runs the complete PASS/exhaustion/reserved-final-slot and inactive-Worker preflight before persisting intent or invoking the connector, then reuses that preflight during completion. For recovery, reconcile the pending intent through connector reads; do not call the post-mutation receipt helpers directly.
 
 Do not silently fall back to `gh`, shell HTTP, a different connector, or a credential copied into the project.
 
@@ -316,7 +316,7 @@ installed_roundlet_digest: <digest>
 resume_prompt: <exact copy/paste prompt>
 ```
 
-The Orchestrator must stop new selection, finish/reconcile an atomic mutation, drain the Worker at a clean safe turn boundary with `drain_worker_for_maintenance`, or invalidate/archive an interrupted Supervisor with `discard_supervisor_for_maintenance`. The drain records whether the same Worker turn must be reactivated; discarding a Supervisor restores `draft-pr` or `ready` so a new Supervisor can be created. Consume/quarantine complete mailboxes, prove no child is mutating, pause the single schedule, read back `schedule_state=paused`, and pass that proof to `create_maintenance_checkpoint`.
+The Orchestrator must stop new selection, finish/reconcile every atomic mutation—including a pending Supervisor task-creation intent—drain the Worker at a clean safe turn boundary with `drain_worker_for_maintenance`, or invalidate/archive an interrupted Supervisor with `discard_supervisor_for_maintenance`. The drain records whether the same Worker turn must be reactivated; discarding a Supervisor restores `draft-pr` or `ready` so a new Supervisor can be created. Consume/quarantine complete mailboxes, prove no child is mutating, pause the single schedule, read back `schedule_state=paused`, and pass that proof to `create_maintenance_checkpoint`.
 
 Do not begin source maintenance until this acknowledgement appears. For urgent interruption, require stricter reconciliation and a fresh Supervisor for uncertain review identity.
 
@@ -438,7 +438,7 @@ Keep local storage bounded to:
 
 Compact completed mutation receipts by serialized byte budget as well as count, while preserving unread mailboxes, pending intents, the per-kind high-water marks, and rolling archive count/digest. Keep at most the bounded recent Supervisor ID ledger; fold immediately archived Supervisor identities into their rolling count/digest.
 
-After a merged task, retain only umbrella/issue, public issue/PR URLs, merge SHA, review-round total, completion time, and final result. Remove full source content, selection detail, prompts, reviews, changed-file detail, archived child IDs, mailboxes, receipts no longer needed, and superseded maintenance detail.
+After a merged task, retain only umbrella/issue, public issue/PR URLs, merge SHA, review-round total, the bounded terminal-review outcome with relevant round/candidate/evidence digests, completion time, and final result. Remove full source content, selection detail, prompts, reviews, changed-file detail, archived child IDs, mailboxes, receipts no longer needed, and superseded maintenance detail.
 
 Archive Supervisor tasks immediately after consumption and the Worker after merge/cleanup. Do not create local transcript archives or assume service-side task history can be hard-deleted.
 
