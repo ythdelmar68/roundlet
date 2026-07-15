@@ -1,0 +1,115 @@
+# INERT TEMPLATE — replace every <PLACEHOLDER>, review, and test before install.
+# Install only in the trusted project config layer for the single target repo.
+# Prefix rules cannot forbid recognized suffix options. The guarded CLI therefore
+# rejects any duplicate, reordered, or trailing token before loading state.
+
+prefix_rule(
+    pattern = [
+        "<PYTHON>",
+        "<ROUNDLET_SCRIPT>",
+        "guarded-refresh",
+        "--state-dir", "<STATE_DIR>",
+        "--activation-id", "<ACTIVATION_ID>",
+        "--installed-digest", "<INSTALLED_DIGEST>",
+        "--skill-root", "<SKILL_ROOT>",
+    ],
+    decision = "allow",
+    justification = "Refresh only the exact activated current-repository base through Roundlet guards.",
+    match = [
+        "<PYTHON> <ROUNDLET_SCRIPT> guarded-refresh --state-dir <STATE_DIR> --activation-id <ACTIVATION_ID> --installed-digest <INSTALLED_DIGEST> --skill-root <SKILL_ROOT>",
+    ],
+    not_match = [
+        "git -C <TARGET_ROOT> fetch origin <BASE_BRANCH>",
+        "git -C <TARGET_ROOT> fetch origin <BASE_BRANCH> --force",
+        "<PYTHON> <ROUNDLET_SCRIPT> guarded-refresh --state-dir <OTHER_STATE_DIR> --activation-id <ACTIVATION_ID> --installed-digest <INSTALLED_DIGEST> --skill-root <SKILL_ROOT>",
+    ],
+)
+
+prefix_rule(
+    pattern = [
+        "<PYTHON>",
+        "<ROUNDLET_SCRIPT>",
+        "guarded-push",
+        "--state-dir", "<STATE_DIR>",
+        "--activation-id", "<ACTIVATION_ID>",
+        "--installed-digest", "<INSTALLED_DIGEST>",
+        "--skill-root", "<SKILL_ROOT>",
+    ],
+    decision = "allow",
+    justification = "Push only the active state-recorded current-repository codex/ task branch.",
+    match = [
+        "<PYTHON> <ROUNDLET_SCRIPT> guarded-push --state-dir <STATE_DIR> --activation-id <ACTIVATION_ID> --installed-digest <INSTALLED_DIGEST> --skill-root <SKILL_ROOT>",
+    ],
+    not_match = [
+        "<PYTHON> <ROUNDLET_SCRIPT> guarded-push --state-dir <OTHER_STATE_DIR> --activation-id <ACTIVATION_ID> --installed-digest <INSTALLED_DIGEST> --skill-root <SKILL_ROOT>",
+        "<PYTHON> <ROUNDLET_SCRIPT> guarded-push --state-dir <STATE_DIR> --activation-id <OTHER_ACTIVATION_ID> --installed-digest <INSTALLED_DIGEST> --skill-root <SKILL_ROOT>",
+        "git push origin codex/unrecorded-branch",
+        "git push --force origin codex/unrecorded-branch",
+    ],
+)
+
+prefix_rule(
+    pattern = [
+        "<PYTHON>",
+        "<ROUNDLET_SCRIPT>",
+        "guarded-sync",
+        "--state-dir", "<STATE_DIR>",
+        "--activation-id", "<ACTIVATION_ID>",
+        "--installed-digest", "<INSTALLED_DIGEST>",
+        "--skill-root", "<SKILL_ROOT>",
+    ],
+    decision = "allow",
+    justification = "Fast-forward only the activated dedicated checkout after task cleanup.",
+    match = [
+        "<PYTHON> <ROUNDLET_SCRIPT> guarded-sync --state-dir <STATE_DIR> --activation-id <ACTIVATION_ID> --installed-digest <INSTALLED_DIGEST> --skill-root <SKILL_ROOT>",
+    ],
+    not_match = [
+        "git reset --hard origin/<BASE_BRANCH>",
+        "git rebase origin/<BASE_BRANCH>",
+        "<PYTHON> <ROUNDLET_SCRIPT> guarded-sync --state-dir <STATE_DIR> --activation-id <ACTIVATION_ID> --installed-digest <OTHER_DIGEST> --skill-root <SKILL_ROOT>",
+    ],
+)
+
+prefix_rule(
+    pattern = [
+        "<PYTHON>",
+        "<ROUNDLET_SCRIPT>",
+        "guarded-remove-worktree",
+        "--state-dir", "<STATE_DIR>",
+        "--activation-id", "<ACTIVATION_ID>",
+        "--installed-digest", "<INSTALLED_DIGEST>",
+        "--skill-root", "<SKILL_ROOT>",
+    ],
+    decision = "allow",
+    justification = "Remove only the clean merged worktree recorded for the active task.",
+    match = [
+        "<PYTHON> <ROUNDLET_SCRIPT> guarded-remove-worktree --state-dir <STATE_DIR> --activation-id <ACTIVATION_ID> --installed-digest <INSTALLED_DIGEST> --skill-root <SKILL_ROOT>",
+    ],
+    not_match = [
+        "git worktree remove --force <TASK_WORKTREE>",
+        "git worktree remove <OTHER_WORKTREE>",
+        "<PYTHON> <ROUNDLET_SCRIPT> guarded-remove-worktree --state-dir <OTHER_STATE_DIR> --activation-id <ACTIVATION_ID> --installed-digest <INSTALLED_DIGEST> --skill-root <SKILL_ROOT>",
+    ],
+)
+
+prefix_rule(
+    pattern = [
+        "<PYTHON>",
+        "<ROUNDLET_SCRIPT>",
+        "guarded-delete-branch",
+        "--state-dir", "<STATE_DIR>",
+        "--activation-id", "<ACTIVATION_ID>",
+        "--installed-digest", "<INSTALLED_DIGEST>",
+        "--skill-root", "<SKILL_ROOT>",
+    ],
+    decision = "allow",
+    justification = "Safely delete only the merged local branch recorded for the completed task.",
+    match = [
+        "<PYTHON> <ROUNDLET_SCRIPT> guarded-delete-branch --state-dir <STATE_DIR> --activation-id <ACTIVATION_ID> --installed-digest <INSTALLED_DIGEST> --skill-root <SKILL_ROOT>",
+    ],
+    not_match = [
+        "git branch -D codex/unrecorded-branch",
+        "git push origin --delete codex/unrecorded-branch",
+        "<PYTHON> <ROUNDLET_SCRIPT> guarded-delete-branch --state-dir <STATE_DIR> --activation-id <OTHER_ACTIVATION_ID> --installed-digest <INSTALLED_DIGEST> --skill-root <SKILL_ROOT>",
+    ],
+)
