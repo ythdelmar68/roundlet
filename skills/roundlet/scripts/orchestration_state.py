@@ -105,7 +105,7 @@ FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 CONTENT_DIGEST = re.compile(r"^[0-9a-f]{64}$")
 RELEASE_TAG = re.compile(
     r"^v(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)"
-    r"(?:-rc\.(?P<rc>0|[1-9][0-9]*))?$"
+    r"(?:-rc\.(?P<rc>[1-9][0-9]*))?$"
 )
 RELEASE_NOTE_FIELDS = frozenset(
     {
@@ -395,8 +395,6 @@ def parse_release_tag(value: Any, label: str = "release tag") -> dict[str, Any]:
     if match is None:
         raise ValidationError(f"{label} is not an allowed SemVer release tag")
     rc = match.group("rc")
-    if rc == "0":
-        raise ValidationError(f"{label} RC number must be positive")
     line = "v{major}.{minor}.{patch}".format(**match.groupdict())
     return {
         "tag": value,
@@ -410,126 +408,6 @@ def _require_release_note_text(notes: Mapping[str, Any], field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValidationError(f"release notes require non-empty {field}")
     return value
-
-
-def validate_release_contract(
-    request: Mapping[str, Any],
-    *,
-    existing_tags: Iterable[str],
-    consumed_approval_ids: Iterable[str] = (),
-) -> dict[str, Any]:
-    """Validate one owner-authorized release without performing any mutation.
-
-    The caller supplies connector-read evidence for the protected branch, checks,
-    approval tuple, immutable tags, and notes.  This pure helper rejects unsafe
-    metadata so a future release workflow cannot broaden the policy by parsing
-    prose differently.
-    """
-    required_request_fields = {
-        "tag",
-        "source_sha",
-        "source_branch",
-        "worktree_clean",
-        "required_checks",
-        "approval",
-        "approved_rc_tag",
-        "release_notes",
-    }
-    if not isinstance(request, Mapping) or set(request) != required_request_fields:
-        raise ValidationError("release request has unknown or missing fields")
-
-    tag = parse_release_tag(request["tag"])
-    source_sha = require_full_sha(request["source_sha"], "release source SHA")
-    if request["source_branch"] != "main":
-        raise ValidationError("release source must be the protected main branch")
-    if request["worktree_clean"] is not True:
-        raise ValidationError("release source worktree must be clean")
-
-    checks = request["required_checks"]
-    if not isinstance(checks, Mapping) or not checks:
-        raise ValidationError("release requires at least one required check")
-    for check_name, evidence in checks.items():
-        if not isinstance(check_name, str) or not check_name or not isinstance(evidence, Mapping):
-            raise ValidationError("required check evidence is malformed")
-        if set(evidence) != {"sha", "conclusion"} or evidence.get("sha") != source_sha:
-            raise ValidationError("required checks must bind the exact release source SHA")
-        if evidence.get("conclusion") != "success":
-            raise ValidationError("every required check must conclude success")
-
-    approval = request["approval"]
-    if not isinstance(approval, Mapping) or set(approval) != {
-        "id",
-        "environment",
-        "owner_approved",
-        "tag",
-        "source_sha",
-    }:
-        raise ValidationError("release approval is malformed")
-    approval_id = approval.get("id")
-    if not isinstance(approval_id, str) or not approval_id:
-        raise ValidationError("release approval requires a stable ID")
-    if approval.get("environment") != "release" or approval.get("owner_approved") is not True:
-        raise ValidationError("release requires explicit owner approval in the release environment")
-    if approval.get("tag") != tag["tag"] or approval.get("source_sha") != source_sha:
-        raise ValidationError("release approval must bind exactly one tag and source SHA")
-    if approval_id in set(consumed_approval_ids):
-        raise ValidationError("release approval cannot be replayed")
-
-    notes = request["release_notes"]
-    if not isinstance(notes, Mapping) or set(notes) != RELEASE_NOTE_FIELDS:
-        raise ValidationError("release notes have unknown or missing fields")
-    if notes.get("tag") != tag["tag"] or notes.get("source_sha") != source_sha:
-        raise ValidationError("release notes must bind the exact tag and source SHA")
-    require_content_digest(notes.get("installed_skill_digest"), "release notes installed skill digest")
-    for field in (
-        "state_schema_version",
-        "protocol_version",
-        "review_contract_version",
-        "policy_version",
-        "supported_python",
-        "supported_os",
-        "supported_codex",
-        "forward_test_evidence",
-    ):
-        _require_release_note_text(notes, field)
-    if notes.get("license") != "Apache-2.0":
-        raise ValidationError("release notes must identify the Apache-2.0 license")
-
-    prior_tags = list(existing_tags)
-    if any(not isinstance(prior, str) for prior in prior_tags) or len(set(prior_tags)) != len(prior_tags):
-        raise ValidationError("existing release tags are malformed or duplicated")
-    parsed_prior = [parse_release_tag(prior, "existing release tag") for prior in prior_tags]
-    if tag["tag"] in prior_tags:
-        raise ValidationError("release tag cannot be reused")
-
-    line_tags = [prior for prior in parsed_prior if prior["line"] == tag["line"]]
-    stable_exists = any(prior["rc"] is None for prior in line_tags)
-    rc_numbers = [prior["rc"] for prior in line_tags if prior["rc"] is not None]
-    approved_rc_tag = request["approved_rc_tag"]
-    if tag["rc"] is not None:
-        if approved_rc_tag is not None:
-            raise ValidationError("release candidates must not name an approved RC")
-        if stable_exists:
-            raise ValidationError("a stable release line is terminal")
-        expected_rc = max(rc_numbers, default=0) + 1
-        if tag["rc"] != expected_rc:
-            raise ValidationError("release candidate number must be the next consecutive RC")
-    else:
-        if not isinstance(approved_rc_tag, str):
-            raise ValidationError("stable releases require the latest approved RC tag")
-        approved_rc = parse_release_tag(approved_rc_tag, "approved RC tag")
-        if approved_rc["line"] != tag["line"] or approved_rc["rc"] is None or not rc_numbers:
-            raise ValidationError("stable releases require an approved RC from the same release line")
-        if approved_rc["rc"] != max(rc_numbers):
-            raise ValidationError("stable releases require the latest approved RC")
-
-    return {
-        "tag": tag["tag"],
-        "source_sha": source_sha,
-        "approval_id": approval_id,
-        "release_line": tag["line"],
-        "release_candidate": tag["rc"],
-    }
 
 
 def validate_owner_actor(actor: Mapping[str, Any]) -> dict[str, Any]:
@@ -4164,6 +4042,24 @@ class _GitHubConnectorReadAdapter:
         self.read = read
 
 
+_RELEASE_EVIDENCE_SEAL = object()
+RELEASE_PREFLIGHT_OPERATION = "release-preflight"
+
+
+class _ReleaseEvidenceReceipt:
+    """Opaque, connector-bound release evidence; caller-built mappings are never authority."""
+
+    __slots__ = ("_seal", "tag", "source_sha", "approval_id")
+
+    def __init__(self, *, seal: object, tag: str, source_sha: str, approval_id: str) -> None:
+        if seal is not _RELEASE_EVIDENCE_SEAL:
+            raise ScopeError("release evidence must be issued by the connector read gateway")
+        self._seal = seal
+        self.tag = tag
+        self.source_sha = source_sha
+        self.approval_id = approval_id
+
+
 def bind_github_connector_read_adapter(
     state: Mapping[str, Any],
     *,
@@ -4229,6 +4125,200 @@ def bind_github_connector_read_adapter(
         activation_id=str(activation["id"]),
         read=read_connector,
     )
+
+
+def execute_release_preflight(
+    adapter: _GitHubConnectorReadAdapter,
+    *,
+    tag: str,
+    skill_root: str | os.PathLike[str],
+) -> _ReleaseEvidenceReceipt:
+    """Read and seal exact GitHub evidence for one prospective release tag."""
+    parsed_tag = parse_release_tag(tag)
+    if not isinstance(adapter, _GitHubConnectorReadAdapter) or adapter._seal is not _CONNECTOR_ADAPTER_SEAL:
+        raise ScopeError("release preflight requires a service-issued GitHub adapter capability")
+    request = {
+        "operation": RELEASE_PREFLIGHT_OPERATION,
+        "adapter_id": adapter.adapter_id,
+        "activation_id": adapter.activation_id,
+        "repository": SKILL_SOURCE_REPOSITORY,
+        "tag": parsed_tag["tag"],
+    }
+    response = adapter.read(copy.deepcopy(request))
+    required = {
+        "verified_by_connector", "connector", "operation", "adapter_id", "activation_id",
+        "request_digest", "service_receipt_id", "evidence", "response_digest",
+    }
+    if not isinstance(response, Mapping) or set(response) != required:
+        raise ValidationError("release preflight requires exact connector response fields")
+    if (
+        response.get("verified_by_connector") is not True
+        or response.get("connector") != "github"
+        or response.get("operation") != RELEASE_PREFLIGHT_OPERATION
+        or response.get("adapter_id") != adapter.adapter_id
+        or response.get("activation_id") != adapter.activation_id
+        or response.get("request_digest") != digest_json(request)
+    ):
+        raise ScopeError("release preflight evidence is not bound to the GitHub connector request")
+    receipt_id = response.get("service_receipt_id")
+    if not isinstance(receipt_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}", receipt_id):
+        raise ValidationError("release preflight requires a bounded service receipt ID")
+    core = {key: copy.deepcopy(value) for key, value in response.items() if key != "response_digest"}
+    if require_content_digest(response.get("response_digest"), "release preflight response digest") != digest_json(core):
+        raise ScopeError("release preflight response digest is invalid")
+    _validate_release_evidence(response["evidence"], parsed_tag["tag"], skill_root)
+    return _ReleaseEvidenceReceipt(
+        seal=_RELEASE_EVIDENCE_SEAL,
+        tag=parsed_tag["tag"],
+        source_sha=response["evidence"]["source"]["sha"],
+        approval_id=response["evidence"]["approval"]["id"],
+    )
+
+
+def _validate_release_evidence(evidence: Any, tag: str, skill_root: str | os.PathLike[str]) -> None:
+    required = {"repository", "source", "required_checks", "release_environment", "approval", "approved_rc_tag", "history", "release_notes"}
+    if not isinstance(evidence, Mapping) or set(evidence) != required:
+        raise ValidationError("release evidence has unknown or missing fields")
+    repository = evidence["repository"]
+    if not isinstance(repository, Mapping) or set(repository) != {"owner_name", "repository_id"}:
+        raise ValidationError("release evidence repository is malformed")
+    if normalize_owner_name(str(repository.get("owner_name", ""))) != SKILL_SOURCE_REPOSITORY:
+        raise ScopeError("release evidence identifies another repository")
+    require_positive_issue(repository.get("repository_id"), "release repository ID")
+    source = evidence["source"]
+    if not isinstance(source, Mapping) or set(source) != {"sha", "reachable_from_protected_main", "main_protected", "worktree_clean", "installed_skill_digest", "versions"}:
+        raise ValidationError("release source evidence is malformed")
+    sha = require_full_sha(source.get("sha"), "release source SHA")
+    if source.get("reachable_from_protected_main") is not True or source.get("main_protected") is not True or source.get("worktree_clean") is not True:
+        raise ScopeError("release source is not a clean protected-main ancestor")
+    if require_content_digest(source.get("installed_skill_digest"), "release source skill digest") != skill_content_digest(skill_root):
+        raise ScopeError("release source digest does not match the exact installed skill")
+    expected_versions = {"schema": SCHEMA_VERSION, "protocol": PROTOCOL_VERSION, "review_contract": REVIEW_CONTRACT_VERSION, "policy": POLICY_VERSION}
+    if source.get("versions") != expected_versions:
+        raise ScopeError("release source compatibility versions do not match the exact source")
+    checks = evidence["required_checks"]
+    if not isinstance(checks, Mapping) or set(checks) != {"required", "results"} or not isinstance(checks["required"], list) or not checks["required"] or not isinstance(checks["results"], list):
+        raise ValidationError("release required-check evidence is malformed")
+    required_names = checks["required"]
+    if any(not isinstance(name, str) or not name for name in required_names) or len(required_names) != len(set(required_names)):
+        raise ValidationError("release required-check names are malformed")
+    results = checks["results"]
+    if len(results) != len(required_names):
+        raise ScopeError("release evidence omits a required check")
+    seen = set()
+    for result in results:
+        if not isinstance(result, Mapping) or set(result) != {"name", "sha", "conclusion"} or result.get("name") not in required_names or result.get("name") in seen:
+            raise ValidationError("release check result is malformed")
+        seen.add(result["name"])
+        if result.get("sha") != sha or result.get("conclusion") != "success":
+            raise ScopeError("release required checks must succeed for the exact source SHA")
+    environment = evidence["release_environment"]
+    if not isinstance(environment, Mapping) or environment != {"name": "release", "protected": True}:
+        raise ScopeError("release environment is not protected")
+    approval = evidence["approval"]
+    if not isinstance(approval, Mapping) or set(approval) != {"id", "tag", "source_sha", "owner_actor"}:
+        raise ValidationError("release approval evidence is malformed")
+    if not isinstance(approval.get("id"), str) or not approval["id"] or approval.get("tag") != tag or approval.get("source_sha") != sha:
+        raise ScopeError("release approval is not bound to the exact tag and source SHA")
+    validate_owner_actor(approval["owner_actor"])
+    _validate_release_history(evidence["history"], tag, sha, approval["id"], evidence["approved_rc_tag"])
+    notes = evidence["release_notes"]
+    if not isinstance(notes, Mapping) or set(notes) != RELEASE_NOTE_FIELDS or notes.get("tag") != tag or notes.get("source_sha") != sha:
+        raise ScopeError("release notes are not bound to the exact tag and source SHA")
+    if notes.get("installed_skill_digest") != source["installed_skill_digest"] or notes.get("license") != "Apache-2.0":
+        raise ScopeError("release notes do not identify the exact payload or license")
+    expected_notes = {"state_schema_version": str(SCHEMA_VERSION), "protocol_version": PROTOCOL_VERSION, "review_contract_version": REVIEW_CONTRACT_VERSION, "policy_version": POLICY_VERSION}
+    if any(notes.get(key) != value for key, value in expected_notes.items()):
+        raise ScopeError("release notes compatibility versions do not match the exact source")
+    for field in ("supported_python", "supported_os", "supported_codex", "forward_test_evidence"):
+        _require_release_note_text(notes, field)
+
+
+def _validate_release_history(history: Any, tag: str, sha: str, approval_id: str, approved_rc_tag: Any) -> None:
+    if not isinstance(history, Mapping) or set(history) != {"entries", "tombstones", "live_tags"} or not isinstance(history["entries"], list) or not isinstance(history["tombstones"], list) or not isinstance(history["live_tags"], list):
+        raise ValidationError("release history is malformed")
+    entries = history["entries"]
+    entry_tags, approval_ids, live, parsed_entries = set(), set(), {}, []
+    for entry in entries:
+        if not isinstance(entry, Mapping) or set(entry) != {"tag", "source_sha", "approval_id", "rc_approved"}:
+            raise ValidationError("release history entry is malformed")
+        parsed = parse_release_tag(entry.get("tag"), "historical release tag")
+        target = require_full_sha(entry.get("source_sha"), "historical release source SHA")
+        if parsed["tag"] in entry_tags or not isinstance(entry.get("approval_id"), str) or not entry["approval_id"] or entry["approval_id"] in approval_ids or type(entry.get("rc_approved")) is not bool:
+            raise ScopeError("release history is not append-only")
+        entry_tags.add(parsed["tag"]); approval_ids.add(entry["approval_id"]); live[parsed["tag"]] = target
+        parsed_entries.append((parsed, entry))
+    tombstone_tags = set()
+    for tombstone in history["tombstones"]:
+        if not isinstance(tombstone, Mapping) or set(tombstone) != {"tag", "source_sha", "approval_id", "rc_approved"}:
+            raise ValidationError("release history tombstone is malformed")
+        parsed = parse_release_tag(tombstone.get("tag"), "deleted release tag")
+        require_full_sha(tombstone.get("source_sha"), "deleted release source SHA")
+        if (
+            parsed["tag"] in tombstone_tags
+            or not isinstance(tombstone.get("approval_id"), str)
+            or not tombstone["approval_id"]
+            or type(tombstone.get("rc_approved")) is not bool
+        ):
+            raise ScopeError("release history tombstone is not immutable")
+        tombstone_tags.add(parsed["tag"])
+    if tombstone_tags:
+        raise ScopeError("release history records a deleted tag")
+    supplied_live = {}
+    for item in history["live_tags"]:
+        if not isinstance(item, Mapping) or set(item) != {"tag", "source_sha"}:
+            raise ValidationError("live release tag evidence is malformed")
+        parsed = parse_release_tag(item.get("tag"), "live release tag")
+        if parsed["tag"] in supplied_live:
+            raise ScopeError("live release tags are duplicated")
+        supplied_live[parsed["tag"]] = require_full_sha(item.get("source_sha"), "live release tag SHA")
+    if supplied_live != live:
+        raise ScopeError("release history detects a moved or deleted tag")
+    if tag in entry_tags or approval_id in approval_ids:
+        raise ScopeError("release tag or approval has already been consumed")
+    parsed_tag = parse_release_tag(tag)
+    if entries and parsed_entries[0][0]["tag"] != "v0.1.0-rc.1":
+        raise ScopeError("release history does not begin with v0.1.0-rc.1")
+    if not entries and tag != "v0.1.0-rc.1":
+        raise ScopeError("the first public release candidate must be v0.1.0-rc.1")
+    lines: dict[str, list[tuple[dict[str, Any], Mapping[str, Any]]]] = {}
+    for parsed, entry in parsed_entries:
+        lines.setdefault(parsed["line"], []).append((parsed, entry))
+    for historical_line in lines.values():
+        expected_rc, stable_seen, latest_rc_approved = 1, False, False
+        for parsed, entry in historical_line:
+            if stable_seen:
+                raise ScopeError("release history continues a terminal stable line")
+            if parsed["rc"] is None:
+                if expected_rc == 1:
+                    raise ScopeError("release history has a stable tag without an RC")
+                if latest_rc_approved is not True:
+                    raise ScopeError("release history stable tag lacks latest approved RC")
+                stable_seen = True
+            elif parsed["rc"] != expected_rc:
+                raise ScopeError("release history RCs are not consecutive")
+            else:
+                expected_rc += 1
+                latest_rc_approved = entry["rc_approved"]
+    line_entries = lines.get(parsed_tag["line"], [])
+    rcs = [item for item in line_entries if item[0]["rc"] is not None]
+    stable = any(item[0]["rc"] is None for item in line_entries)
+    if parsed_tag["rc"] is not None:
+        if approved_rc_tag is not None or stable or parsed_tag["rc"] != len(rcs) + 1:
+            raise ScopeError("release candidate does not continue an open consecutive release line")
+    else:
+        if not isinstance(approved_rc_tag, str) or not rcs:
+            raise ScopeError("stable release requires the latest approved RC")
+        latest, latest_entry = rcs[-1]
+        if approved_rc_tag != latest["tag"] or latest_entry["rc_approved"] is not True:
+            raise ScopeError("stable release requires the latest connector-approved RC")
+
+
+def validate_release_contract(receipt: _ReleaseEvidenceReceipt) -> dict[str, Any]:
+    if not isinstance(receipt, _ReleaseEvidenceReceipt) or receipt._seal is not _RELEASE_EVIDENCE_SEAL:
+        raise ScopeError("release validation requires an opaque connector evidence receipt")
+    parsed = parse_release_tag(receipt.tag)
+    return {"tag": receipt.tag, "source_sha": receipt.source_sha, "approval_id": receipt.approval_id, "release_line": parsed["line"], "release_candidate": parsed["rc"]}
 
 
 class _ConnectorRefreshReceipt:

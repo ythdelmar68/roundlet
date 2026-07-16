@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -138,29 +139,34 @@ def downgrade_to_policy3(value):
     refresh_policy3_scope(value)
 
 
-def release_request(*, tag="v0.1.0-rc.1", existing_tags=(), approved_rc_tag=None):
-    return {
-        "tag": tag,
-        "source_sha": SHA_A,
-        "source_branch": "main",
-        "worktree_clean": True,
-        "required_checks": {"unit": {"sha": SHA_A, "conclusion": "success"}},
-        "approval": {
-            "id": "approval-1",
-            "environment": "release",
-            "owner_approved": True,
-            "tag": tag,
-            "source_sha": SHA_A,
+def release_evidence(*, tag="v0.1.0-rc.1", entries=(), approved_rc_tag=None, mutate=None):
+    evidence = {
+        "repository": {"owner_name": rs.SKILL_SOURCE_REPOSITORY, "repository_id": 123},
+        "source": {
+            "sha": SHA_A,
+            "reachable_from_protected_main": True,
+            "main_protected": True,
+            "worktree_clean": True,
+            "installed_skill_digest": rs.skill_content_digest(SKILL_ROOT),
+            "versions": {"schema": rs.SCHEMA_VERSION, "protocol": rs.PROTOCOL_VERSION, "review_contract": rs.REVIEW_CONTRACT_VERSION, "policy": rs.POLICY_VERSION},
         },
+        "required_checks": {"required": ["unit"], "results": [{"name": "unit", "sha": SHA_A, "conclusion": "success"}]},
+        "release_environment": {"name": "release", "protected": True},
+        "approval": {"id": "approval-1", "tag": tag, "source_sha": SHA_A, "owner_actor": copy.deepcopy(OWNER_ACTOR)},
         "approved_rc_tag": approved_rc_tag,
+        "history": {
+            "entries": list(entries),
+            "tombstones": [],
+            "live_tags": [{"tag": item["tag"], "source_sha": item["source_sha"]} for item in entries],
+        },
         "release_notes": {
             "tag": tag,
             "source_sha": SHA_A,
-            "installed_skill_digest": "d" * 64,
-            "state_schema_version": "6",
-            "protocol_version": "3",
-            "review_contract_version": "4",
-            "policy_version": "5",
+            "installed_skill_digest": rs.skill_content_digest(SKILL_ROOT),
+            "state_schema_version": str(rs.SCHEMA_VERSION),
+            "protocol_version": rs.PROTOCOL_VERSION,
+            "review_contract_version": rs.REVIEW_CONTRACT_VERSION,
+            "policy_version": rs.POLICY_VERSION,
             "supported_python": "3.11",
             "supported_os": "macOS",
             "supported_codex": "current",
@@ -168,6 +174,34 @@ def release_request(*, tag="v0.1.0-rc.1", existing_tags=(), approved_rc_tag=None
             "forward_test_evidence": "fresh minimally primed thread passed",
         },
     }
+    if mutate:
+        mutate(evidence)
+    return evidence
+
+
+def release_receipt(*, tag="v0.1.0-rc.1", entries=(), approved_rc_tag=None, mutate=None):
+    evidence = release_evidence(tag=tag, entries=entries, approved_rc_tag=approved_rc_tag, mutate=mutate)
+    adapter = rs._GitHubConnectorReadAdapter(
+        seal=rs._CONNECTOR_ADAPTER_SEAL,
+        adapter_id="github-adapter:release-test",
+        activation_id="activation-0001",
+        read=lambda request: release_preflight_response(request, evidence),
+    )
+    return rs.execute_release_preflight(adapter, tag=tag, skill_root=SKILL_ROOT)
+
+
+def release_preflight_response(request, evidence):
+    core = {
+        "verified_by_connector": True,
+        "connector": "github",
+        "operation": rs.RELEASE_PREFLIGHT_OPERATION,
+        "adapter_id": request["adapter_id"],
+        "activation_id": request["activation_id"],
+        "request_digest": rs.digest_json(request),
+        "service_receipt_id": "github-release:12345678",
+        "evidence": copy.deepcopy(evidence),
+    }
+    return {**core, "response_digest": rs.digest_json(core)}
 
 
 def refresh_policy3_scope(value):
@@ -700,83 +734,98 @@ def premerge_state():
 
 
 class ReleaseContractTests(unittest.TestCase):
-    def test_accepts_first_rc_and_latest_rc_stable_transition(self):
-        first = rs.validate_release_contract(release_request(), existing_tags=[])
+    def test_accepts_connector_bound_first_rc_and_latest_rc_stable_transition(self):
+        first = rs.validate_release_contract(release_receipt())
         self.assertEqual(first["release_candidate"], 1)
 
         stable = rs.validate_release_contract(
-            release_request(tag="v0.1.0", approved_rc_tag="v0.1.0-rc.2"),
-            existing_tags=["v0.1.0-rc.1", "v0.1.0-rc.2"],
+            release_receipt(
+                tag="v0.1.0",
+                approved_rc_tag="v0.1.0-rc.2",
+                entries=(
+                    {"tag": "v0.1.0-rc.1", "source_sha": SHA_A, "approval_id": "approval-old-1", "rc_approved": True},
+                    {"tag": "v0.1.0-rc.2", "source_sha": SHA_B, "approval_id": "approval-old-2", "rc_approved": True},
+                ),
+            )
         )
         self.assertEqual(stable["release_line"], "v0.1.0")
         self.assertIsNone(stable["release_candidate"])
 
-    def test_rejects_malformed_tag_grammar(self):
+    def test_documented_and_runtime_grammar_reject_the_same_tags(self):
+        policy = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        documented = re.search(r"The only tag grammar is `([^`]+)`", policy).group(1)
         for tag in (
             "1.2.3", "v01.2.3", "v1.02.3", "v1.2.03", "v1.2.3-rc.0",
             "v1.2.3-rc.01", "v1.2.3-beta.1", "v1.2.3+build.1",
         ):
             with self.subTest(tag=tag), self.assertRaises(rs.ValidationError):
-                rs.validate_release_contract(release_request(tag=tag), existing_tags=[])
+                rs.parse_release_tag(tag)
+            self.assertIsNone(re.fullmatch(documented, tag))
+        for tag in ("v0.1.0-rc.1", "v1.2.3", "v10.20.30-rc.99"):
+            with self.subTest(tag=tag):
+                self.assertEqual(rs.parse_release_tag(tag)["tag"], tag)
+                self.assertIsNotNone(re.fullmatch(documented, tag))
 
-    def test_rejects_reused_skipped_and_post_stable_rcs(self):
-        cases = (
-            ("v0.1.0-rc.1", ["v0.1.0-rc.1"], "reused"),
-            ("v0.1.0-rc.3", ["v0.1.0-rc.1"], "skipped"),
-            ("v0.1.0-rc.2", ["v0.1.0-rc.1", "v0.1.0"], "post-stable"),
-        )
-        for tag, existing_tags, label in cases:
-            with self.subTest(label=label), self.assertRaises(rs.ValidationError):
-                rs.validate_release_contract(release_request(tag=tag), existing_tags=existing_tags)
+    def test_rejects_caller_supplied_release_mapping(self):
+        with self.assertRaises(rs.ScopeError):
+            rs.validate_release_contract(release_evidence())
 
-    def test_rejects_invalid_stable_transitions(self):
-        cases = (
-            ([], None, "no-rc"),
-            (["v0.1.0-rc.1", "v0.1.0-rc.2"], "v0.1.0-rc.1", "older-rc"),
-            (["v0.1.0-rc.1", "v0.1.0"], "v0.1.0-rc.1", "reused-stable"),
-        )
-        for existing_tags, approved_rc_tag, label in cases:
-            with self.subTest(label=label), self.assertRaises(rs.ValidationError):
-                rs.validate_release_contract(
-                    release_request(tag="v0.1.0", approved_rc_tag=approved_rc_tag),
-                    existing_tags=existing_tags,
-                )
+    def test_rejects_untrusted_source_environment_owner_and_checks(self):
+        def unreachable(value):
+            value["source"]["sha"] = SHA_B
+            value["source"]["reachable_from_protected_main"] = False
+            value["required_checks"]["results"][0]["sha"] = SHA_B
+            value["approval"]["source_sha"] = SHA_B
+            value["release_notes"]["source_sha"] = SHA_B
 
-    def test_rejects_unbound_or_unsuccessful_release_provenance(self):
         cases = (
-            (lambda value: value.update({"source_branch": "refs/heads/main"}), "floating-ref"),
-            (lambda value: value.update({"source_sha": "a" * 12}), "short-sha"),
-            (lambda value: value.update({"source_sha": "g" * 40}), "non-hex-sha"),
-            (lambda value: value.update({"worktree_clean": False}), "dirty"),
-            (lambda value: value["required_checks"]["unit"].update({"conclusion": "failure"}), "failed-check"),
-            (lambda value: value["required_checks"]["unit"].update({"conclusion": "cancelled"}), "cancelled-check"),
-            (lambda value: value["required_checks"]["unit"].update({"sha": SHA_B}), "wrong-check-sha"),
-            (lambda value: value["approval"].update({"tag": "v0.1.0-rc.2"}), "tag-substitution"),
-            (lambda value: value["approval"].update({"source_sha": SHA_B}), "sha-substitution"),
+            (unreachable, "unreachable-full-sha"),
+            (lambda value: value["source"].update({"main_protected": False}), "unprotected-main"),
+            (lambda value: value["source"].update({"worktree_clean": False}), "dirty-worktree"),
+            (lambda value: value["release_environment"].update({"protected": False}), "unprotected-environment"),
+            (lambda value: value["approval"]["owner_actor"].update({"verified": False}), "spoofed-owner"),
+            (lambda value: value["required_checks"].update({"required": ["unit", "lint"]}), "omitted-check"),
+            (lambda value: value["required_checks"]["results"][0].update({"conclusion": "failure"}), "failed-check"),
         )
         for mutate, label in cases:
-            request = release_request()
-            mutate(request)
-            with self.subTest(label=label), self.assertRaises(rs.ValidationError):
-                rs.validate_release_contract(request, existing_tags=[])
+            with self.subTest(label=label), self.assertRaises((rs.ScopeError, rs.ValidationError)):
+                release_receipt(mutate=mutate)
 
-        with self.assertRaises(rs.ValidationError):
-            rs.validate_release_contract(
-                release_request(), existing_tags=[], consumed_approval_ids=["approval-1"]
-            )
+    def test_rejects_non_append_only_or_incomplete_history(self):
+        rc1 = {"tag": "v0.1.0-rc.1", "source_sha": SHA_A, "approval_id": "approval-old-1", "rc_approved": True}
+        rc2 = {"tag": "v0.1.0-rc.2", "source_sha": SHA_B, "approval_id": "approval-old-2", "rc_approved": True}
+        rc3 = {"tag": "v0.1.0-rc.3", "source_sha": SHA_A, "approval_id": "approval-old-3", "rc_approved": True}
+        cases = (
+            ("v9.9.9-rc.1", (), None, None, "wrong-first-tag"),
+            ("v0.1.0", (rc1, rc3), "v0.1.0-rc.3", None, "gapped-history"),
+            ("v0.1.0-rc.2", (rc1,), None, lambda value: value["history"].update({"tombstones": [copy.deepcopy(rc1)]}), "deleted-tag"),
+            ("v0.1.0-rc.2", (rc1,), None, lambda value: value["history"]["live_tags"][0].update({"source_sha": SHA_B}), "moved-tag"),
+            ("v0.1.0-rc.2", (rc1,), None, lambda value: value["approval"].update({"id": "approval-old-1"}), "approval-replay"),
+            ("v0.1.0-rc.1", (rc1,), None, None, "tag-replay"),
+        )
+        for tag, entries, approved_rc_tag, mutate, label in cases:
+            with self.subTest(label=label), self.assertRaises((rs.ScopeError, rs.ValidationError)):
+                release_receipt(tag=tag, entries=entries, approved_rc_tag=approved_rc_tag, mutate=mutate)
+
+    def test_rejects_release_note_digest_and_compatibility_mismatches(self):
+        cases = (
+            (lambda value: value["release_notes"].update({"installed_skill_digest": "f" * 64}), "note-digest"),
+            (lambda value: value["source"].update({"installed_skill_digest": "f" * 64}), "source-digest"),
+            (lambda value: value["source"]["versions"].update({"policy": "999"}), "source-policy"),
+            (lambda value: value["release_notes"].update({"protocol_version": "999"}), "note-protocol"),
+        )
+        for mutate, label in cases:
+            with self.subTest(label=label), self.assertRaises((rs.ScopeError, rs.ValidationError)):
+                release_receipt(mutate=mutate)
 
     def test_rejects_missing_or_incomplete_release_notes(self):
         for field in rs.RELEASE_NOTE_FIELDS:
-            request = release_request()
-            request["release_notes"].pop(field)
-            with self.subTest(field=field), self.assertRaises(rs.ValidationError):
-                rs.validate_release_contract(request, existing_tags=[])
+            with self.subTest(field=field), self.assertRaises((rs.ScopeError, rs.ValidationError)):
+                release_receipt(mutate=lambda value, field=field: value["release_notes"].pop(field))
 
         for field in ("supported_python", "supported_os", "supported_codex", "forward_test_evidence"):
-            request = release_request()
-            request["release_notes"][field] = ""
-            with self.subTest(field=f"empty-{field}"), self.assertRaises(rs.ValidationError):
-                rs.validate_release_contract(request, existing_tags=[])
+            with self.subTest(field=f"empty-{field}"), self.assertRaises((rs.ScopeError, rs.ValidationError)):
+                release_receipt(mutate=lambda value, field=field: value["release_notes"].update({field: ""}))
 
 
 class ActivationTests(unittest.TestCase):
