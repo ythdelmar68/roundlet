@@ -139,6 +139,57 @@ def downgrade_to_policy3(value):
     refresh_policy3_scope(value)
 
 
+def release_policy_evidence(*, tag="v0.1.0-rc.1", entries=()):
+    return {
+        "repository": {"owner_name": rs.SKILL_SOURCE_REPOSITORY, "repository_id": 123},
+        "source": {
+            "sha": SHA_A,
+            "reachable_from_protected_main": True,
+            "main_protected": True,
+            "worktree_clean": True,
+            "installed_skill_digest": rs.skill_content_digest(SKILL_ROOT),
+            "versions": {
+                "schema": rs.SCHEMA_VERSION,
+                "protocol": rs.PROTOCOL_VERSION,
+                "review_contract": rs.REVIEW_CONTRACT_VERSION,
+                "policy": rs.POLICY_VERSION,
+            },
+        },
+        "required_checks": {
+            "required": ["unit"],
+            "results": [{"name": "unit", "sha": SHA_A, "conclusion": "success"}],
+        },
+        "release_environment": {"name": "release", "protected": True, "approval_id": "environment-approval-1"},
+        "approval": {
+            "id": "approval-1",
+            "tag": tag,
+            "source_sha": SHA_A,
+            "owner_actor": copy.deepcopy(OWNER_ACTOR),
+            "environment_approval_id": "environment-approval-1",
+        },
+        "approved_rc_tag": None,
+        "history": {
+            "entries": copy.deepcopy(list(entries)),
+            "tombstones": [],
+            "live_tags": [{"tag": item["tag"], "source_sha": item["source_sha"]} for item in entries],
+        },
+        "release_notes": {
+            "tag": tag,
+            "source_sha": SHA_A,
+            "installed_skill_digest": rs.skill_content_digest(SKILL_ROOT),
+            "state_schema_version": str(rs.SCHEMA_VERSION),
+            "protocol_version": rs.PROTOCOL_VERSION,
+            "review_contract_version": rs.REVIEW_CONTRACT_VERSION,
+            "policy_version": rs.POLICY_VERSION,
+            "supported_python": "3.11",
+            "supported_os": "macOS",
+            "supported_codex": "current",
+            "license": "Apache-2.0",
+            "forward_test_evidence": "fresh minimally primed thread passed",
+        },
+    }
+
+
 def refresh_policy3_scope(value):
     activation = value["activation"]
     legacy_snapshot = rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]
@@ -683,6 +734,48 @@ class ReleaseContractTests(unittest.TestCase):
             with self.subTest(tag=tag):
                 self.assertEqual(rs.parse_release_tag(tag)["tag"], tag)
                 self.assertIsNotNone(re.fullmatch(documented, tag))
+
+    def test_non_authoritative_policy_shape_accepts_a_complete_first_candidate(self):
+        rs.validate_release_policy_assertions(
+            release_policy_evidence(),
+            "v0.1.0-rc.1",
+            SKILL_ROOT,
+            authorized_owner_actor=OWNER_ACTOR,
+            repository_id=123,
+        )
+
+    def test_non_authoritative_policy_shape_rejects_issue_named_negative_fixtures(self):
+        rc1 = {"tag": "v0.1.0-rc.1", "source_sha": SHA_A, "approval_id": "approval-old-1", "rc_approved": True}
+
+        def mutate_tag(value, tag):
+            value["approval"]["tag"] = tag
+            value["release_notes"]["tag"] = tag
+
+        cases = (
+            ("v0.1.0-rc.1", (), lambda value: value["source"].update({"reachable_from_protected_main": False}), "floating-main"),
+            ("v0.1.0-rc.1", (), lambda value: value["source"].update({"sha": "a" * 12}), "short-sha"),
+            ("v0.1.0-rc.1", (), lambda value: value["source"].update({"sha": "g" * 40}), "non-hex-sha"),
+            ("v0.1.0-rc.1", (), lambda value: value["source"].update({"worktree_clean": False}), "dirty-source"),
+            ("v0.1.0-rc.1", (), lambda value: value["source"].pop("installed_skill_digest"), "missing-digest"),
+            ("v0.1.0-rc.1", (), lambda value: value["source"]["versions"].pop("policy"), "missing-source-policy-version"),
+            ("v0.1.0-rc.1", (), lambda value: value["release_notes"].pop("policy_version"), "missing-note-policy-version"),
+            ("v0.1.0-rc.1", (), lambda value: value["release_notes"].update({"supported_codex": ""}), "incomplete-support-note"),
+            ("v0.1.0-rc.1", (), lambda value: value["required_checks"]["results"][0].update({"conclusion": "failure"}), "failed-check"),
+            ("v1.2.3-rc.0", (), lambda value: mutate_tag(value, "v1.2.3-rc.0"), "malformed-tag"),
+            ("v0.1.0-rc.1", (rc1,), lambda value: None, "reused-tag"),
+            ("v0.1.0-rc.3", (rc1,), lambda value: mutate_tag(value, "v0.1.0-rc.3"), "skipped-rc"),
+        )
+        for tag, entries, mutate, label in cases:
+            evidence = release_policy_evidence(tag=tag, entries=entries)
+            mutate(evidence)
+            with self.subTest(label=label), self.assertRaises((rs.ScopeError, rs.ValidationError)):
+                rs.validate_release_policy_assertions(
+                    evidence,
+                    tag,
+                    SKILL_ROOT,
+                    authorized_owner_actor=OWNER_ACTOR,
+                    repository_id=123,
+                )
 
     def test_release_authority_fails_closed_without_a_trusted_gateway(self):
         for payload in (None, {}, object()):
