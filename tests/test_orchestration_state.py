@@ -1640,6 +1640,38 @@ class StateMachineTests(unittest.TestCase):
                     tampered, supervisor_thread_id="supervisor-active-boundary-3"
                 )
 
+    def test_active_supervisor_cannot_be_archived_before_result_acceptance(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        begin_review(value, "supervisor-active-archived")
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            tampered = store.load()
+            review = tampered["review"]
+            review["unarchived_supervisor_thread_ids"] = []
+            review["archived_supervisor_count"] = 1
+            review["archived_supervisor_digest"] = rs.fold_archive_digest(
+                "0" * 64, "supervisor-active-archived"
+            )
+            rs.atomic_write_json(store.path, tampered)
+            with self.assertRaisesRegex(rs.ValidationError, "sole latest unarchived"):
+                store.load()
+            with self.assertRaisesRegex(rs.ValidationError, "sole latest unarchived"):
+                rs.accept_supervisor_result(
+                    tampered,
+                    thread_id="supervisor-active-archived",
+                    candidate_sha=SHA_B,
+                    result="FINDINGS",
+                    non_blocking_items=["forged archival boundary"],
+                )
+            rs.request_maintenance(tampered, "interrupt forged active archive")
+            with self.assertRaisesRegex(rs.ValidationError, "sole latest unarchived"):
+                rs.discard_supervisor_for_maintenance(
+                    tampered, supervisor_thread_id="supervisor-active-archived"
+                )
+
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)

@@ -1411,6 +1411,14 @@ def validate_state(state: Mapping[str, Any]) -> None:
     accepted_but_unarchived = completed_count - archived_count
     if accepted_but_unarchived > 1:
         raise ValidationError("completed Supervisor count differs from archival evidence")
+    if current_supervisor is not None:
+        if (
+            not isinstance(current_supervisor, str)
+            or unarchived_thread_ids != [current_supervisor]
+            or not thread_ids
+            or current_supervisor != thread_ids[-1]
+        ):
+            raise ValidationError("active Supervisor is not the sole latest unarchived task")
     if unarchived_thread_ids:
         latest_thread = unarchived_thread_ids[0]
         if current_supervisor is not None:
@@ -2390,6 +2398,22 @@ def accept_supervisor_result(
         raise ValidationError("active task/review state is missing")
     if thread_id != review.get("current_supervisor_thread_id"):
         raise MailboxError("Supervisor result source thread does not match")
+    thread_ids = review.get("supervisor_thread_ids")
+    unarchived = review.get("unarchived_supervisor_thread_ids")
+    if (
+        not isinstance(thread_ids, list)
+        or not thread_ids
+        or not isinstance(unarchived, list)
+        or unarchived != [thread_id]
+        or thread_ids[-1] != thread_id
+    ):
+        raise ValidationError("active Supervisor is not the sole latest unarchived task")
+    completed_results = review.get("completed_supervisor_results")
+    if isinstance(completed_results, list) and any(
+        isinstance(completion, Mapping) and completion.get("thread_id") == thread_id
+        for completion in completed_results
+    ):
+        raise ValidationError("active Supervisor has durable completion evidence")
     candidate = require_full_sha(candidate_sha, "Supervisor candidate_sha")
     if candidate != task.get("candidate_sha"):
         raise MailboxError("stale Supervisor candidate identity")
@@ -3385,6 +3409,16 @@ def discard_supervisor_for_maintenance(
         raise ValidationError("maintenance Supervisor state is missing")
     if task.get("active_role") != "supervisor" or review.get("current_supervisor_thread_id") != supervisor_thread_id:
         raise ScopeError("maintenance discard differs from the active Supervisor")
+    thread_ids = review.get("supervisor_thread_ids")
+    unarchived = review.get("unarchived_supervisor_thread_ids")
+    if (
+        not isinstance(thread_ids, list)
+        or not thread_ids
+        or not isinstance(unarchived, list)
+        or unarchived != [supervisor_thread_id]
+        or thread_ids[-1] != supervisor_thread_id
+    ):
+        raise ValidationError("active Supervisor is not the sole latest unarchived task")
     completed_results = review.get("completed_supervisor_results")
     if isinstance(completed_results, list) and any(
         isinstance(completion, Mapping) and completion.get("thread_id") == supervisor_thread_id
