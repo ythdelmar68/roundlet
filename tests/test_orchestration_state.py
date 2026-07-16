@@ -132,6 +132,7 @@ def downgrade_to_policy3(value):
         activation.pop(key, None)
     value["review"].pop("exhaustion", None)
     value["review"].pop("supervisor_creation_intent", None)
+    value["review"].pop("completed_supervisor_count", None)
     value["versions"].update({"schema": 4, "review_contract": "3", "policy": "3"})
     refresh_policy3_scope(value)
 
@@ -612,6 +613,7 @@ def set_review_budget(value, maximum, *, converge_after=None, legacy_unbounded=F
 def downgrade_to_schema6(value):
     activation = value["activation"]
     maximum = activation["review_policy_snapshot"]["max_supervisor_cycles"]
+    value["review"].pop("completed_supervisor_count", None)
     activation["review_policy_snapshot"] = {"max_supervisor_cycles": maximum}
     activation["review_policy_snapshot_digest"] = rs.digest_json(
         activation["review_policy_snapshot"]
@@ -648,6 +650,7 @@ def downgrade_to_schema5_unbounded(value):
         activation.pop(key, None)
     value["review"].pop("exhaustion", None)
     value["review"].pop("supervisor_creation_intent", None)
+    value["review"].pop("completed_supervisor_count", None)
     activation["scope_digest"] = rs.compute_scope_digest(
         activation["repository"],
         activation["base_branch"],
@@ -1447,6 +1450,64 @@ class StateMachineTests(unittest.TestCase):
             {"round": 2, "archived_supervisor_count": 2, "last_supervisor_created_at": "2026-07-14T00:00:00.000002Z"}
         )
         self.assertEqual(rs.preflight_supervisor_creation(equality)["guidance"]["mode"], "COMPLETE")
+
+    def test_maintenance_discard_does_not_advance_convergence(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for generation in (1, 2):
+            thread_id = f"supervisor-completed-{generation}"
+            begin_review(value, thread_id)
+            rs.accept_supervisor_result(
+                value,
+                thread_id=thread_id,
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=[f"finding-{generation}"],
+            )
+            rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
+            rs.set_candidate(value, SHA_B, clean=True)
+        begin_review(value, "supervisor-discarded")
+        rs.request_maintenance(value, "interrupt incomplete review")
+        rs.discard_supervisor_for_maintenance(value, supervisor_thread_id="supervisor-discarded")
+        rs.create_maintenance_checkpoint(
+            value, checkpoint_id="checkpoint-001", schedule_id="schedule-1", schedule_state="paused"
+        )
+        rs.resume_maintenance(
+            value,
+            checkpoint_id="checkpoint-001",
+            installed_roundlet_digest=DIGEST,
+            current_versions=value["versions"],
+            repository_identity=identity(),
+            schedule_id="schedule-1",
+        )
+        self.assertEqual(value["review"]["round"], 3)
+        self.assertEqual(value["review"]["completed_supervisor_count"], 2)
+        self.assertEqual(
+            rs.preflight_supervisor_creation(value)["guidance"],
+            {
+                "current_cycle": 4,
+                "completed_cycles": 2,
+                "max_cycles": 5,
+                "converge_after_cycles": 3,
+                "mode": "COMPLETE",
+                "directive": (
+                    "Perform a complete independent review of the supplied contract. Report every newly "
+                    "discovered actionable P0/P1/P2 correctness, safety, authority, or contract failure."
+                ),
+            },
+        )
+        begin_review(value, "supervisor-completed-3")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-completed-3",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["finding-3"],
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-completed-3")
+        rs.set_candidate(value, SHA_B, clean=True)
+        self.assertEqual(rs.preflight_supervisor_creation(value)["guidance"]["mode"], "CONVERGING")
 
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
@@ -2414,15 +2475,66 @@ class MaintenanceTests(unittest.TestCase):
         self.assertEqual(migrated["skill"]["source_repository"], "ythdelmar68/roundlet")
 
     def test_schema_six_migration_preserves_non_converging_review_behavior(self):
-        old = state()
+        old = assigned_state()
+        rs.set_candidate(old, SHA_B, clean=True)
+        record_draft(old)
+        for generation in range(1, 5):
+            thread_id = f"supervisor-schema-six-{generation}"
+            begin_review(old, thread_id)
+            rs.accept_supervisor_result(
+                old,
+                thread_id=thread_id,
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=[f"finding-{generation}"],
+            )
+            rs.record_supervisor_archived(old, supervisor_thread_id=thread_id)
+            if generation < 4:
+                rs.set_candidate(old, SHA_B, clean=True)
         downgrade_to_schema6(old)
-        old["review"]["round"] = 4
-        migrated = rs._migrate_state_document(old)
-        self.assertEqual(
-            migrated["activation"]["review_policy_snapshot"],
-            {"max_supervisor_cycles": 5, "converge_after_supervisor_cycles": 5},
+        rs.request_maintenance(old, "schema-8 migration")
+        rs.drain_worker_for_maintenance(old, worker_thread_id="worker-11", candidate_sha=SHA_B, clean=True)
+        rs.create_maintenance_checkpoint(
+            old, checkpoint_id="checkpoint-001", schedule_id="schedule-1", schedule_state="paused"
         )
-        self.assertEqual(rs.supervisor_review_guidance(migrated)["mode"], "COMPLETE")
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            rs.atomic_write_json(store.path, old)
+            migrated = store.migrate(
+                activation_id="activation-0001",
+                checkpoint_id="checkpoint-001",
+                schedule_id="schedule-1",
+                expected_installed_digest=DIGEST,
+                expected_from_schema=6,
+                skill_root=SKILL_ROOT,
+            )
+        rs.validate_state(migrated)
+        rs.resume_maintenance(
+            migrated,
+            checkpoint_id="checkpoint-001",
+            installed_roundlet_digest=DIGEST,
+            current_versions=migrated["versions"],
+            repository_identity=identity(),
+            schedule_id="schedule-1",
+        )
+        rs.set_candidate(migrated, SHA_B, clean=True)
+        preflight = rs.preflight_supervisor_creation(migrated)
+        self.assertEqual(preflight["generation"], 5)
+        self.assertEqual(preflight["guidance"]["mode"], "COMPLETE")
+        begin_review(migrated, "supervisor-schema-six-5")
+        rs.accept_supervisor_result(
+            migrated,
+            thread_id="supervisor-schema-six-5",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["fifth finding"],
+        )
+        rs.record_supervisor_archived(migrated, supervisor_thread_id="supervisor-schema-six-5")
+        denied = copy.deepcopy(migrated)
+        denied["task"]["active_role"] = None
+        denied["phase"] = "draft-pr"
+        with self.assertRaisesRegex(rs.GuardError, "budget is exhausted"):
+            rs.preflight_supervisor_creation(denied)
 
     def test_schema_six_durable_migration_rejects_stale_policy_or_scope_atomically(self):
         for tamper in ("policy", "scope"):

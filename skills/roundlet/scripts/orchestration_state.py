@@ -85,10 +85,10 @@ MODEL_ID = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
 # keeps migration compatible without carrying duplicate model literals in code.
 POLICY3_ROLE_MODEL_SNAPSHOT_DIGEST = "be1680d41063b90e22fef16e5a207fa6aea59004624be5e5bfb08d8de07c77bf"
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 PROTOCOL_VERSION = "3"
-REVIEW_CONTRACT_VERSION = "5"
-POLICY_VERSION = "6"
+REVIEW_CONTRACT_VERSION = "6"
+POLICY_VERSION = "7"
 VERSION_KEYS = {"schema", "protocol", "review_contract", "policy"}
 LOCAL_CLEANUP_KEYS = {
     "worktree_removed",
@@ -1063,6 +1063,7 @@ def new_state(
         "task": None,
         "review": {
             "round": 0,
+            "completed_supervisor_count": 0,
             "last_result": None,
             "pass_identity": None,
             "current_supervisor_thread_id": None,
@@ -1359,6 +1360,23 @@ def validate_state(state: Mapping[str, Any]) -> None:
         raise ValidationError("Supervisor round exceeds the activation review budget")
     if review_round != archived_count + len(unarchived_thread_ids):
         raise ValidationError("Supervisor round count differs from archived and active receipts")
+    completed_count = review.get("completed_supervisor_count")
+    if (
+        isinstance(completed_count, bool)
+        or not isinstance(completed_count, int)
+        or not 0 <= completed_count <= review_round
+    ):
+        raise ValidationError("completed Supervisor count is malformed")
+    current_supervisor = review.get("current_supervisor_thread_id")
+    accepted_but_unarchived = completed_count - archived_count
+    if accepted_but_unarchived > 1:
+        raise ValidationError("completed Supervisor count differs from archival evidence")
+    if accepted_but_unarchived == 1 and (
+        len(unarchived_thread_ids) != 1
+        or current_supervisor is not None
+        or review.get("last_result") not in {"PASS", "FINDINGS"}
+    ):
+        raise ValidationError("completed Supervisor result lacks an unarchived archival boundary")
     exhaustion = review.get("exhaustion")
     if exhaustion is not None:
         if legacy_unbounded_review:
@@ -1443,7 +1461,6 @@ def validate_state(state: Mapping[str, Any]) -> None:
             last_created_at,
             "latest verified Supervisor creation receipt timestamp",
         )
-    current_supervisor = review.get("current_supervisor_thread_id")
     if phase in {"supervisor-running", "final-supervisor"}:
         if not isinstance(task, Mapping) or task.get("active_role") != "supervisor":
             raise ValidationError(f"phase {phase} requires the Supervisor as the only active role")
@@ -1904,7 +1921,7 @@ class StateStore:
             if original.get("review", {}).get("supervisor_creation_intent") is not None:
                 raise MigrationError("migration requires the Supervisor creation intent to be reconciled")
             if (
-                versions.get("schema") == 6
+                versions.get("schema") in {6, 7}
                 and original.get("activation", {}).get("legacy_unbounded_review") is True
             ):
                 try:
@@ -1914,10 +1931,10 @@ class StateStore:
                     )
                 except ValidationError as exc:
                     raise MigrationError(
-                        "schema-6 legacy review migration lacks durable authority"
+                        "legacy review migration lacks durable authority"
                     ) from exc
                 if authority != _expected_legacy_review_authority(original):
-                    raise MigrationError("schema-6 legacy review migration authority is stale")
+                    raise MigrationError("legacy review migration authority is stale")
                 original = _MigrationAuthorizedState(original, legacy_review_authority=authority)
             migrated = _migrate_state_document(
                 original,
@@ -2046,6 +2063,7 @@ def assign_task(
     }
     state["review"] = {
         "round": 0,
+        "completed_supervisor_count": 0,
         "last_result": None,
         "pass_identity": None,
         "current_supervisor_thread_id": None,
@@ -2090,8 +2108,11 @@ def supervisor_review_guidance(state: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(activation, Mapping) or not isinstance(review, Mapping):
         raise ValidationError("Supervisor guidance requires activation and review state")
     policy = _validate_review_policy(activation.get("review_policy_snapshot", {}))
-    completed = review.get("round")
-    if type(completed) is not int or completed < 0:
+    created = review.get("round")
+    if type(created) is not int or created < 0:
+        raise ValidationError("Supervisor guidance requires a non-negative creation count")
+    completed = review.get("completed_supervisor_count")
+    if type(completed) is not int or not 0 <= completed <= created:
         raise ValidationError("Supervisor guidance requires a non-negative completed review count")
     threshold = policy["converge_after_supervisor_cycles"]
     legacy_unbounded = activation.get("legacy_unbounded_review") is True
@@ -2108,7 +2129,7 @@ def supervisor_review_guidance(state: Mapping[str, Any]) -> dict[str, Any]:
         "discovered actionable P0/P1/P2 correctness, safety, authority, or contract failure."
     )
     return {
-        "current_cycle": completed + 1,
+        "current_cycle": created + 1,
         "completed_cycles": completed,
         "max_cycles": policy["max_supervisor_cycles"],
         "converge_after_cycles": threshold,
@@ -2317,6 +2338,7 @@ def accept_supervisor_result(
     task["active_role"] = None
     review["current_supervisor_thread_id"] = None
     review["last_result"] = result
+    review["completed_supervisor_count"] += 1
     was_final = state["phase"] == "final-supervisor"
     if result == "FINDINGS":
         review["pass_identity"] = None
@@ -3577,6 +3599,65 @@ def _validate_schema6_predecessor(document: Mapping[str, Any]) -> None:
         raise MigrationError("schema-6 scope digest is stale")
 
 
+def _validate_schema7_predecessor(document: Mapping[str, Any]) -> None:
+    """Fail closed before schema-7 review history gains a completion counter."""
+    if document.get("versions") != {
+        "schema": 7,
+        "protocol": PROTOCOL_VERSION,
+        "review_contract": "5",
+        "policy": "6",
+    }:
+        raise MigrationError("schema-7 predecessor versions are invalid")
+    activation = document.get("activation")
+    review = document.get("review")
+    if not isinstance(activation, Mapping) or not isinstance(review, Mapping):
+        raise MigrationError("schema-7 activation or review state is missing")
+    policy = _validate_review_policy(activation.get("review_policy_snapshot", {}))
+    if activation.get("review_policy_snapshot_digest") != digest_json(policy):
+        raise MigrationError("schema-7 review policy snapshot digest is stale")
+    legacy_unbounded = activation.get("legacy_unbounded_review")
+    if type(legacy_unbounded) is not bool:
+        raise MigrationError("schema-7 legacy review marker is malformed")
+    try:
+        expected_scope = compute_scope_digest(
+            activation["repository"],
+            activation["base_branch"],
+            activation["umbrella_issues"],
+            activation["allowed_operations"],
+            document["skill"]["content_digest"],
+            owner_actor=activation["owner_actor"],
+            capability_preflight=activation["capability_preflight"],
+            orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+            role_model_snapshot=activation["role_model_snapshot"],
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+            review_policy_snapshot=policy,
+            review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+            legacy_unbounded_review=legacy_unbounded,
+            protocol_version=PROTOCOL_VERSION,
+            policy_version="6",
+        )
+    except (KeyError, TypeError, RoundletError) as exc:
+        raise MigrationError("schema-7 activation scope is incomplete") from exc
+    if activation.get("scope_digest") != expected_scope:
+        raise MigrationError("schema-7 scope digest is stale")
+    round_count = review.get("round")
+    archived_count = review.get("archived_supervisor_count")
+    unarchived = review.get("unarchived_supervisor_thread_ids")
+    if (
+        "completed_supervisor_count" in review
+        or
+        type(round_count) is not int
+        or round_count < 0
+        or type(archived_count) is not int
+        or archived_count < 0
+        or not isinstance(unarchived, list)
+        or len(unarchived) != len(set(unarchived))
+        or round_count != archived_count + len(unarchived)
+        or not CONTENT_DIGEST.fullmatch(str(review.get("archived_supervisor_digest", "")))
+    ):
+        raise MigrationError("schema-7 review history is malformed")
+
+
 def _migrate_state_document(
     document: Mapping[str, Any],
     target_version: int = SCHEMA_VERSION,
@@ -3908,8 +3989,8 @@ def _migrate_state_document(
             {
                 "schema": 7,
                 "protocol": PROTOCOL_VERSION,
-                "review_contract": REVIEW_CONTRACT_VERSION,
-                "policy": POLICY_VERSION,
+                "review_contract": "5",
+                "policy": "6",
             }
         )
         maintenance = result.get("maintenance")
@@ -3933,9 +4014,55 @@ def _migrate_state_document(
             review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
             legacy_unbounded_review=activation.get("legacy_unbounded_review"),
             protocol_version=PROTOCOL_VERSION,
-            policy_version=POLICY_VERSION,
+            policy_version="6",
         )
         current = 7
+
+    if current == 7 and target_version >= 8:
+        _validate_schema7_predecessor(result)
+        activation = result.get("activation")
+        review = result.get("review")
+        if not isinstance(activation, MutableMapping) or not isinstance(review, MutableMapping):
+            raise MigrationError("schema-7 activation or review state is missing")
+        # Schema 7 retained only creation/archive receipts.  It cannot prove
+        # which archived reviews returned an exact result, so migration starts
+        # the new convergence count at zero rather than narrowing review based
+        # on unverified historical task creation.
+        review["completed_supervisor_count"] = 0
+        review["pass_identity"] = None
+        review["last_result"] = None
+        versions.update(
+            {
+                "schema": 8,
+                "protocol": PROTOCOL_VERSION,
+                "review_contract": REVIEW_CONTRACT_VERSION,
+                "policy": POLICY_VERSION,
+            }
+        )
+        maintenance = result.get("maintenance")
+        if result.get("phase") == "paused-maintenance" and isinstance(maintenance, MutableMapping):
+            maintenance["stored_versions"] = copy.deepcopy(dict(versions))
+            receipt = maintenance.get("migration_receipt")
+            if isinstance(receipt, MutableMapping):
+                receipt["to_schema"] = 8
+        activation["scope_digest"] = compute_scope_digest(
+            activation["repository"],
+            activation.get("base_branch"),
+            activation.get("umbrella_issues", []),
+            activation.get("allowed_operations", {}),
+            result["skill"]["content_digest"],
+            owner_actor=activation.get("owner_actor", {}),
+            capability_preflight=activation.get("capability_preflight", {}),
+            orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
+            role_model_snapshot=activation.get("role_model_snapshot", {}),
+            role_model_snapshot_digest=activation.get("role_model_snapshot_digest"),
+            review_policy_snapshot=activation.get("review_policy_snapshot"),
+            review_policy_snapshot_digest=activation.get("review_policy_snapshot_digest"),
+            legacy_unbounded_review=activation.get("legacy_unbounded_review"),
+            protocol_version=PROTOCOL_VERSION,
+            policy_version=POLICY_VERSION,
+        )
+        current = 8
 
     if current != target_version:
         raise MigrationError(f"no supported migration from schema {current} to {target_version}")
@@ -5748,6 +5875,7 @@ def compact_completed_task(
     state["selection"] = None
     state["review"] = {
         "round": 0,
+        "completed_supervisor_count": 0,
         "last_result": None,
         "pass_identity": None,
         "current_supervisor_thread_id": None,
@@ -5815,6 +5943,7 @@ def compact_scope(
         "task": None,
         "review": {
             "round": 0,
+            "completed_supervisor_count": 0,
             "last_result": None,
             "pass_identity": None,
             "current_supervisor_thread_id": None,
