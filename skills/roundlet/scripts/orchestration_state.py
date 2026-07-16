@@ -33,6 +33,8 @@ DOCUMENTATION_ONLY_OPERATOR_GUIDE_PATH = "skills/roundlet/references/operator-gu
 STATE_DIRECTORY = Path(".codex-log/roundlet")
 STATE_FILENAME = "state.json"
 LEGACY_REVIEW_AUTHORITY_FILENAME = ".legacy-review-authority.json"
+SUPERVISOR_ARCHIVE_AUTHORITY_FILENAME = ".supervisor-archive-authority.json"
+SUPERVISOR_ARCHIVE_AUTHORITY_SCHEMA = 1
 SUMMARY_FILENAME = "last-scope-summary.json"
 MAILBOX_NAMES = {
     "github-context": "github-context.json",
@@ -85,10 +87,10 @@ MODEL_ID = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
 # keeps migration compatible without carrying duplicate model literals in code.
 POLICY3_ROLE_MODEL_SNAPSHOT_DIGEST = "be1680d41063b90e22fef16e5a207fa6aea59004624be5e5bfb08d8de07c77bf"
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 PROTOCOL_VERSION = "3"
-REVIEW_CONTRACT_VERSION = "9"
-POLICY_VERSION = "10"
+REVIEW_CONTRACT_VERSION = "10"
+POLICY_VERSION = "11"
 VERSION_KEYS = {"schema", "protocol", "review_contract", "policy"}
 LOCAL_CLEANUP_KEYS = {
     "worktree_removed",
@@ -1778,18 +1780,24 @@ def read_json(path: str | os.PathLike[str], *, max_bytes: int | None = None) -> 
 
 
 class _MigrationAuthorizedState(dict):
-    """In-memory capability proving StateStore loaded a durable migration receipt."""
+    """In-memory capabilities loaded only from independently durable receipts."""
 
     def __init__(
         self,
         *args: Any,
         legacy_review_authority: Mapping[str, Any] | None = None,
+        supervisor_archive_authority: Mapping[str, Any] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.legacy_review_authority = (
             copy.deepcopy(dict(legacy_review_authority))
             if isinstance(legacy_review_authority, Mapping)
+            else None
+        )
+        self.supervisor_archive_authority = (
+            copy.deepcopy(dict(supervisor_archive_authority))
+            if isinstance(supervisor_archive_authority, Mapping)
             else None
         )
 
@@ -1805,11 +1813,158 @@ def _expected_legacy_review_authority(state: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def _archive_authority_core(
+    activation_id: str,
+    anchor_digest: str,
+    entries: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "schema_version": SUPERVISOR_ARCHIVE_AUTHORITY_SCHEMA,
+        "activation_id": activation_id,
+        "anchor_digest": anchor_digest,
+        "entries": copy.deepcopy(list(entries)),
+    }
+
+
+def _archive_authority_from_state(state: Mapping[str, Any]) -> dict[str, Any]:
+    activation = state.get("activation")
+    review = state.get("review")
+    if not isinstance(activation, Mapping) or not isinstance(review, Mapping):
+        raise ValidationError("archive authority requires activation and review state")
+    activation_id = activation.get("id")
+    outcomes = review.get("archived_supervisor_outcomes")
+    archive_digest = review.get("archived_supervisor_digest")
+    if (
+        not isinstance(activation_id, str)
+        or not activation_id
+        or not isinstance(outcomes, list)
+        or not CONTENT_DIGEST.fullmatch(str(archive_digest))
+    ):
+        raise ValidationError("archive authority source state is malformed")
+    anchor_digest = archive_digest if not outcomes else outcomes[0].get("predecessor_digest")
+    if not CONTENT_DIGEST.fullmatch(str(anchor_digest)):
+        raise ValidationError("archive authority anchor is malformed")
+    core = _archive_authority_core(activation_id, str(anchor_digest), outcomes)
+    return {**core, "authority_digest": digest_json(core)}
+
+
+def _validate_supervisor_archive_authority(authority: Mapping[str, Any]) -> dict[str, Any]:
+    required = {"schema_version", "activation_id", "anchor_digest", "entries", "authority_digest"}
+    if not isinstance(authority, Mapping) or set(authority) != required:
+        raise ScopeError("Supervisor archive authority receipt is malformed")
+    activation_id = authority.get("activation_id")
+    anchor_digest = authority.get("anchor_digest")
+    entries = authority.get("entries")
+    if (
+        authority.get("schema_version") != SUPERVISOR_ARCHIVE_AUTHORITY_SCHEMA
+        or not isinstance(activation_id, str)
+        or not activation_id
+        or not CONTENT_DIGEST.fullmatch(str(anchor_digest))
+        or not isinstance(entries, list)
+        or len(entries) > 64
+    ):
+        raise ScopeError("Supervisor archive authority receipt is invalid")
+    core = _archive_authority_core(activation_id, str(anchor_digest), entries)
+    if authority.get("authority_digest") != digest_json(core):
+        raise ScopeError("Supervisor archive authority receipt digest is stale")
+    previous = str(anchor_digest)
+    for entry in entries:
+        if not isinstance(entry, Mapping) or set(entry) != {
+            "thread_id", "generation", "outcome", "predecessor_digest", "archive_digest"
+        }:
+            raise ScopeError("Supervisor archive authority entry is malformed")
+        if entry.get("predecessor_digest") != previous:
+            raise ScopeError("Supervisor archive authority chain is discontinuous")
+        previous = str(entry.get("archive_digest"))
+    return copy.deepcopy(dict(authority))
+
+
+def _validate_loaded_supervisor_archive_authority(state: Mapping[str, Any]) -> None:
+    authority = getattr(state, "supervisor_archive_authority", None)
+    if authority is None:
+        return
+    normalized = _validate_supervisor_archive_authority(authority)
+    activation = state.get("activation")
+    review = state.get("review")
+    if not isinstance(activation, Mapping) or not isinstance(review, Mapping):
+        raise ScopeError("Supervisor archive authority state is malformed")
+    if normalized["activation_id"] != activation.get("id"):
+        raise ScopeError("Supervisor archive authority belongs to another activation")
+    if normalized["entries"] != review.get("archived_supervisor_outcomes"):
+        raise ScopeError("Supervisor archive authority differs from durable outcome history")
+    expected_digest = (
+        normalized["anchor_digest"]
+        if not normalized["entries"]
+        else normalized["entries"][-1]["archive_digest"]
+    )
+    if expected_digest != review.get("archived_supervisor_digest"):
+        raise ScopeError("Supervisor archive authority differs from the archive commitment")
+
+
+def _advance_supervisor_archive_authority(
+    state: Mapping[str, Any], authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Allow only a bounded append (or bounded head compaction) to authority."""
+    normalized = _validate_supervisor_archive_authority(authority)
+    candidate = _archive_authority_from_state(state)
+    if candidate["activation_id"] != normalized["activation_id"]:
+        raise ScopeError("Supervisor archive authority belongs to another activation")
+    old_entries = normalized["entries"]
+    new_entries = candidate["entries"]
+    if not old_entries:
+        # No outcome was previously committed to external authority.  The
+        # first durable save may contain a bounded in-memory batch.
+        pass
+    elif new_entries[: len(old_entries)] == old_entries:
+        candidate["anchor_digest"] = normalized["anchor_digest"]
+    elif (
+        len(old_entries) == 64
+        and len(new_entries) == 64
+        and new_entries[:-1] == old_entries[1:]
+    ):
+        candidate["anchor_digest"] = old_entries[0]["archive_digest"]
+    else:
+        raise ScopeError("Supervisor archive authority history cannot be rewritten")
+    core = _archive_authority_core(
+        candidate["activation_id"], candidate["anchor_digest"], candidate["entries"]
+    )
+    return {**core, "authority_digest": digest_json(core)}
+
+
 class StateStore:
     def __init__(self, state_directory: str | os.PathLike[str]):
         self.directory = Path(state_directory)
         self.path = self.directory / STATE_FILENAME
         self.legacy_review_authority_path = self.directory / LEGACY_REVIEW_AUTHORITY_FILENAME
+        self.supervisor_archive_authority_path = (
+            self.directory / SUPERVISOR_ARCHIVE_AUTHORITY_FILENAME
+        )
+
+    def _read_supervisor_archive_authority(self, state: Mapping[str, Any]) -> dict[str, Any] | None:
+        if not self.supervisor_archive_authority_path.exists():
+            review = state.get("review", {})
+            versions = state.get("versions", {})
+            if (
+                versions.get("schema") == SCHEMA_VERSION
+                and isinstance(review, Mapping)
+                and (
+                    review.get("archived_supervisor_count", 0) != 0
+                    or review.get("archived_supervisor_outcomes")
+                )
+            ):
+                raise ScopeError("Supervisor archive history lacks its durable external authority")
+            return None
+        authority = read_json(self.supervisor_archive_authority_path, max_bytes=MAX_RECEIPT_BYTES)
+        return _validate_supervisor_archive_authority(authority)
+
+    def _next_supervisor_archive_authority(self, state: Mapping[str, Any]) -> dict[str, Any]:
+        existing = self._read_supervisor_archive_authority(state)
+        candidate = _archive_authority_from_state(state)
+        if existing is None:
+            if candidate["entries"]:
+                raise ScopeError("Supervisor archive history requires existing external authority")
+            return candidate
+        return _advance_supervisor_archive_authority(state, existing)
 
     @contextmanager
     def single_writer(self):
@@ -1825,6 +1980,7 @@ class StateStore:
 
     def load(self) -> dict[str, Any]:
         state = read_json(self.path, max_bytes=MAX_STATE_BYTES)
+        archive_authority = self._read_supervisor_archive_authority(state)
         if state.get("activation", {}).get("legacy_unbounded_review") is True:
             try:
                 authority = read_json(
@@ -1837,8 +1993,17 @@ class StateStore:
                 ) from exc
             if authority != _expected_legacy_review_authority(state):
                 raise ScopeError("legacy review state lacks its exact durable migration authority")
-            state = _MigrationAuthorizedState(state, legacy_review_authority=authority)
+            state = _MigrationAuthorizedState(
+                state,
+                legacy_review_authority=authority,
+                supervisor_archive_authority=archive_authority,
+            )
+        elif archive_authority is not None:
+            state = _MigrationAuthorizedState(
+                state, supervisor_archive_authority=archive_authority
+            )
         validate_state(state)
+        _validate_loaded_supervisor_archive_authority(state)
         return state
 
     def save(self, state: Mapping[str, Any]) -> None:
@@ -1849,6 +2014,12 @@ class StateStore:
             authority = getattr(state, "legacy_review_authority", None)
             mutable = _MigrationAuthorizedState(mutable, legacy_review_authority=authority)
         validate_state(mutable)
+        archive_authority = self._next_supervisor_archive_authority(mutable)
+        atomic_write_json(
+            self.supervisor_archive_authority_path,
+            archive_authority,
+            max_bytes=MAX_RECEIPT_BYTES,
+        )
         atomic_write_json(self.path, mutable, max_bytes=MAX_STATE_BYTES)
         if state.get("activation", {}).get("legacy_unbounded_review") is not True:
             try:
@@ -1858,6 +2029,7 @@ class StateStore:
 
     def initialize(self, state: Mapping[str, Any], *, replace_completed_scope: bool = False) -> None:
         replacement = copy.deepcopy(dict(state))
+        replacing_completed_scope = False
         if self.path.exists():
             existing = self.load()
             if not replace_completed_scope or existing.get("phase") != "scope-complete":
@@ -1875,6 +2047,13 @@ class StateStore:
                     raise ScopeError("completed scope replacement cannot cross repository identity")
             replacement.setdefault("maintenance", {})["schedule_id"] = existing.get("maintenance", {}).get(
                 "schedule_id"
+            )
+            replacing_completed_scope = True
+        if replacing_completed_scope or not self.supervisor_archive_authority_path.exists():
+            atomic_write_json(
+                self.supervisor_archive_authority_path,
+                _archive_authority_from_state(replacement),
+                max_bytes=MAX_RECEIPT_BYTES,
             )
         self.save(replacement)
 
@@ -2082,6 +2261,12 @@ class StateStore:
                     authority,
                     max_bytes=MAX_RECEIPT_BYTES,
                 )
+            if migrated.get("versions", {}).get("schema") == SCHEMA_VERSION:
+                atomic_write_json(
+                    self.supervisor_archive_authority_path,
+                    _archive_authority_from_state(migrated),
+                    max_bytes=MAX_RECEIPT_BYTES,
+                )
             atomic_write_json(self.path, migrated, max_bytes=MAX_STATE_BYTES)
             return migrated
 
@@ -2275,6 +2460,7 @@ def preflight_supervisor_creation(state: Mapping[str, Any], *, final: bool = Fal
     # StateStore gateway.  Validate the durable review boundary first so a
     # swapped historical receipt cannot turn into a new task-creation intent.
     validate_state(state)
+    _validate_loaded_supervisor_archive_authority(state)
     task = state.get("task")
     if not isinstance(task, Mapping) or not task.get("candidate_sha"):
         raise TransitionError("Supervisor requires an immutable candidate")
@@ -2561,6 +2747,8 @@ def record_supervisor_archived(
     *,
     supervisor_thread_id: str,
 ) -> None:
+    _validate_loaded_supervisor_archive_authority(state)
+    prior_archive_authority = getattr(state, "supervisor_archive_authority", None)
     review = state.get("review")
     if not isinstance(review, MutableMapping):
         raise ValidationError("review state is missing")
@@ -2610,6 +2798,12 @@ def record_supervisor_archived(
     review["archived_supervisor_outcome_digest"] = fold_archive_digest(
         "0" * 64, review["archived_supervisor_outcomes"]
     )
+    if prior_archive_authority is not None:
+        setattr(
+            state,
+            "supervisor_archive_authority",
+            _advance_supervisor_archive_authority(state, prior_archive_authority),
+        )
 
 
 def _validate_exact_pr_identity(state: Mapping[str, Any], live: Mapping[str, Any]) -> None:
@@ -4033,6 +4227,52 @@ def _validate_schema10_predecessor(document: Mapping[str, Any]) -> None:
         raise MigrationError("schema-10 archive outcome history is malformed")
 
 
+def _validate_schema11_predecessor(document: Mapping[str, Any]) -> None:
+    """Fail closed before moving archive history into external authority."""
+    if document.get("versions") != {
+        "schema": 11,
+        "protocol": PROTOCOL_VERSION,
+        "review_contract": "9",
+        "policy": "10",
+    }:
+        raise MigrationError("schema-11 predecessor versions are invalid")
+    activation = document.get("activation")
+    review = document.get("review")
+    if not isinstance(activation, Mapping) or not isinstance(review, Mapping):
+        raise MigrationError("schema-11 activation or review state is missing")
+    policy = _validate_review_policy(activation.get("review_policy_snapshot", {}))
+    if activation.get("review_policy_snapshot_digest") != digest_json(policy):
+        raise MigrationError("schema-11 review policy snapshot digest is stale")
+    legacy_unbounded = activation.get("legacy_unbounded_review")
+    if type(legacy_unbounded) is not bool:
+        raise MigrationError("schema-11 legacy review marker is malformed")
+    try:
+        expected_scope = compute_scope_digest(
+            activation["repository"], activation["base_branch"], activation["umbrella_issues"],
+            activation["allowed_operations"], document["skill"]["content_digest"],
+            owner_actor=activation["owner_actor"], capability_preflight=activation["capability_preflight"],
+            orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+            role_model_snapshot=activation["role_model_snapshot"],
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+            review_policy_snapshot=policy,
+            review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+            legacy_unbounded_review=legacy_unbounded,
+            protocol_version=PROTOCOL_VERSION, policy_version="10",
+        )
+    except (KeyError, TypeError, RoundletError) as exc:
+        raise MigrationError("schema-11 activation scope is incomplete") from exc
+    if activation.get("scope_digest") != expected_scope:
+        raise MigrationError("schema-11 scope digest is stale")
+    outcomes = review.get("archived_supervisor_outcomes")
+    if (
+        not isinstance(outcomes, list)
+        or len(outcomes) > 64
+        or review.get("archived_supervisor_outcome_digest")
+        != ("0" * 64 if not outcomes else fold_archive_digest("0" * 64, outcomes))
+    ):
+        raise MigrationError("schema-11 archive outcome history is malformed")
+
+
 def _migrate_state_document(
     document: Mapping[str, Any],
     target_version: int = SCHEMA_VERSION,
@@ -4656,8 +4896,8 @@ def _migrate_state_document(
             {
                 "schema": 11,
                 "protocol": PROTOCOL_VERSION,
-                "review_contract": REVIEW_CONTRACT_VERSION,
-                "policy": POLICY_VERSION,
+                "review_contract": "9",
+                "policy": "10",
             }
         )
         maintenance = result.get("maintenance")
@@ -4677,9 +4917,77 @@ def _migrate_state_document(
             review_policy_snapshot=activation.get("review_policy_snapshot"),
             review_policy_snapshot_digest=activation.get("review_policy_snapshot_digest"),
             legacy_unbounded_review=activation.get("legacy_unbounded_review"),
-            protocol_version=PROTOCOL_VERSION, policy_version=POLICY_VERSION,
+            protocol_version=PROTOCOL_VERSION, policy_version="10",
         )
         current = 11
+
+    if current == 11 and target_version >= 12:
+        _validate_schema11_predecessor(result)
+        if installed_roundlet_digest is not None and original_versions.get("schema", 0) >= 11:
+            skill = result.get("skill")
+            if not isinstance(skill, MutableMapping):
+                raise MigrationError("schema-11 skill identity is missing")
+            migration_original_installed_digest = require_content_digest(
+                skill.get("content_digest"), "schema-11 installed digest"
+            )
+            migration_target_installed_digest = require_content_digest(
+                installed_roundlet_digest, "migrated installed digest"
+            )
+            skill["content_digest"] = migration_target_installed_digest
+        activation = result.get("activation")
+        review = result.get("review")
+        if not isinstance(activation, MutableMapping) or not isinstance(review, MutableMapping):
+            raise MigrationError("schema-11 activation or review state is missing")
+        unarchived = review.get("unarchived_supervisor_thread_ids")
+        if (
+            isinstance(unarchived, list)
+            and len(unarchived) == 1
+            and review.get("current_supervisor_thread_id") is None
+            and review.get("last_result") in {"PASS", "FINDINGS"}
+        ):
+            retired_thread = unarchived[0]
+            review["unarchived_supervisor_thread_ids"] = []
+            review["archived_supervisor_digest"] = fold_archive_digest(
+                review["archived_supervisor_digest"], [{"thread_id": retired_thread}]
+            )
+            review["archived_supervisor_count"] += 1
+        # Schema 11's archive chain is entirely recomputable from state.json.
+        # Reset it before anchoring future outcomes in separate durable authority.
+        review["completed_supervisor_count"] = 0
+        review["completed_supervisor_results"] = []
+        review["completed_supervisor_digest"] = "0" * 64
+        review["archived_supervisor_outcomes"] = []
+        review["archived_supervisor_outcome_digest"] = "0" * 64
+        review["pass_identity"] = None
+        review["last_result"] = None
+        versions.update(
+            {
+                "schema": 12,
+                "protocol": PROTOCOL_VERSION,
+                "review_contract": REVIEW_CONTRACT_VERSION,
+                "policy": POLICY_VERSION,
+            }
+        )
+        maintenance = result.get("maintenance")
+        if result.get("phase") == "paused-maintenance" and isinstance(maintenance, MutableMapping):
+            maintenance["stored_versions"] = copy.deepcopy(dict(versions))
+            receipt = maintenance.get("migration_receipt")
+            if isinstance(receipt, MutableMapping):
+                receipt["to_schema"] = 12
+        activation["scope_digest"] = compute_scope_digest(
+            activation["repository"], activation.get("base_branch"), activation.get("umbrella_issues", []),
+            activation.get("allowed_operations", {}), result["skill"]["content_digest"],
+            owner_actor=activation.get("owner_actor", {}),
+            capability_preflight=activation.get("capability_preflight", {}),
+            orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
+            role_model_snapshot=activation.get("role_model_snapshot", {}),
+            role_model_snapshot_digest=activation.get("role_model_snapshot_digest"),
+            review_policy_snapshot=activation.get("review_policy_snapshot"),
+            review_policy_snapshot_digest=activation.get("review_policy_snapshot_digest"),
+            legacy_unbounded_review=activation.get("legacy_unbounded_review"),
+            protocol_version=PROTOCOL_VERSION, policy_version=POLICY_VERSION,
+        )
+        current = 12
 
     if current != target_version:
         raise MigrationError(f"no supported migration from schema {current} to {target_version}")

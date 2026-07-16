@@ -1775,10 +1775,11 @@ class StateMachineTests(unittest.TestCase):
             review["archived_supervisor_outcome_digest"] = rs.fold_archive_digest(
                 "0" * 64, forged_outcomes
             )
+            review["archived_supervisor_digest"] = predecessor
             rs.atomic_write_json(store.path, tampered)
-            with self.assertRaisesRegex(rs.ValidationError, "archive commitment"):
+            with self.assertRaisesRegex(rs.ScopeError, "archive authority"):
                 store.load()
-            with self.assertRaisesRegex(rs.ValidationError, "archive commitment"):
+            with self.assertRaisesRegex(rs.ScopeError, "archive authority"):
                 rs.preflight_supervisor_creation(tampered)
 
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
