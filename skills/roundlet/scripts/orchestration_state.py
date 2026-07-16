@@ -85,10 +85,10 @@ MODEL_ID = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
 # keeps migration compatible without carrying duplicate model literals in code.
 POLICY3_ROLE_MODEL_SNAPSHOT_DIGEST = "be1680d41063b90e22fef16e5a207fa6aea59004624be5e5bfb08d8de07c77bf"
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 PROTOCOL_VERSION = "3"
-REVIEW_CONTRACT_VERSION = "8"
-POLICY_VERSION = "9"
+REVIEW_CONTRACT_VERSION = "9"
+POLICY_VERSION = "10"
 VERSION_KEYS = {"schema", "protocol", "review_contract", "policy"}
 LOCAL_CLEANUP_KEYS = {
     "worktree_removed",
@@ -1420,12 +1420,17 @@ def validate_state(state: Mapping[str, Any]) -> None:
     archived_outcome_thread_ids: list[str] = []
     archived_outcome_generations: list[int] = []
     archived_outcome_by_thread: dict[str, str] = {}
+    previous_outcome_archive_digest: str | None = None
     for outcome in archived_outcomes:
-        if not isinstance(outcome, Mapping) or set(outcome) != {"thread_id", "generation", "outcome"}:
+        if not isinstance(outcome, Mapping) or set(outcome) != {
+            "thread_id", "generation", "outcome", "predecessor_digest", "archive_digest"
+        }:
             raise ValidationError("archived Supervisor outcome receipt is malformed")
         thread_id = outcome.get("thread_id")
         generation = outcome.get("generation")
         outcome_name = outcome.get("outcome")
+        predecessor_digest = outcome.get("predecessor_digest")
+        archive_digest = outcome.get("archive_digest")
         if (
             not isinstance(thread_id, str)
             or thread_id not in thread_ids
@@ -1434,16 +1439,30 @@ def validate_state(state: Mapping[str, Any]) -> None:
             or generation > review_round
             or thread_ids[generation - recent_generation_start] != thread_id
             or outcome_name not in {"COMPLETED", "DISCARDED"}
+            or not CONTENT_DIGEST.fullmatch(str(predecessor_digest))
+            or not CONTENT_DIGEST.fullmatch(str(archive_digest))
+            or archive_digest
+            != fold_archive_digest(
+                predecessor_digest,
+                [{"thread_id": thread_id, "generation": generation, "outcome": outcome_name}],
+            )
+            or (
+                previous_outcome_archive_digest is not None
+                and predecessor_digest != previous_outcome_archive_digest
+            )
         ):
             raise ValidationError("archived Supervisor outcome is not bound to a fresh task")
         archived_outcome_thread_ids.append(thread_id)
         archived_outcome_generations.append(generation)
         archived_outcome_by_thread[thread_id] = outcome_name
+        previous_outcome_archive_digest = archive_digest
     if (
         len(archived_outcome_thread_ids) != len(set(archived_outcome_thread_ids))
         or archived_outcome_generations != sorted(archived_outcome_generations)
     ):
         raise ValidationError("archived Supervisor outcome ledger is not monotonic")
+    if archived_outcomes and previous_outcome_archive_digest != review.get("archived_supervisor_digest"):
+        raise ValidationError("archived Supervisor outcome receipt does not match the archive commitment")
     completion_by_thread = {completion["thread_id"]: completion for completion in completed_results}
     for thread_id, completion in completion_by_thread.items():
         if thread_id not in unarchived_thread_ids and archived_outcome_by_thread.get(thread_id) != "COMPLETED":
@@ -2560,11 +2579,6 @@ def record_supervisor_archived(
     review["unarchived_supervisor_thread_ids"] = [
         thread_id for thread_id in unarchived if thread_id != supervisor_thread_id
     ]
-    review["archived_supervisor_digest"] = fold_archive_digest(
-        review["archived_supervisor_digest"],
-        [{"thread_id": supervisor_thread_id}],
-    )
-    review["archived_supervisor_count"] += 1
     completed_results = review.get("completed_supervisor_results")
     outcome = "COMPLETED" if isinstance(completed_results, list) and any(
         isinstance(completion, Mapping)
@@ -2575,8 +2589,21 @@ def record_supervisor_archived(
     archived_outcomes = review.get("archived_supervisor_outcomes")
     if not isinstance(archived_outcomes, list):
         raise ValidationError("archived Supervisor outcome ledger is missing")
+    predecessor_digest = review["archived_supervisor_digest"]
+    archive_digest = fold_archive_digest(
+        predecessor_digest,
+        [{"thread_id": supervisor_thread_id, "generation": review["round"], "outcome": outcome}],
+    )
+    review["archived_supervisor_digest"] = archive_digest
+    review["archived_supervisor_count"] += 1
     archived_outcomes.append(
-        {"thread_id": supervisor_thread_id, "generation": review["round"], "outcome": outcome}
+        {
+            "thread_id": supervisor_thread_id,
+            "generation": review["round"],
+            "outcome": outcome,
+            "predecessor_digest": predecessor_digest,
+            "archive_digest": archive_digest,
+        }
     )
     if len(archived_outcomes) > 64:
         review["archived_supervisor_outcomes"] = archived_outcomes[-64:]
@@ -3960,6 +3987,52 @@ def _validate_schema9_predecessor(document: Mapping[str, Any]) -> None:
         raise MigrationError("schema-9 review history is malformed")
 
 
+def _validate_schema10_predecessor(document: Mapping[str, Any]) -> None:
+    """Fail closed before schema-10 archive outcomes gain chain commitments."""
+    if document.get("versions") != {
+        "schema": 10,
+        "protocol": PROTOCOL_VERSION,
+        "review_contract": "8",
+        "policy": "9",
+    }:
+        raise MigrationError("schema-10 predecessor versions are invalid")
+    activation = document.get("activation")
+    review = document.get("review")
+    if not isinstance(activation, Mapping) or not isinstance(review, Mapping):
+        raise MigrationError("schema-10 activation or review state is missing")
+    policy = _validate_review_policy(activation.get("review_policy_snapshot", {}))
+    if activation.get("review_policy_snapshot_digest") != digest_json(policy):
+        raise MigrationError("schema-10 review policy snapshot digest is stale")
+    legacy_unbounded = activation.get("legacy_unbounded_review")
+    if type(legacy_unbounded) is not bool:
+        raise MigrationError("schema-10 legacy review marker is malformed")
+    try:
+        expected_scope = compute_scope_digest(
+            activation["repository"], activation["base_branch"], activation["umbrella_issues"],
+            activation["allowed_operations"], document["skill"]["content_digest"],
+            owner_actor=activation["owner_actor"], capability_preflight=activation["capability_preflight"],
+            orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+            role_model_snapshot=activation["role_model_snapshot"],
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+            review_policy_snapshot=policy,
+            review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+            legacy_unbounded_review=legacy_unbounded,
+            protocol_version=PROTOCOL_VERSION, policy_version="9",
+        )
+    except (KeyError, TypeError, RoundletError) as exc:
+        raise MigrationError("schema-10 activation scope is incomplete") from exc
+    if activation.get("scope_digest") != expected_scope:
+        raise MigrationError("schema-10 scope digest is stale")
+    outcomes = review.get("archived_supervisor_outcomes")
+    if (
+        not isinstance(outcomes, list)
+        or len(outcomes) > 64
+        or review.get("archived_supervisor_outcome_digest")
+        != ("0" * 64 if not outcomes else fold_archive_digest("0" * 64, outcomes))
+    ):
+        raise MigrationError("schema-10 archive outcome history is malformed")
+
+
 def _migrate_state_document(
     document: Mapping[str, Any],
     target_version: int = SCHEMA_VERSION,
@@ -4297,6 +4370,23 @@ def _migrate_state_document(
         review = result.get("review")
         if not isinstance(review, MutableMapping):
             raise MigrationError("schema-6 review state is missing")
+        unarchived = review.get("unarchived_supervisor_thread_ids")
+        if (
+            isinstance(unarchived, list)
+            and len(unarchived) == 1
+            and review.get("current_supervisor_thread_id") is None
+            and review.get("last_result") in {"PASS", "FINDINGS"}
+        ):
+            # Schema 6 can be paused between accepting a result and recording
+            # its archive.  The old archive commitment cannot authenticate the
+            # outcome, so retire that boundary as a discard before moving to a
+            # contract that requires exact completion/archive proof.
+            retired_thread = unarchived[0]
+            review["unarchived_supervisor_thread_ids"] = []
+            review["archived_supervisor_digest"] = fold_archive_digest(
+                review["archived_supervisor_digest"], [{"thread_id": retired_thread}]
+            )
+            review["archived_supervisor_count"] += 1
         # A contract-4 PASS cannot authorize a contract-5 merge.  Clear it
         # before validation; resume_maintenance then restores a safe fresh
         # review boundary from its recorded pre-maintenance phase.
@@ -4467,6 +4557,19 @@ def _migrate_state_document(
         review = result.get("review")
         if not isinstance(activation, MutableMapping) or not isinstance(review, MutableMapping):
             raise MigrationError("schema-9 activation or review state is missing")
+        unarchived = review.get("unarchived_supervisor_thread_ids")
+        if (
+            isinstance(unarchived, list)
+            and len(unarchived) == 1
+            and review.get("current_supervisor_thread_id") is None
+            and review.get("last_result") in {"PASS", "FINDINGS"}
+        ):
+            retired_thread = unarchived[0]
+            review["unarchived_supervisor_thread_ids"] = []
+            review["archived_supervisor_digest"] = fold_archive_digest(
+                review["archived_supervisor_digest"], [{"thread_id": retired_thread}]
+            )
+            review["archived_supervisor_count"] += 1
         # Schema 9 records accepted results and archived thread identities but
         # cannot prove which archived threads completed.  Reset completion
         # evidence before binding the new outcome-aware archive ledger.
@@ -4481,8 +4584,8 @@ def _migrate_state_document(
             {
                 "schema": 10,
                 "protocol": PROTOCOL_VERSION,
-                "review_contract": REVIEW_CONTRACT_VERSION,
-                "policy": POLICY_VERSION,
+                "review_contract": "8",
+                "policy": "9",
             }
         )
         maintenance = result.get("maintenance")
@@ -4506,9 +4609,77 @@ def _migrate_state_document(
             review_policy_snapshot_digest=activation.get("review_policy_snapshot_digest"),
             legacy_unbounded_review=activation.get("legacy_unbounded_review"),
             protocol_version=PROTOCOL_VERSION,
-            policy_version=POLICY_VERSION,
+            policy_version="9",
         )
         current = 10
+
+    if current == 10 and target_version >= 11:
+        _validate_schema10_predecessor(result)
+        if installed_roundlet_digest is not None and original_versions.get("schema", 0) >= 10:
+            skill = result.get("skill")
+            if not isinstance(skill, MutableMapping):
+                raise MigrationError("schema-10 skill identity is missing")
+            migration_original_installed_digest = require_content_digest(
+                skill.get("content_digest"), "schema-10 installed digest"
+            )
+            migration_target_installed_digest = require_content_digest(
+                installed_roundlet_digest, "migrated installed digest"
+            )
+            skill["content_digest"] = migration_target_installed_digest
+        activation = result.get("activation")
+        review = result.get("review")
+        if not isinstance(activation, MutableMapping) or not isinstance(review, MutableMapping):
+            raise MigrationError("schema-10 activation or review state is missing")
+        unarchived = review.get("unarchived_supervisor_thread_ids")
+        if (
+            isinstance(unarchived, list)
+            and len(unarchived) == 1
+            and review.get("current_supervisor_thread_id") is None
+            and review.get("last_result") in {"PASS", "FINDINGS"}
+        ):
+            retired_thread = unarchived[0]
+            review["unarchived_supervisor_thread_ids"] = []
+            review["archived_supervisor_digest"] = fold_archive_digest(
+                review["archived_supervisor_digest"], [{"thread_id": retired_thread}]
+            )
+            review["archived_supervisor_count"] += 1
+        # Schema 10 outcomes were not committed to the archive digest.  Reset
+        # them with completion evidence before starting a chained ledger.
+        review["completed_supervisor_count"] = 0
+        review["completed_supervisor_results"] = []
+        review["completed_supervisor_digest"] = "0" * 64
+        review["archived_supervisor_outcomes"] = []
+        review["archived_supervisor_outcome_digest"] = "0" * 64
+        review["pass_identity"] = None
+        review["last_result"] = None
+        versions.update(
+            {
+                "schema": 11,
+                "protocol": PROTOCOL_VERSION,
+                "review_contract": REVIEW_CONTRACT_VERSION,
+                "policy": POLICY_VERSION,
+            }
+        )
+        maintenance = result.get("maintenance")
+        if result.get("phase") == "paused-maintenance" and isinstance(maintenance, MutableMapping):
+            maintenance["stored_versions"] = copy.deepcopy(dict(versions))
+            receipt = maintenance.get("migration_receipt")
+            if isinstance(receipt, MutableMapping):
+                receipt["to_schema"] = 11
+        activation["scope_digest"] = compute_scope_digest(
+            activation["repository"], activation.get("base_branch"), activation.get("umbrella_issues", []),
+            activation.get("allowed_operations", {}), result["skill"]["content_digest"],
+            owner_actor=activation.get("owner_actor", {}),
+            capability_preflight=activation.get("capability_preflight", {}),
+            orchestrator_creation_receipt=activation.get("orchestrator_creation_receipt", {}),
+            role_model_snapshot=activation.get("role_model_snapshot", {}),
+            role_model_snapshot_digest=activation.get("role_model_snapshot_digest"),
+            review_policy_snapshot=activation.get("review_policy_snapshot"),
+            review_policy_snapshot_digest=activation.get("review_policy_snapshot_digest"),
+            legacy_unbounded_review=activation.get("legacy_unbounded_review"),
+            protocol_version=PROTOCOL_VERSION, policy_version=POLICY_VERSION,
+        )
+        current = 11
 
     if current != target_version:
         raise MigrationError(f"no supported migration from schema {current} to {target_version}")

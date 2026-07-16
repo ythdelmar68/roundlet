@@ -1718,6 +1718,69 @@ class StateMachineTests(unittest.TestCase):
             with self.assertRaisesRegex(rs.ValidationError, "completed archive outcome"):
                 rs.preflight_supervisor_creation(tampered)
 
+    def test_discarded_outcomes_cannot_be_rewritten_with_completion_evidence(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for generation in range(1, 4):
+            thread_id = f"supervisor-discard-commitment-{generation}"
+            begin_review(value, thread_id)
+            rs.request_maintenance(value, "interrupt incomplete review")
+            rs.discard_supervisor_for_maintenance(value, supervisor_thread_id=thread_id)
+            rs.create_maintenance_checkpoint(
+                value,
+                checkpoint_id=f"checkpoint-{generation:03d}",
+                schedule_id="schedule-1",
+                schedule_state="paused",
+            )
+            rs.resume_maintenance(
+                value,
+                checkpoint_id=f"checkpoint-{generation:03d}",
+                installed_roundlet_digest=DIGEST,
+                current_versions=value["versions"],
+                repository_identity=identity(),
+                schedule_id="schedule-1",
+            )
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            tampered = store.load()
+            review = tampered["review"]
+            predecessor = "0" * 64
+            forged_outcomes = []
+            for generation in range(1, 4):
+                payload = {
+                    "thread_id": f"supervisor-discard-commitment-{generation}",
+                    "generation": generation,
+                    "outcome": "COMPLETED",
+                }
+                archive_digest = rs.fold_archive_digest(predecessor, [payload])
+                forged_outcomes.append(
+                    {**payload, "predecessor_digest": predecessor, "archive_digest": archive_digest}
+                )
+                predecessor = archive_digest
+            review["completed_supervisor_count"] = 3
+            review["completed_supervisor_results"] = [
+                {
+                    "thread_id": f"supervisor-discard-commitment-{generation}",
+                    "generation": generation,
+                    "result": "FINDINGS",
+                }
+                for generation in range(1, 4)
+            ]
+            review["completed_supervisor_digest"] = rs.fold_archive_digest(
+                "0" * 64, review["completed_supervisor_results"]
+            )
+            review["archived_supervisor_outcomes"] = forged_outcomes
+            review["archived_supervisor_outcome_digest"] = rs.fold_archive_digest(
+                "0" * 64, forged_outcomes
+            )
+            rs.atomic_write_json(store.path, tampered)
+            with self.assertRaisesRegex(rs.ValidationError, "archive commitment"):
+                store.load()
+            with self.assertRaisesRegex(rs.ValidationError, "archive commitment"):
+                rs.preflight_supervisor_creation(tampered)
+
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
@@ -2925,6 +2988,112 @@ class MaintenanceTests(unittest.TestCase):
                 schedule_id="schedule-1",
             )
             self.assertEqual(migrated["phase"], "draft-pr")
+
+    def test_schema_six_accepted_unarchived_boundary_migrates_safely(self):
+        for result in ("PASS", "FINDINGS"):
+            with self.subTest(result=result), tempfile.TemporaryDirectory() as temporary:
+                value = assigned_state()
+                rs.set_candidate(value, SHA_B, clean=True)
+                record_draft(value)
+                begin_review(value, f"supervisor-schema-six-unarchived-{result.lower()}")
+                rs.accept_supervisor_result(
+                    value,
+                    thread_id=f"supervisor-schema-six-unarchived-{result.lower()}",
+                    candidate_sha=SHA_B,
+                    result=result,
+                    non_blocking_items=[] if result == "PASS" else ["repair required"],
+                )
+                downgrade_to_schema6(value)
+                rs.request_maintenance(value, "schema-11 unarchived result migration")
+                rs.drain_worker_for_maintenance(
+                    value, worker_thread_id="worker-11", candidate_sha=SHA_B, clean=True
+                )
+                rs.create_maintenance_checkpoint(
+                    value, checkpoint_id="checkpoint-001", schedule_id="schedule-1", schedule_state="paused"
+                )
+                store = rs.StateStore(temporary)
+                rs.atomic_write_json(store.path, value)
+                migrated = store.migrate(
+                    activation_id="activation-0001",
+                    checkpoint_id="checkpoint-001",
+                    schedule_id="schedule-1",
+                    expected_installed_digest=DIGEST,
+                    expected_from_schema=6,
+                    skill_root=SKILL_ROOT,
+                )
+                self.assertEqual(migrated["review"]["unarchived_supervisor_thread_ids"], [])
+                self.assertEqual(migrated["review"]["archived_supervisor_count"], 1)
+                rs.validate_state(migrated)
+                rs.resume_maintenance(
+                    migrated,
+                    checkpoint_id="checkpoint-001",
+                    installed_roundlet_digest=DIGEST,
+                    current_versions=migrated["versions"],
+                    repository_identity=identity(),
+                    schedule_id="schedule-1",
+                )
+
+    def test_schema_ten_accepted_unarchived_boundary_migrates_safely(self):
+        for result in ("PASS", "FINDINGS"):
+            with self.subTest(result=result), tempfile.TemporaryDirectory() as temporary:
+                value = assigned_state()
+                rs.set_candidate(value, SHA_B, clean=True)
+                record_draft(value)
+                thread_id = f"supervisor-schema-ten-unarchived-{result.lower()}"
+                begin_review(value, thread_id)
+                rs.accept_supervisor_result(
+                    value,
+                    thread_id=thread_id,
+                    candidate_sha=SHA_B,
+                    result=result,
+                    non_blocking_items=[] if result == "PASS" else ["repair required"],
+                )
+                rs.request_maintenance(value, "schema-11 direct unarchived result migration")
+                rs.drain_worker_for_maintenance(
+                    value, worker_thread_id="worker-11", candidate_sha=SHA_B, clean=True
+                )
+                rs.create_maintenance_checkpoint(
+                    value, checkpoint_id="checkpoint-001", schedule_id="schedule-1", schedule_state="paused"
+                )
+                value["versions"].update(
+                    {"schema": 10, "protocol": "3", "review_contract": "8", "policy": "9"}
+                )
+                value["maintenance"]["stored_versions"] = copy.deepcopy(value["versions"])
+                activation = value["activation"]
+                activation["scope_digest"] = rs.compute_scope_digest(
+                    activation["repository"], activation["base_branch"], activation["umbrella_issues"],
+                    activation["allowed_operations"], value["skill"]["content_digest"],
+                    owner_actor=activation["owner_actor"],
+                    capability_preflight=activation["capability_preflight"],
+                    orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+                    role_model_snapshot=activation["role_model_snapshot"],
+                    role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+                    review_policy_snapshot=activation["review_policy_snapshot"],
+                    review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+                    legacy_unbounded_review=activation["legacy_unbounded_review"],
+                    protocol_version="3", policy_version="9",
+                )
+                store = rs.StateStore(temporary)
+                rs.atomic_write_json(store.path, value)
+                migrated = store.migrate(
+                    activation_id="activation-0001",
+                    checkpoint_id="checkpoint-001",
+                    schedule_id="schedule-1",
+                    expected_installed_digest=DIGEST,
+                    expected_from_schema=10,
+                    skill_root=SKILL_ROOT,
+                )
+                self.assertEqual(migrated["review"]["unarchived_supervisor_thread_ids"], [])
+                self.assertEqual(migrated["review"]["archived_supervisor_count"], 1)
+                rs.validate_state(migrated)
+                rs.resume_maintenance(
+                    migrated,
+                    checkpoint_id="checkpoint-001",
+                    installed_roundlet_digest=DIGEST,
+                    current_versions=migrated["versions"],
+                    repository_identity=identity(),
+                    schedule_id="schedule-1",
+                )
 
     def test_schema_five_migration_preserves_round_64_and_higher_as_unbounded(self):
         for review_round in (64, 65, 200):
