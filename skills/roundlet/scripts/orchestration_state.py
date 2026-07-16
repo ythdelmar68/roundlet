@@ -103,6 +103,26 @@ MAX_RECEIPT_BYTES = 65_536
 
 FULL_SHA = re.compile(r"^[0-9a-f]{40}$")
 CONTENT_DIGEST = re.compile(r"^[0-9a-f]{64}$")
+RELEASE_TAG = re.compile(
+    r"^v(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)"
+    r"(?:-rc\.(?P<rc>0|[1-9][0-9]*))?$"
+)
+RELEASE_NOTE_FIELDS = frozenset(
+    {
+        "tag",
+        "source_sha",
+        "installed_skill_digest",
+        "state_schema_version",
+        "protocol_version",
+        "review_contract_version",
+        "policy_version",
+        "supported_python",
+        "supported_os",
+        "supported_codex",
+        "license",
+        "forward_test_evidence",
+    }
+)
 OWNER_NAME = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 BRANCH_NAME = re.compile(r"^(?![-/])(?!.*(?:\.\.|//|@\{|\\))[A-Za-z0-9._/-]+(?<![./])$")
 
@@ -365,6 +385,151 @@ def require_content_digest(value: Any, label: str = "installed_roundlet_digest")
     if not isinstance(value, str) or not CONTENT_DIGEST.fullmatch(value):
         raise ValidationError(f"{label} must be a lowercase SHA-256 digest")
     return value
+
+
+def parse_release_tag(value: Any, label: str = "release tag") -> dict[str, Any]:
+    """Parse the narrowly supported, immutable Roundlet release tag subset."""
+    if not isinstance(value, str):
+        raise ValidationError(f"{label} is malformed")
+    match = RELEASE_TAG.fullmatch(value)
+    if match is None:
+        raise ValidationError(f"{label} is not an allowed SemVer release tag")
+    rc = match.group("rc")
+    if rc == "0":
+        raise ValidationError(f"{label} RC number must be positive")
+    line = "v{major}.{minor}.{patch}".format(**match.groupdict())
+    return {
+        "tag": value,
+        "line": line,
+        "rc": None if rc is None else int(rc),
+    }
+
+
+def _require_release_note_text(notes: Mapping[str, Any], field: str) -> str:
+    value = notes.get(field)
+    if not isinstance(value, str) or not value.strip():
+        raise ValidationError(f"release notes require non-empty {field}")
+    return value
+
+
+def validate_release_contract(
+    request: Mapping[str, Any],
+    *,
+    existing_tags: Iterable[str],
+    consumed_approval_ids: Iterable[str] = (),
+) -> dict[str, Any]:
+    """Validate one owner-authorized release without performing any mutation.
+
+    The caller supplies connector-read evidence for the protected branch, checks,
+    approval tuple, immutable tags, and notes.  This pure helper rejects unsafe
+    metadata so a future release workflow cannot broaden the policy by parsing
+    prose differently.
+    """
+    required_request_fields = {
+        "tag",
+        "source_sha",
+        "source_branch",
+        "worktree_clean",
+        "required_checks",
+        "approval",
+        "approved_rc_tag",
+        "release_notes",
+    }
+    if not isinstance(request, Mapping) or set(request) != required_request_fields:
+        raise ValidationError("release request has unknown or missing fields")
+
+    tag = parse_release_tag(request["tag"])
+    source_sha = require_full_sha(request["source_sha"], "release source SHA")
+    if request["source_branch"] != "main":
+        raise ValidationError("release source must be the protected main branch")
+    if request["worktree_clean"] is not True:
+        raise ValidationError("release source worktree must be clean")
+
+    checks = request["required_checks"]
+    if not isinstance(checks, Mapping) or not checks:
+        raise ValidationError("release requires at least one required check")
+    for check_name, evidence in checks.items():
+        if not isinstance(check_name, str) or not check_name or not isinstance(evidence, Mapping):
+            raise ValidationError("required check evidence is malformed")
+        if set(evidence) != {"sha", "conclusion"} or evidence.get("sha") != source_sha:
+            raise ValidationError("required checks must bind the exact release source SHA")
+        if evidence.get("conclusion") != "success":
+            raise ValidationError("every required check must conclude success")
+
+    approval = request["approval"]
+    if not isinstance(approval, Mapping) or set(approval) != {
+        "id",
+        "environment",
+        "owner_approved",
+        "tag",
+        "source_sha",
+    }:
+        raise ValidationError("release approval is malformed")
+    approval_id = approval.get("id")
+    if not isinstance(approval_id, str) or not approval_id:
+        raise ValidationError("release approval requires a stable ID")
+    if approval.get("environment") != "release" or approval.get("owner_approved") is not True:
+        raise ValidationError("release requires explicit owner approval in the release environment")
+    if approval.get("tag") != tag["tag"] or approval.get("source_sha") != source_sha:
+        raise ValidationError("release approval must bind exactly one tag and source SHA")
+    if approval_id in set(consumed_approval_ids):
+        raise ValidationError("release approval cannot be replayed")
+
+    notes = request["release_notes"]
+    if not isinstance(notes, Mapping) or set(notes) != RELEASE_NOTE_FIELDS:
+        raise ValidationError("release notes have unknown or missing fields")
+    if notes.get("tag") != tag["tag"] or notes.get("source_sha") != source_sha:
+        raise ValidationError("release notes must bind the exact tag and source SHA")
+    require_content_digest(notes.get("installed_skill_digest"), "release notes installed skill digest")
+    for field in (
+        "state_schema_version",
+        "protocol_version",
+        "review_contract_version",
+        "policy_version",
+        "supported_python",
+        "supported_os",
+        "supported_codex",
+        "forward_test_evidence",
+    ):
+        _require_release_note_text(notes, field)
+    if notes.get("license") != "Apache-2.0":
+        raise ValidationError("release notes must identify the Apache-2.0 license")
+
+    prior_tags = list(existing_tags)
+    if any(not isinstance(prior, str) for prior in prior_tags) or len(set(prior_tags)) != len(prior_tags):
+        raise ValidationError("existing release tags are malformed or duplicated")
+    parsed_prior = [parse_release_tag(prior, "existing release tag") for prior in prior_tags]
+    if tag["tag"] in prior_tags:
+        raise ValidationError("release tag cannot be reused")
+
+    line_tags = [prior for prior in parsed_prior if prior["line"] == tag["line"]]
+    stable_exists = any(prior["rc"] is None for prior in line_tags)
+    rc_numbers = [prior["rc"] for prior in line_tags if prior["rc"] is not None]
+    approved_rc_tag = request["approved_rc_tag"]
+    if tag["rc"] is not None:
+        if approved_rc_tag is not None:
+            raise ValidationError("release candidates must not name an approved RC")
+        if stable_exists:
+            raise ValidationError("a stable release line is terminal")
+        expected_rc = max(rc_numbers, default=0) + 1
+        if tag["rc"] != expected_rc:
+            raise ValidationError("release candidate number must be the next consecutive RC")
+    else:
+        if not isinstance(approved_rc_tag, str):
+            raise ValidationError("stable releases require the latest approved RC tag")
+        approved_rc = parse_release_tag(approved_rc_tag, "approved RC tag")
+        if approved_rc["line"] != tag["line"] or approved_rc["rc"] is None or not rc_numbers:
+            raise ValidationError("stable releases require an approved RC from the same release line")
+        if approved_rc["rc"] != max(rc_numbers):
+            raise ValidationError("stable releases require the latest approved RC")
+
+    return {
+        "tag": tag["tag"],
+        "source_sha": source_sha,
+        "approval_id": approval_id,
+        "release_line": tag["line"],
+        "release_candidate": tag["rc"],
+    }
 
 
 def validate_owner_actor(actor: Mapping[str, Any]) -> dict[str, Any]:

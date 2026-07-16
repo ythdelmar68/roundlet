@@ -138,6 +138,38 @@ def downgrade_to_policy3(value):
     refresh_policy3_scope(value)
 
 
+def release_request(*, tag="v0.1.0-rc.1", existing_tags=(), approved_rc_tag=None):
+    return {
+        "tag": tag,
+        "source_sha": SHA_A,
+        "source_branch": "main",
+        "worktree_clean": True,
+        "required_checks": {"unit": {"sha": SHA_A, "conclusion": "success"}},
+        "approval": {
+            "id": "approval-1",
+            "environment": "release",
+            "owner_approved": True,
+            "tag": tag,
+            "source_sha": SHA_A,
+        },
+        "approved_rc_tag": approved_rc_tag,
+        "release_notes": {
+            "tag": tag,
+            "source_sha": SHA_A,
+            "installed_skill_digest": "d" * 64,
+            "state_schema_version": "6",
+            "protocol_version": "3",
+            "review_contract_version": "4",
+            "policy_version": "5",
+            "supported_python": "3.11",
+            "supported_os": "macOS",
+            "supported_codex": "current",
+            "license": "Apache-2.0",
+            "forward_test_evidence": "fresh minimally primed thread passed",
+        },
+    }
+
+
 def refresh_policy3_scope(value):
     activation = value["activation"]
     legacy_snapshot = rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]
@@ -665,6 +697,86 @@ def premerge_state():
         clean=True,
     )
     return value
+
+
+class ReleaseContractTests(unittest.TestCase):
+    def test_accepts_first_rc_and_latest_rc_stable_transition(self):
+        first = rs.validate_release_contract(release_request(), existing_tags=[])
+        self.assertEqual(first["release_candidate"], 1)
+
+        stable = rs.validate_release_contract(
+            release_request(tag="v0.1.0", approved_rc_tag="v0.1.0-rc.2"),
+            existing_tags=["v0.1.0-rc.1", "v0.1.0-rc.2"],
+        )
+        self.assertEqual(stable["release_line"], "v0.1.0")
+        self.assertIsNone(stable["release_candidate"])
+
+    def test_rejects_malformed_tag_grammar(self):
+        for tag in (
+            "1.2.3", "v01.2.3", "v1.02.3", "v1.2.03", "v1.2.3-rc.0",
+            "v1.2.3-rc.01", "v1.2.3-beta.1", "v1.2.3+build.1",
+        ):
+            with self.subTest(tag=tag), self.assertRaises(rs.ValidationError):
+                rs.validate_release_contract(release_request(tag=tag), existing_tags=[])
+
+    def test_rejects_reused_skipped_and_post_stable_rcs(self):
+        cases = (
+            ("v0.1.0-rc.1", ["v0.1.0-rc.1"], "reused"),
+            ("v0.1.0-rc.3", ["v0.1.0-rc.1"], "skipped"),
+            ("v0.1.0-rc.2", ["v0.1.0-rc.1", "v0.1.0"], "post-stable"),
+        )
+        for tag, existing_tags, label in cases:
+            with self.subTest(label=label), self.assertRaises(rs.ValidationError):
+                rs.validate_release_contract(release_request(tag=tag), existing_tags=existing_tags)
+
+    def test_rejects_invalid_stable_transitions(self):
+        cases = (
+            ([], None, "no-rc"),
+            (["v0.1.0-rc.1", "v0.1.0-rc.2"], "v0.1.0-rc.1", "older-rc"),
+            (["v0.1.0-rc.1", "v0.1.0"], "v0.1.0-rc.1", "reused-stable"),
+        )
+        for existing_tags, approved_rc_tag, label in cases:
+            with self.subTest(label=label), self.assertRaises(rs.ValidationError):
+                rs.validate_release_contract(
+                    release_request(tag="v0.1.0", approved_rc_tag=approved_rc_tag),
+                    existing_tags=existing_tags,
+                )
+
+    def test_rejects_unbound_or_unsuccessful_release_provenance(self):
+        cases = (
+            (lambda value: value.update({"source_branch": "refs/heads/main"}), "floating-ref"),
+            (lambda value: value.update({"source_sha": "a" * 12}), "short-sha"),
+            (lambda value: value.update({"source_sha": "g" * 40}), "non-hex-sha"),
+            (lambda value: value.update({"worktree_clean": False}), "dirty"),
+            (lambda value: value["required_checks"]["unit"].update({"conclusion": "failure"}), "failed-check"),
+            (lambda value: value["required_checks"]["unit"].update({"conclusion": "cancelled"}), "cancelled-check"),
+            (lambda value: value["required_checks"]["unit"].update({"sha": SHA_B}), "wrong-check-sha"),
+            (lambda value: value["approval"].update({"tag": "v0.1.0-rc.2"}), "tag-substitution"),
+            (lambda value: value["approval"].update({"source_sha": SHA_B}), "sha-substitution"),
+        )
+        for mutate, label in cases:
+            request = release_request()
+            mutate(request)
+            with self.subTest(label=label), self.assertRaises(rs.ValidationError):
+                rs.validate_release_contract(request, existing_tags=[])
+
+        with self.assertRaises(rs.ValidationError):
+            rs.validate_release_contract(
+                release_request(), existing_tags=[], consumed_approval_ids=["approval-1"]
+            )
+
+    def test_rejects_missing_or_incomplete_release_notes(self):
+        for field in rs.RELEASE_NOTE_FIELDS:
+            request = release_request()
+            request["release_notes"].pop(field)
+            with self.subTest(field=field), self.assertRaises(rs.ValidationError):
+                rs.validate_release_contract(request, existing_tags=[])
+
+        for field in ("supported_python", "supported_os", "supported_codex", "forward_test_evidence"):
+            request = release_request()
+            request["release_notes"][field] = ""
+            with self.subTest(field=f"empty-{field}"), self.assertRaises(rs.ValidationError):
+                rs.validate_release_contract(request, existing_tags=[])
 
 
 class ActivationTests(unittest.TestCase):
@@ -4639,20 +4751,21 @@ class StaticSkillTests(unittest.TestCase):
         text = (REPO_ROOT / "AGENTS.md").read_text()
         self.assertIn("protected GitHub `release` environment", text)
         self.assertIn("explicit owner approval", text)
-        self.assertIn("`v<major>.<minor>.<patch>-rc.<positive-integer>`", text)
-        self.assertIn("`v<major>.<minor>.<patch>`", text)
+        self.assertIn("`^v(0|[1-9][0-9]*)", text)
+        self.assertIn("numeric components have no leading zeroes", text)
+        self.assertIn("`rc.N` is the only prerelease", text)
         self.assertIn("the first public candidate is `v0.1.0-rc.1`", text)
-        self.assertIn("later RC numbers increase consecutively", text)
-        self.assertIn("matching stable tag may follow only an approved RC", text)
+        self.assertIn("each later RC is exactly the next number", text)
+        self.assertIn("stable tag requires the latest approved RC", text)
 
     def test_agents_release_policy_requires_immutable_pinned_provenance(self):
         text = (REPO_ROOT / "AGENTS.md").read_text()
         for required in (
-            "full 40-character commit SHA reachable from protected `main`",
-            "required checks complete",
+            "non-reusable exact `(tag, full source SHA)` tuple",
+            "every required check bound to that SHA conclude `success`",
             "clean worktree",
             "floating ref",
-            "short SHA",
+            "short/non-hex SHA",
             "dirty source",
             "tag reuse",
             "overwrite",
