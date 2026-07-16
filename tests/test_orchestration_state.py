@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tempfile
 import threading
+import time
 import unittest
 from unittest import mock
 
@@ -58,10 +59,18 @@ CAPABILITY_PREFLIGHT = {
     "worker_profile_enforceable": True,
     "supervisor_profile_enforceable": True,
     "connector_read_adapter_receipts": True,
+    "connector_issue_read_receipts": True,
+    "connector_pr_read_receipts": True,
+    "connector_authorized_write_receipts": True,
+    "worker_continuation_receipts": True,
+    "child_archive_receipts": True,
+    "schedule_management_receipts": True,
+    "host_git_unattended_receipts": True,
 }
 
 
-def identity(*, base: str = "main", digest_root: str = "/repo/.git") -> rs.RepositoryIdentity:
+def identity(*, base: str = "main", digest_root: str | None = None) -> rs.RepositoryIdentity:
+    digest_root = digest_root or str(Path("/repo/.git").resolve())
     return rs.RepositoryIdentity(
         owner_name="owner/project",
         repository_id=123,
@@ -184,9 +193,7 @@ def release_policy_evidence(*, tag="v0.1.0-rc.1", entries=()):
             "protocol_version": rs.PROTOCOL_VERSION,
             "review_contract_version": rs.REVIEW_CONTRACT_VERSION,
             "policy_version": rs.POLICY_VERSION,
-            "supported_python": "3.11",
-            "supported_os": "macOS",
-            "supported_codex": "current",
+            **rs.CANONICAL_COMPATIBILITY,
             "license": "Apache-2.0",
             "forward_test_evidence": "fresh minimally primed thread passed",
         },
@@ -958,7 +965,17 @@ class ActivationTests(unittest.TestCase):
             rs.assert_repository_target(repo, "owner/project")
 
     def test_activation_blocks_when_service_cannot_prove_child_isolation(self):
-        for key in ("supervisor_profile_enforceable", "connector_read_adapter_receipts"):
+        for key in (
+            "supervisor_profile_enforceable",
+            "connector_read_adapter_receipts",
+            "connector_issue_read_receipts",
+            "connector_pr_read_receipts",
+            "connector_authorized_write_receipts",
+            "worker_continuation_receipts",
+            "child_archive_receipts",
+            "schedule_management_receipts",
+            "host_git_unattended_receipts",
+        ):
             with self.subTest(key=key):
                 unverifiable = {**CAPABILITY_PREFLIGHT, key: False}
                 with self.assertRaises(rs.ScopeError):
@@ -973,6 +990,16 @@ class ActivationTests(unittest.TestCase):
                         orchestrator_creation_receipt=role_receipt("orchestrator", "orchestrator-1"),
                         skill_root=SKILL_ROOT,
                     )
+
+    def test_activation_runtime_receipt_is_required_and_host_bound(self):
+        value = state()
+        value["activation"].pop("runtime_compatibility")
+        with self.assertRaisesRegex(rs.ScopeError, "runtime compatibility evidence"):
+            rs.validate_state(value)
+        value = state()
+        value["activation"]["runtime_compatibility"]["python"] = "3.11"
+        with self.assertRaisesRegex(rs.ScopeError, "runtime compatibility evidence"):
+            rs.validate_state(value)
 
     def test_activation_binds_verified_numeric_owner_actor(self):
         spoofed = {**OWNER_ACTOR, "verified_by_connector": False}
@@ -3668,7 +3695,7 @@ class MaintenanceTests(unittest.TestCase):
         downgrade_to_policy3(value)
         self.assertEqual(
             value["activation"]["scope_digest"],
-            "1abf4ccb59ac1e523fdc625e2d926f2271aa3a5a1dd5d7dc94d3820a9f79b4e7",
+        "9893b0c3a37e3ccdd6c436885e634db4211d6b0164f8741fc19149e4a3f42941",
         )
 
     def test_policy3_durable_migration_rebinds_new_digest_and_can_resume(self):
@@ -5172,7 +5199,7 @@ class ScriptedRunner(rs.CommandRunner):
         if args[:3] == ["git", "rev-parse", "--show-toplevel"]:
             return str(cwd) if str(cwd) == "/repo-worktrees/issue-11" else "/repo"
         if args[:3] == ["git", "rev-parse", "--git-common-dir"]:
-            return "/repo/.git"
+            return str(Path("/repo/.git").resolve())
         if args[:4] == ["git", "remote", "get-url", "--all"]:
             return "https://github.com/owner/project.git"
         if args[:5] == ["git", "remote", "get-url", "--push", "--all"]:
@@ -5671,9 +5698,15 @@ class RuntimeCompatibilityTests(unittest.TestCase):
         with mock.patch.object(rs, "msvcrt", backend):
             self.assertEqual(
                 rs.validate_runtime_compatibility(
-                    version=(3, 12), platform_identifier="win32", windows_build=22_000
+                    version=(3, 12), platform_identifier="win32", windows_build=22_000,
+                    windows_product_type=rs.WINDOWS_WORKSTATION_PRODUCT_TYPE,
                 ),
-                {"python": "3.12", "os": "Windows 11"},
+                {
+                    "python": "3.12",
+                    "os": "Windows 11",
+                    "windows_build": 22_000,
+                    "windows_product_type": rs.WINDOWS_WORKSTATION_PRODUCT_TYPE,
+                },
             )
 
     def test_runtime_contract_rejects_unsupported_python_platform_and_windows_build(self):
@@ -5685,15 +5718,24 @@ class RuntimeCompatibilityTests(unittest.TestCase):
         with mock.patch.object(rs, "msvcrt", object()):
             with self.assertRaisesRegex(rs.ScopeError, "Windows version"):
                 rs.validate_runtime_compatibility(
-                    version=(3, 12), platform_identifier="win32", windows_build=21_999
+                    version=(3, 12), platform_identifier="win32", windows_build=21_999,
+                    windows_product_type=rs.WINDOWS_WORKSTATION_PRODUCT_TYPE,
                 )
-        with self.assertRaisesRegex(rs.ScopeError, "Windows file locking"):
-            rs.validate_runtime_compatibility(
-                version=(3, 12), platform_identifier="win32", windows_build=22_000
-            )
+        with mock.patch.object(rs, "msvcrt", None):
+            with self.assertRaisesRegex(rs.ScopeError, "Windows file locking"):
+                rs.validate_runtime_compatibility(
+                    version=(3, 12), platform_identifier="win32", windows_build=22_000,
+                    windows_product_type=rs.WINDOWS_WORKSTATION_PRODUCT_TYPE,
+                )
+        with mock.patch.object(rs, "msvcrt", object()):
+            with self.assertRaisesRegex(rs.ScopeError, "product"):
+                rs.validate_runtime_compatibility(
+                    version=(3, 12), platform_identifier="win32", windows_build=22_000,
+                    windows_product_type=3,
+                )
 
     def test_windows_lock_backend_locks_and_unlocks_one_byte(self):
-        backend = mock.Mock(LK_LOCK=1, LK_UNLCK=2)
+        backend = mock.Mock(LK_NBLCK=1, LK_UNLCK=2)
         handle = mock.Mock()
         handle.fileno.return_value = 41
         with mock.patch.object(rs.sys, "platform", "win32"), mock.patch.object(rs, "msvcrt", backend):
@@ -5704,6 +5746,52 @@ class RuntimeCompatibilityTests(unittest.TestCase):
             backend.locking.call_args_list,
             [mock.call(41, 1, 1), mock.call(41, 2, 1)],
         )
+
+    def test_windows_lock_contention_fails_closed_with_a_bounded_diagnostic(self):
+        backend = mock.Mock(LK_NBLCK=1)
+        backend.locking.side_effect = OSError("held")
+        handle = mock.Mock()
+        handle.fileno.return_value = 41
+        with (
+            mock.patch.object(rs.sys, "platform", "win32"),
+            mock.patch.object(rs, "msvcrt", backend),
+            mock.patch.object(rs.time, "monotonic", side_effect=(0.0, rs.WINDOWS_LOCK_TIMEOUT_SECONDS)),
+            mock.patch.object(rs.time, "sleep"),
+        ):
+            with self.assertRaisesRegex(rs.ScopeError, "timed out"):
+                rs._acquire_single_writer_lock(handle)
+
+    @unittest.skipUnless(sys.platform == "win32", "requires the real Windows msvcrt lock backend")
+    def test_windows_two_process_lock_contention_times_out_after_ten_seconds(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            lock_path = Path(temporary) / ".single-writer.lock"
+            holder = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import msvcrt, pathlib, sys, time; "
+                        "p=pathlib.Path(sys.argv[1]); "
+                        "f=p.open('a+b'); f.seek(0, 2); "
+                        "(f.write(b'\\0'), f.flush()) if f.tell() == 0 else None; "
+                        "f.seek(0); msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1); "
+                        "print('locked', flush=True); time.sleep(17)"
+                    ),
+                    str(lock_path),
+                ],
+                stdout=subprocess.PIPE,
+                text=True,
+            )
+            try:
+                self.assertEqual(holder.stdout.readline().strip(), "locked")
+                started = time.monotonic()
+                with self.assertRaisesRegex(rs.ScopeError, "timed out"):
+                    with rs.StateStore(temporary).single_writer():
+                        self.fail("contended lock must not be acquired")
+                self.assertGreaterEqual(time.monotonic() - started, 10.0)
+            finally:
+                holder.terminate()
+                holder.wait(timeout=5)
 
     def test_posix_lock_backend_and_cross_platform_atomic_write_remain_available(self):
         backend = mock.Mock(LOCK_EX=1, LOCK_UN=2)
@@ -5792,7 +5880,10 @@ class StaticSkillTests(unittest.TestCase):
         root_license = (REPO_ROOT / "LICENSE").read_bytes()
         payload_license = (SKILL_ROOT / "LICENSE").read_bytes()
         self.assertEqual(payload_license, root_license)
-        self.assertEqual(hashlib.sha256(root_license).hexdigest(), APACHE_2_LICENSE_SHA256)
+        self.assertEqual(
+            hashlib.sha256(root_license.replace(b"\r\n", b"\n")).hexdigest(),
+            APACHE_2_LICENSE_SHA256,
+        )
 
     def test_skill_only_install_contains_the_license(self):
         with tempfile.TemporaryDirectory() as temporary:

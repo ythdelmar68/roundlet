@@ -31,6 +31,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 from urllib.parse import urlparse
 
@@ -100,6 +101,15 @@ POLICY3_ROLE_MODEL_SNAPSHOT_DIGEST = "be1680d41063b90e22fef16e5a207fa6aea5900462
 SUPPORTED_PYTHON_MINORS = ((3, 12), (3, 13), (3, 14))
 SUPPORTED_PLATFORM_IDENTIFIERS = ("darwin", "win32")
 WINDOWS_11_MINIMUM_BUILD = 22_000
+WINDOWS_11_MAXIMUM_BUILD = 26_100
+WINDOWS_WORKSTATION_PRODUCT_TYPE = 1
+WINDOWS_LOCK_TIMEOUT_SECONDS = 15.0
+WINDOWS_LOCK_RETRY_SECONDS = 0.1
+CANONICAL_COMPATIBILITY = {
+    "supported_python": "3.12-3.14",
+    "supported_os": "macOS; Windows 11",
+    "supported_codex": "capability-based App/service contract; CLI pinned by #22",
+}
 
 SCHEMA_VERSION = 12
 PROTOCOL_VERSION = "3"
@@ -279,7 +289,8 @@ def validate_runtime_compatibility(
     version: tuple[int, int] | None = None,
     platform_identifier: str | None = None,
     windows_build: int | None = None,
-) -> dict[str, str]:
+    windows_product_type: int | None = None,
+) -> dict[str, Any]:
     """Fail closed unless this host matches the published runtime contract.
 
     The caller supplies no capability receipt here: Python and OS identity are
@@ -302,10 +313,27 @@ def validate_runtime_compatibility(
         get_windows_version = getattr(sys, "getwindowsversion", None)
         if get_windows_version is None:
             raise ScopeError("Windows version evidence is unavailable")
-        windows_build = get_windows_version().build
-    if type(windows_build) is not int or windows_build < WINDOWS_11_MINIMUM_BUILD:
-        raise ScopeError("unsupported Windows version; Roundlet supports Windows 11 or later")
-    return {"python": f"{resolved_version[0]}.{resolved_version[1]}", "os": "Windows 11"}
+        windows = get_windows_version()
+        windows_build = windows.build
+        windows_product_type = windows.product_type
+    if windows_product_type != WINDOWS_WORKSTATION_PRODUCT_TYPE:
+        raise ScopeError("unsupported Windows product; Roundlet supports Windows 11 workstations only")
+    if type(windows_build) is not int or not WINDOWS_11_MINIMUM_BUILD <= windows_build <= WINDOWS_11_MAXIMUM_BUILD:
+        raise ScopeError("unsupported Windows version; Roundlet supports the reviewed Windows 11 build range only")
+    return {
+        "python": f"{resolved_version[0]}.{resolved_version[1]}",
+        "os": "Windows 11",
+        "windows_build": windows_build,
+        "windows_product_type": windows_product_type,
+    }
+
+
+def validate_runtime_receipt(receipt: Any) -> dict[str, Any]:
+    """Bind persisted activation evidence to the current supported host."""
+    expected = validate_runtime_compatibility()
+    if not isinstance(receipt, Mapping) or dict(receipt) != expected:
+        raise ScopeError("activation runtime compatibility evidence is missing, stale, or mismatched")
+    return expected
 
 
 def parse_utc_timestamp(value: Any, label: str) -> datetime:
@@ -500,11 +528,18 @@ def validate_capability_preflight(preflight: Mapping[str, Any]) -> dict[str, Any
         "worker_profile_enforceable": True,
         "supervisor_profile_enforceable": True,
         "connector_read_adapter_receipts": True,
+        "connector_issue_read_receipts": True,
+        "connector_pr_read_receipts": True,
+        "connector_authorized_write_receipts": True,
+        "worker_continuation_receipts": True,
+        "child_archive_receipts": True,
+        "schedule_management_receipts": True,
+        "host_git_unattended_receipts": True,
     }
     if not isinstance(preflight, Mapping) or set(preflight) != set(required):
         raise ValidationError("capability preflight must contain the exact isolation proof fields")
     if any(preflight.get(key) is not expected for key, expected in required.items()):
-        raise ScopeError("installed Codex surface cannot prove Worker/Supervisor isolation")
+        raise ScopeError("installed Codex/GitHub/Git surface cannot prove the required activation capabilities")
     return dict(required)
 
 
@@ -854,6 +889,7 @@ def compute_scope_digest(
     review_policy_snapshot: Mapping[str, Any] | None = None,
     review_policy_snapshot_digest: str | None = None,
     legacy_unbounded_review: bool = False,
+    runtime_compatibility: Mapping[str, Any] | None = None,
     protocol_version: str = PROTOCOL_VERSION,
     policy_version: str = POLICY_VERSION,
 ) -> str:
@@ -883,6 +919,9 @@ def compute_scope_digest(
         "allowed_operations": {key: bool(allowed_operations[key]) for key in ALLOWED_OPERATION_KEYS},
         "owner_actor": validate_owner_actor(owner_actor),
         "capability_preflight": validate_capability_preflight(capability_preflight),
+        "runtime_compatibility": validate_runtime_receipt(
+            validate_runtime_compatibility() if runtime_compatibility is None else runtime_compatibility
+        ),
         "orchestrator_creation_receipt_digest": digest_json(orchestrator_creation_receipt),
         "role_model_snapshot_digest": role_model_snapshot_digest,
         "review_policy_snapshot_digest": None if review_policy is None else review_policy_snapshot_digest,
@@ -1091,6 +1130,7 @@ def new_state(
     timestamp = now or utc_now()
     normalized_owner = validate_owner_actor(owner_actor)
     normalized_preflight = validate_capability_preflight(capability_preflight)
+    runtime_compatibility = validate_runtime_compatibility()
     orchestrator_receipt = validate_role_creation_receipt(
         orchestrator_creation_receipt,
         role="orchestrator",
@@ -1118,6 +1158,7 @@ def new_state(
         review_policy_snapshot=config["defaults"]["review"],
         review_policy_snapshot_digest=digest_json(config["defaults"]["review"]),
         legacy_unbounded_review=False,
+        runtime_compatibility=runtime_compatibility,
     )
     state = {
         "skill": {
@@ -1137,6 +1178,7 @@ def new_state(
             "orchestrator_creation_receipt": orchestrator_receipt,
             "owner_actor": normalized_owner,
             "capability_preflight": normalized_preflight,
+            "runtime_compatibility": runtime_compatibility,
             "role_model_snapshot": role_snapshot,
             "role_model_snapshot_digest": snapshot_digest,
             "review_policy_snapshot": config["defaults"]["review"],
@@ -1225,6 +1267,7 @@ def validate_state(state: Mapping[str, Any]) -> None:
     normalize_owner_name(str(repository.get("owner_name", "")))
     owner_actor = validate_owner_actor(activation.get("owner_actor", {}))
     capability_preflight = validate_capability_preflight(activation.get("capability_preflight", {}))
+    runtime_compatibility = validate_runtime_receipt(activation.get("runtime_compatibility"))
     role_snapshot = _validate_role_model_snapshot(activation.get("role_model_snapshot", {}))
     snapshot_digest = activation.get("role_model_snapshot_digest")
     if snapshot_digest != digest_json(role_snapshot):
@@ -1350,6 +1393,7 @@ def validate_state(state: Mapping[str, Any]) -> None:
             review_policy_snapshot=review_policy,
             review_policy_snapshot_digest=activation.get("review_policy_snapshot_digest"),
             legacy_unbounded_review=legacy_unbounded_review,
+            runtime_compatibility=runtime_compatibility,
             protocol_version=str(versions.get("protocol")),
             policy_version=str(versions.get("policy")),
         )
@@ -1862,10 +1906,17 @@ def _acquire_single_writer_lock(handle: Any) -> None:
     if sys.platform == "win32":
         if msvcrt is None:
             raise ScopeError("Windows file locking is unavailable")
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-        return
-    if os.name == "posix":
+        deadline = time.monotonic() + WINDOWS_LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError as exc:
+                if time.monotonic() >= deadline:
+                    raise ScopeError("single-writer lock acquisition timed out; another process still owns it") from exc
+                time.sleep(WINDOWS_LOCK_RETRY_SECONDS)
+    if sys.platform != "win32":
         if fcntl is None:
             raise ScopeError("macOS file locking is unavailable")
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
@@ -1881,7 +1932,7 @@ def _release_single_writer_lock(handle: Any) -> None:
         handle.seek(0)
         msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
         return
-    if os.name == "posix":
+    if sys.platform != "win32":
         if fcntl is None:
             raise ScopeError("macOS file locking is unavailable")
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
@@ -5903,8 +5954,10 @@ def validate_release_policy_assertions(
     expected_notes = {"state_schema_version": str(SCHEMA_VERSION), "protocol_version": PROTOCOL_VERSION, "review_contract_version": REVIEW_CONTRACT_VERSION, "policy_version": POLICY_VERSION}
     if any(notes.get(key) != value for key, value in expected_notes.items()):
         raise ScopeError("release notes compatibility versions do not match the exact source")
-    for field in ("supported_python", "supported_os", "supported_codex", "forward_test_evidence"):
-        _require_release_note_text(notes, field)
+    for field, expected in CANONICAL_COMPATIBILITY.items():
+        if notes.get(field) != expected:
+            raise ScopeError("release notes compatibility contract does not match the canonical contract")
+    _require_release_note_text(notes, "forward_test_evidence")
 
 
 def _validate_release_policy_history(history: Any, tag: str, sha: str, approval_id: str, approved_rc_tag: Any) -> None:
