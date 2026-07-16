@@ -35,7 +35,7 @@ STATE_DIRECTORY = Path(".codex-log/roundlet")
 STATE_FILENAME = "state.json"
 LEGACY_REVIEW_AUTHORITY_FILENAME = ".legacy-review-authority.json"
 SUPERVISOR_ARCHIVE_AUTHORITY_FILENAME = ".supervisor-archive-authority.json"
-SUPERVISOR_ARCHIVE_AUTHORITY_SCHEMA = 1
+SUPERVISOR_ARCHIVE_AUTHORITY_SCHEMA = 2
 SUPERVISOR_ARCHIVE_TRANSACTION_FILENAME = ".supervisor-archive-transaction.json"
 SUPERVISOR_ARCHIVE_TRANSACTION_SCHEMA = 1
 SUMMARY_FILENAME = "last-scope-summary.json"
@@ -1820,12 +1820,16 @@ def _archive_authority_core(
     activation_id: str,
     anchor_digest: str,
     entries: Sequence[Mapping[str, Any]],
+    pending_completion: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "schema_version": SUPERVISOR_ARCHIVE_AUTHORITY_SCHEMA,
         "activation_id": activation_id,
         "anchor_digest": anchor_digest,
         "entries": copy.deepcopy(list(entries)),
+        "pending_completion": (
+            None if pending_completion is None else copy.deepcopy(dict(pending_completion))
+        ),
     }
 
 
@@ -1851,15 +1855,95 @@ def _archive_authority_from_state(state: Mapping[str, Any]) -> dict[str, Any]:
     return {**core, "authority_digest": digest_json(core)}
 
 
+def _pending_supervisor_completion(state: Mapping[str, Any]) -> dict[str, Any] | None:
+    """Return the sole accepted-but-unarchived result, if one is present."""
+    task = state.get("task")
+    review = state.get("review")
+    if not isinstance(task, Mapping) or not isinstance(review, Mapping):
+        return None
+    unarchived = review.get("unarchived_supervisor_thread_ids")
+    results = review.get("completed_supervisor_results")
+    generation = review.get("round")
+    candidate_sha = task.get("candidate_sha")
+    if (
+        not isinstance(unarchived, list)
+        or len(unarchived) != 1
+        or not isinstance(results, list)
+        or type(generation) is not int
+        or not isinstance(candidate_sha, str)
+    ):
+        return None
+    matching = [
+        completion
+        for completion in results
+        if isinstance(completion, Mapping)
+        and completion.get("thread_id") == unarchived[0]
+        and completion.get("generation") == generation
+    ]
+    if len(matching) != 1:
+        return None
+    result = matching[0].get("result")
+    if result not in {"PASS", "FINDINGS"}:
+        return None
+    return {
+        "thread_id": unarchived[0],
+        "generation": generation,
+        "candidate_sha": candidate_sha,
+        "result": result,
+    }
+
+
+def _validate_pending_supervisor_completion(
+    pending_completion: Any,
+) -> dict[str, Any] | None:
+    if pending_completion is None:
+        return None
+    if not isinstance(pending_completion, Mapping) or set(pending_completion) != {
+        "thread_id", "generation", "candidate_sha", "result"
+    }:
+        raise ScopeError("Supervisor archive pending completion is malformed")
+    if (
+        not isinstance(pending_completion.get("thread_id"), str)
+        or not pending_completion["thread_id"]
+        or type(pending_completion.get("generation")) is not int
+        or pending_completion["generation"] < 1
+        or not isinstance(pending_completion.get("candidate_sha"), str)
+        or not FULL_SHA.fullmatch(pending_completion["candidate_sha"])
+        or pending_completion.get("result") not in {"PASS", "FINDINGS"}
+    ):
+        raise ScopeError("Supervisor archive pending completion is invalid")
+    return copy.deepcopy(dict(pending_completion))
+
+
+def _authority_with_pending_completion(
+    authority: Mapping[str, Any], pending_completion: Mapping[str, Any]
+) -> dict[str, Any]:
+    normalized = _validate_supervisor_archive_authority(authority)
+    if normalized.get("pending_completion") is not None:
+        raise ScopeError("Supervisor archive authority already has a pending completion")
+    pending = _validate_pending_supervisor_completion(pending_completion)
+    core = _archive_authority_core(
+        normalized["activation_id"], normalized["anchor_digest"], normalized["entries"], pending
+    )
+    return {**core, "authority_digest": digest_json(core)}
+
+
 def _validate_supervisor_archive_authority(authority: Mapping[str, Any]) -> dict[str, Any]:
-    required = {"schema_version", "activation_id", "anchor_digest", "entries", "authority_digest"}
-    if not isinstance(authority, Mapping) or set(authority) != required:
+    required = {
+        "schema_version", "activation_id", "anchor_digest", "entries", "pending_completion",
+        "authority_digest",
+    }
+    legacy_required = required - {"pending_completion"}
+    if (
+        not isinstance(authority, Mapping)
+        or (set(authority) != required and set(authority) != legacy_required)
+    ):
         raise ScopeError("Supervisor archive authority receipt is malformed")
     activation_id = authority.get("activation_id")
     anchor_digest = authority.get("anchor_digest")
     entries = authority.get("entries")
     if (
-        authority.get("schema_version") != SUPERVISOR_ARCHIVE_AUTHORITY_SCHEMA
+        authority.get("schema_version") not in {1, SUPERVISOR_ARCHIVE_AUTHORITY_SCHEMA}
         or not isinstance(activation_id, str)
         or not activation_id
         or not CONTENT_DIGEST.fullmatch(str(anchor_digest))
@@ -1867,7 +1951,15 @@ def _validate_supervisor_archive_authority(authority: Mapping[str, Any]) -> dict
         or len(entries) > 64
     ):
         raise ScopeError("Supervisor archive authority receipt is invalid")
-    core = _archive_authority_core(activation_id, str(anchor_digest), entries)
+    pending = _validate_pending_supervisor_completion(authority.get("pending_completion"))
+    if authority.get("schema_version") == 1 and pending is not None:
+        raise ScopeError("legacy Supervisor archive authority has a pending completion")
+    core = _archive_authority_core(
+        activation_id, str(anchor_digest), entries, pending
+    )
+    if authority.get("schema_version") == 1:
+        core.pop("pending_completion")
+        core["schema_version"] = 1
     if authority.get("authority_digest") != digest_json(core):
         raise ScopeError("Supervisor archive authority receipt digest is stale")
     previous = str(anchor_digest)
@@ -1902,18 +1994,27 @@ def _validate_loaded_supervisor_archive_authority(state: Mapping[str, Any]) -> N
     )
     if expected_digest != review.get("archived_supervisor_digest"):
         raise ScopeError("Supervisor archive authority differs from the archive commitment")
+    if normalized.get("pending_completion") != _pending_supervisor_completion(state):
+        raise ScopeError("Supervisor archive authority lacks the accepted result commitment")
 
 
 def _advance_supervisor_archive_authority(
-    state: Mapping[str, Any], authority: Mapping[str, Any],
+    state: Mapping[str, Any], authority: Mapping[str, Any], *, candidate: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Allow only a bounded append (or bounded head compaction) to authority."""
     normalized = _validate_supervisor_archive_authority(authority)
-    candidate = _archive_authority_from_state(state)
+    candidate = (
+        _archive_authority_from_state(state)
+        if candidate is None
+        else _validate_supervisor_archive_authority(candidate)
+    )
     if candidate["activation_id"] != normalized["activation_id"]:
         raise ScopeError("Supervisor archive authority belongs to another activation")
     old_entries = normalized["entries"]
     new_entries = candidate["entries"]
+    old_pending = normalized.get("pending_completion")
+    new_pending = candidate.get("pending_completion")
+    compacted = False
     if not old_entries:
         # No outcome was previously committed to external authority.  The
         # first durable save may contain a bounded in-memory batch.
@@ -1926,10 +2027,43 @@ def _advance_supervisor_archive_authority(
         and new_entries[:-1] == old_entries[1:]
     ):
         candidate["anchor_digest"] = old_entries[0]["archive_digest"]
+        compacted = True
+    elif (
+        len(old_entries) == 64
+        and len(new_entries) == 63
+        and new_entries == old_entries[1:]
+    ):
+        candidate["anchor_digest"] = old_entries[0]["archive_digest"]
+        compacted = True
     else:
         raise ScopeError("Supervisor archive authority history cannot be rewritten")
+    if old_entries == new_entries:
+        if old_pending == new_pending:
+            pass
+        elif old_pending is None and new_pending is not None:
+            pass
+        else:
+            raise ScopeError("Supervisor archive pending completion cannot be rewritten")
+    else:
+        if new_pending is not None and not (compacted and old_pending is None):
+            raise ScopeError("Supervisor archive append cannot retain a pending completion")
+        if compacted and len(new_entries) == 63:
+            appended = None
+        else:
+            appended = new_entries[-1]
+        if appended is None:
+            pass
+        elif appended.get("outcome") == "COMPLETED":
+            if (
+                old_pending is None
+                or old_pending.get("thread_id") != appended.get("thread_id")
+                or old_pending.get("generation") != appended.get("generation")
+            ):
+                raise ScopeError("completed archive outcome lacks an accepted result commitment")
+        elif old_pending is not None:
+            raise ScopeError("discarded archive outcome cannot consume a pending completion")
     core = _archive_authority_core(
-        candidate["activation_id"], candidate["anchor_digest"], candidate["entries"]
+        candidate["activation_id"], candidate["anchor_digest"], candidate["entries"], new_pending
     )
     return {**core, "authority_digest": digest_json(core)}
 
@@ -2071,6 +2205,14 @@ class StateStore:
 
     def _next_supervisor_archive_authority(self, state: Mapping[str, Any]) -> dict[str, Any]:
         existing = self._read_supervisor_archive_authority(state)
+        candidate = getattr(state, "supervisor_archive_authority", None)
+        if candidate is not None:
+            _validate_loaded_supervisor_archive_authority(state)
+            if existing is None:
+                raise ScopeError("Supervisor archive completion commitment lacks durable authority")
+            return _advance_supervisor_archive_authority(state, existing, candidate=candidate)
+        if _pending_supervisor_completion(state) is not None:
+            raise ScopeError("accepted Supervisor result lacks an external archive commitment")
         candidate = _archive_authority_from_state(state)
         if existing is None:
             if candidate["entries"]:
@@ -2135,11 +2277,20 @@ class StateStore:
 
     def _save(self, state: Mapping[str, Any], *, initialize_authority: bool = False) -> None:
         validate_state(state)
+        archive_authority = getattr(state, "supervisor_archive_authority", None)
         mutable = copy.deepcopy(dict(state))
         mutable.setdefault("timestamps", {})["updated_at"] = utc_now()
         if state.get("activation", {}).get("legacy_unbounded_review") is True:
             authority = getattr(state, "legacy_review_authority", None)
-            mutable = _MigrationAuthorizedState(mutable, legacy_review_authority=authority)
+            mutable = _MigrationAuthorizedState(
+                mutable,
+                legacy_review_authority=authority,
+                supervisor_archive_authority=archive_authority,
+            )
+        elif archive_authority is not None:
+            mutable = _MigrationAuthorizedState(
+                mutable, supervisor_archive_authority=archive_authority
+            )
         validate_state(mutable)
         archive_authority = (
             _archive_authority_from_state(mutable)
@@ -2749,14 +2900,36 @@ def begin_supervisor(
         if created_time <= previous_time:
             raise ValidationError("Supervisor creation receipt is not newer than the previous fresh task")
     review["supervisor_thread_ids"].append(thread_id)
+    compacted_history = False
     if len(review["supervisor_thread_ids"]) > 64:
         review["supervisor_thread_ids"] = review["supervisor_thread_ids"][-64:]
+        compacted_history = True
     review["supervisor_creation_receipts"].append(service_receipt)
     if len(review["supervisor_creation_receipts"]) > 64:
         review["supervisor_creation_receipts"] = review["supervisor_creation_receipts"][-64:]
     review["unarchived_supervisor_thread_ids"].append(thread_id)
     review["current_supervisor_thread_id"] = thread_id
     review["round"] += 1
+    if compacted_history:
+        minimum_generation = review["round"] - 64 + 1
+        archived_outcomes = review.get("archived_supervisor_outcomes")
+        if isinstance(archived_outcomes, list):
+            review["archived_supervisor_outcomes"] = [
+                outcome
+                for outcome in archived_outcomes
+                if isinstance(outcome, Mapping)
+                and outcome.get("generation") >= minimum_generation
+            ]
+            review["archived_supervisor_outcome_digest"] = fold_archive_digest(
+                "0" * 64, review["archived_supervisor_outcomes"]
+            )
+        prior_archive_authority = getattr(state, "supervisor_archive_authority", None)
+        if prior_archive_authority is not None:
+            setattr(
+                state,
+                "supervisor_archive_authority",
+                _advance_supervisor_archive_authority(state, prior_archive_authority),
+            )
     review["last_supervisor_created_at"] = created_at
     task["active_role"] = "supervisor"
     desired = "final-supervisor" if final else "supervisor-running"
@@ -2818,6 +2991,16 @@ def accept_supervisor_result(
         "0" * 64,
         review["completed_supervisor_results"],
     )
+    prior_archive_authority = getattr(state, "supervisor_archive_authority", None)
+    if prior_archive_authority is not None:
+        pending_completion = _pending_supervisor_completion(state)
+        if pending_completion is None:
+            raise ValidationError("accepted Supervisor result lacks a pending completion receipt")
+        setattr(
+            state,
+            "supervisor_archive_authority",
+            _authority_with_pending_completion(prior_archive_authority, pending_completion),
+        )
     was_final = state["phase"] == "final-supervisor"
     if result == "FINDINGS":
         review["pass_identity"] = None

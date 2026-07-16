@@ -1420,6 +1420,7 @@ class StateMachineTests(unittest.TestCase):
                 state_store=store,
                 create_task=create,
             )
+            fresh = store.load()
             rs.accept_supervisor_result(
                 fresh,
                 thread_id="supervisor-guidance-4",
@@ -1427,6 +1428,8 @@ class StateMachineTests(unittest.TestCase):
                 result="FINDINGS",
                 non_blocking_items=["finding-4"],
             )
+            store.save(fresh)
+            fresh = store.load()
             rs.record_supervisor_archived(fresh, supervisor_thread_id="supervisor-guidance-4")
             rs.set_candidate(fresh, SHA_B, clean=True)
             record_ready(fresh)
@@ -1579,23 +1582,27 @@ class StateMachineTests(unittest.TestCase):
             )
             rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
             rs.set_candidate(value, SHA_B, clean=True)
-        begin_review(value, "supervisor-boundary-3")
-        rs.accept_supervisor_result(
-            value,
-            thread_id="supervisor-boundary-3",
-            candidate_sha=SHA_B,
-            result="FINDINGS",
-            non_blocking_items=["finding-3"],
-        )
         with tempfile.TemporaryDirectory() as temporary:
             store = rs.StateStore(temporary)
             store.initialize(value)
+            value = store.load()
+            begin_review(value, "supervisor-boundary-3")
+            store.save(value)
+            value = store.load()
+            rs.accept_supervisor_result(
+                value,
+                thread_id="supervisor-boundary-3",
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=["finding-3"],
+            )
+            store.save(value)
             tampered = store.load()
             tampered["review"]["unarchived_supervisor_thread_ids"] = ["supervisor-boundary-1"]
             rs.atomic_write_json(store.path, tampered)
             with self.assertRaisesRegex(rs.ValidationError, "unarchived Supervisor is not the latest"):
                 store.load()
-            with self.assertRaisesRegex(rs.ScopeError, "does not match an unarchived review thread"):
+            with self.assertRaisesRegex(rs.ScopeError, "accepted result commitment"):
                 rs.record_supervisor_archived(tampered, supervisor_thread_id="supervisor-boundary-1")
             with self.assertRaisesRegex(rs.ValidationError, "unarchived Supervisor is not the latest"):
                 rs.preflight_supervisor_creation(tampered)
@@ -1792,6 +1799,66 @@ class StateMachineTests(unittest.TestCase):
                 store.load()
             with self.assertRaisesRegex(rs.ScopeError, "archive authority"):
                 rs.preflight_supervisor_creation(tampered)
+
+    def test_uncommitted_supervisor_result_cannot_be_archived_or_saved(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            durable = store.load()
+            begin_review(durable, "supervisor-pending-commitment")
+            store.save(durable)
+
+            forged = store.load()
+            review = forged["review"]
+            review["current_supervisor_thread_id"] = None
+            review["last_result"] = "FINDINGS"
+            review["completed_supervisor_count"] = 1
+            review["completed_supervisor_results"] = [
+                {
+                    "thread_id": "supervisor-pending-commitment",
+                    "generation": 1,
+                    "result": "FINDINGS",
+                }
+            ]
+            review["completed_supervisor_digest"] = rs.fold_archive_digest(
+                "0" * 64, review["completed_supervisor_results"]
+            )
+            forged["task"]["active_role"] = None
+            rs.transition_state(forged, "worker-repair")
+            with self.assertRaisesRegex(rs.ScopeError, "accepted result commitment"):
+                rs.record_supervisor_archived(
+                    forged, supervisor_thread_id="supervisor-pending-commitment"
+                )
+            with self.assertRaisesRegex(rs.ScopeError, "accepted result commitment"):
+                store.save(forged)
+            with self.assertRaisesRegex(rs.ScopeError, "accepted result commitment"):
+                rs.preflight_supervisor_creation(forged)
+
+            accepted = store.load()
+            rs.accept_supervisor_result(
+                accepted,
+                thread_id="supervisor-pending-commitment",
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=["normal accepted result"],
+            )
+            store.save(accepted)
+            committed = store.load()
+            self.assertIsNotNone(
+                committed.supervisor_archive_authority["pending_completion"]
+            )
+            rs.record_supervisor_archived(
+                committed, supervisor_thread_id="supervisor-pending-commitment"
+            )
+            store.save(committed)
+            archived = store.load()
+            self.assertEqual(
+                archived["review"]["archived_supervisor_outcomes"][-1]["outcome"], "COMPLETED"
+            )
+            self.assertIsNone(archived.supervisor_archive_authority["pending_completion"])
 
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
@@ -2094,6 +2161,7 @@ class StateMachineTests(unittest.TestCase):
                 expected_from_schema=5,
                 skill_root=SKILL_ROOT,
             )
+            value = store.load()
             rs.resume_maintenance(
                 value,
                 checkpoint_id="checkpoint-001",
@@ -2112,8 +2180,12 @@ class StateMachineTests(unittest.TestCase):
                     result="FINDINGS",
                     non_blocking_items=[f"finding-{review_round}"],
                 )
+                store.save(value)
+                value = store.load()
                 rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
                 rs.set_candidate(value, SHA_B, clean=True)
+                store.save(value)
+                value = store.load()
             store.save(value)
             value = store.load()
             rs.validate_state(value)
@@ -4004,6 +4076,18 @@ class PersistenceAndMailboxTests(unittest.TestCase):
             store.initialize(state())
             self.assertEqual(store.load()["activation"]["id"], "activation-0001")
 
+    def test_schema_one_archive_authority_loads_without_pending_completion(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(state())
+            authority = rs.read_json(store.supervisor_archive_authority_path)
+            authority.pop("pending_completion")
+            authority["schema_version"] = 1
+            core = {key: value for key, value in authority.items() if key != "authority_digest"}
+            authority["authority_digest"] = rs.digest_json(core)
+            rs.atomic_write_json(store.supervisor_archive_authority_path, authority)
+            self.assertEqual(store.load()["activation"]["id"], "activation-0001")
+
     def test_archive_authority_partial_write_recovers_to_consistent_prior_state(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
@@ -4020,6 +4104,8 @@ class PersistenceAndMailboxTests(unittest.TestCase):
                 result="FINDINGS",
                 non_blocking_items=["repair required"],
             )
+            store.save(durable)
+            durable = store.load()
             rs.record_supervisor_archived(
                 durable, supervisor_thread_id="supervisor-archive-transaction"
             )
@@ -4036,10 +4122,12 @@ class PersistenceAndMailboxTests(unittest.TestCase):
             self.assertTrue(store.supervisor_archive_transaction_path.exists())
             recovered = store.load()
             self.assertFalse(store.supervisor_archive_transaction_path.exists())
-            self.assertEqual(recovered["review"]["round"], 0)
+            self.assertEqual(recovered["review"]["round"], 1)
             self.assertEqual(recovered["review"]["archived_supervisor_count"], 0)
             self.assertEqual(recovered["review"]["archived_supervisor_outcomes"], [])
-            rs.preflight_supervisor_creation(recovered)
+            self.assertEqual(recovered["review"]["completed_supervisor_count"], 1)
+            self.assertIsNotNone(recovered.supervisor_archive_authority["pending_completion"])
+            rs.validate_state(recovered)
 
     def test_oversized_state_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
