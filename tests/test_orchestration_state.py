@@ -4626,6 +4626,60 @@ class StaticSkillTests(unittest.TestCase):
         self.assertIn("`skills/roundlet` as the canonical skill source root", text)
         self.assertIn("`skill-creator/scripts/quick_validate.py` against `skills/roundlet`", text)
 
+    def test_agents_release_policy_keeps_ordinary_work_prohibitions(self):
+        text = (REPO_ROOT / "AGENTS.md").read_text()
+        self.assertIn(
+            "Never force-push, reset, rebase, bypass branch protection, publish releases, create tags",
+            text,
+        )
+        self.assertIn("updating this policy", text)
+        self.assertIn("does not authorize a tag, GitHub Release, artifact, or publication", text)
+
+    def test_agents_release_policy_defines_owner_gated_semver_progression(self):
+        text = (REPO_ROOT / "AGENTS.md").read_text()
+        self.assertIn("protected GitHub `release` environment", text)
+        self.assertIn("explicit owner approval", text)
+        self.assertIn("`v<major>.<minor>.<patch>-rc.<positive-integer>`", text)
+        self.assertIn("`v<major>.<minor>.<patch>`", text)
+        self.assertIn("the first public candidate is `v0.1.0-rc.1`", text)
+        self.assertIn("later RC numbers increase consecutively", text)
+        self.assertIn("matching stable tag may follow only an approved RC", text)
+
+    def test_agents_release_policy_requires_immutable_pinned_provenance(self):
+        text = (REPO_ROOT / "AGENTS.md").read_text()
+        for required in (
+            "full 40-character commit SHA reachable from protected `main`",
+            "required checks complete",
+            "clean worktree",
+            "floating ref",
+            "short SHA",
+            "dirty source",
+            "tag reuse",
+            "overwrite",
+            "movement",
+            "force update",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, text)
+
+    def test_agents_release_policy_requires_complete_notes_without_skill_metadata_version(self):
+        agents = (REPO_ROOT / "AGENTS.md").read_text()
+        for required in (
+            "tag, full source SHA, installed skill digest, state schema version, protocol version",
+            "review-contract version, policy version, supported Python/OS/Codex contract",
+            "Apache-2.0 license, and forward-test evidence",
+            "not package release versions",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, agents)
+
+        skill = (SKILL_ROOT / "SKILL.md").read_text()
+        frontmatter = rs.re.match(r"^---\n(.*?)\n---", skill, rs.re.DOTALL).group(1)
+        self.assertNotRegex(frontmatter, r"(?m)^version:")
+        self.assertNotRegex(
+            (SKILL_ROOT / "agents/openai.yaml").read_text(), r"(?m)^\s*version:"
+        )
+
     def test_runtime_has_no_prohibited_dependency_markers(self):
         text = (SKILL_ROOT / "scripts/orchestration_state.py").read_text().casefold()
         for marker in (

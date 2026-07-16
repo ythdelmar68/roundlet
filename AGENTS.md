@@ -6,6 +6,14 @@
 - Preserve unrelated changes and worktrees. Develop changes in an isolated worktree and merge them only through a reviewed pull request with explicit owner approval.
 - Never force-push, reset, rebase, bypass branch protection, publish releases, create tags, or delete unique work while performing ordinary repository work.
 
+## Explicit release operations
+
+- A release is an exceptional, owner-authorized operation; updating this policy, merging an ordinary pull request, or passing checks does not authorize a tag, GitHub Release, artifact, or publication.
+- Only a protected GitHub `release` environment with an explicit owner approval may authorize one exact release target. The target must be a full 40-character commit SHA reachable from protected `main`, with required checks complete and a clean worktree; never release from a floating ref, short SHA, dirty source, fork, or unreviewed branch.
+- Release tags are exactly `v<major>.<minor>.<patch>-rc.<positive-integer>` or `v<major>.<minor>.<patch>`. Each new release line begins with an RC (the first public candidate is `v0.1.0-rc.1`), later RC numbers increase consecutively, and the matching stable tag may follow only an approved RC.
+- Tags are immutable: reject tag reuse, overwrite, movement, deletion-and-recreation, and force update. Do not create a GitHub Release, release artifact, package publication, or other release output outside the explicitly approved operation.
+- Release notes must record the tag, full source SHA, installed skill digest, state schema version, protocol version, review-contract version, policy version, supported Python/OS/Codex contract, Apache-2.0 license, and forward-test evidence. These compatibility versions are not package release versions.
+
 ## Source layout
 
 - Keep `skills/roundlet` as the canonical skill source root.
