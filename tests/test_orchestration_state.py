@@ -139,102 +139,6 @@ def downgrade_to_policy3(value):
     refresh_policy3_scope(value)
 
 
-def release_evidence(*, tag="v0.1.0-rc.1", entries=(), approved_rc_tag=None, mutate=None):
-    evidence = {
-        "repository": {"owner_name": rs.SKILL_SOURCE_REPOSITORY, "repository_id": 123},
-        "source": {
-            "sha": SHA_A,
-            "reachable_from_protected_main": True,
-            "main_protected": True,
-            "worktree_clean": True,
-            "installed_skill_digest": rs.skill_content_digest(SKILL_ROOT),
-            "versions": {"schema": rs.SCHEMA_VERSION, "protocol": rs.PROTOCOL_VERSION, "review_contract": rs.REVIEW_CONTRACT_VERSION, "policy": rs.POLICY_VERSION},
-        },
-        "required_checks": {"required": ["unit"], "results": [{"name": "unit", "sha": SHA_A, "conclusion": "success"}]},
-        "release_environment": {"name": "release", "protected": True, "approval_id": "environment-approval-1"},
-        "approval": {
-            "id": "approval-1",
-            "tag": tag,
-            "source_sha": SHA_A,
-            "owner_actor": copy.deepcopy(OWNER_ACTOR),
-            "environment_approval_id": "environment-approval-1",
-        },
-        "approved_rc_tag": approved_rc_tag,
-        "history": {
-            "entries": list(entries),
-            "tombstones": [],
-            "live_tags": [{"tag": item["tag"], "source_sha": item["source_sha"]} for item in entries],
-        },
-        "release_notes": {
-            "tag": tag,
-            "source_sha": SHA_A,
-            "installed_skill_digest": rs.skill_content_digest(SKILL_ROOT),
-            "state_schema_version": str(rs.SCHEMA_VERSION),
-            "protocol_version": rs.PROTOCOL_VERSION,
-            "review_contract_version": rs.REVIEW_CONTRACT_VERSION,
-            "policy_version": rs.POLICY_VERSION,
-            "supported_python": "3.11",
-            "supported_os": "macOS",
-            "supported_codex": "current",
-            "license": "Apache-2.0",
-            "forward_test_evidence": "fresh minimally primed thread passed",
-        },
-    }
-    if mutate:
-        mutate(evidence)
-    return evidence
-
-
-def release_receipt(*, tag="v0.1.0-rc.1", entries=(), approved_rc_tag=None, mutate=None):
-    evidence = release_evidence(tag=tag, entries=entries, approved_rc_tag=approved_rc_tag, mutate=mutate)
-    adapter = release_adapter(lambda request: release_preflight_response(request, evidence))
-    return rs.execute_release_preflight(adapter, tag=tag, skill_root=SKILL_ROOT)
-
-
-def release_state():
-    value = state()
-    value["activation"]["repository"] = {
-        "owner_name": rs.SKILL_SOURCE_REPOSITORY,
-        "repository_id": 123,
-    }
-    return value
-
-
-def release_adapter(read_connector, *, value=None, repository=rs.SKILL_SOURCE_REPOSITORY):
-    value = release_state() if value is None else value
-    core = {
-        "verified_by_service": True,
-        "connector": "github",
-        "operation": rs.RELEASE_PREFLIGHT_OPERATION,
-        "adapter_id": "github-adapter:release-test",
-        "activation_id": value["activation"]["id"],
-        "repository": repository,
-        "repository_id": 123,
-        "orchestrator_thread_id": value["activation"]["orchestrator_thread_id"],
-        "project_identity": value["activation"]["orchestrator_creation_receipt"]["project_identity"],
-        "created_at": "2026-07-14T00:00:00Z",
-    }
-    return rs.bind_github_release_preflight_adapter(
-        value,
-        service_receipt={**core, "receipt_digest": rs.digest_json(core)},
-        read_connector=read_connector,
-    )
-
-
-def release_preflight_response(request, evidence):
-    core = {
-        "verified_by_connector": True,
-        "connector": "github",
-        "operation": rs.RELEASE_PREFLIGHT_OPERATION,
-        "adapter_id": request["adapter_id"],
-        "activation_id": request["activation_id"],
-        "request_digest": rs.digest_json(request),
-        "service_receipt_id": "github-release:12345678",
-        "evidence": copy.deepcopy(evidence),
-    }
-    return {**core, "response_digest": rs.digest_json(core)}
-
-
 def refresh_policy3_scope(value):
     activation = value["activation"]
     legacy_snapshot = rs.load_role_model_config(SKILL_ROOT)["legacy_profiles"]["policy_3"]
@@ -765,23 +669,6 @@ def premerge_state():
 
 
 class ReleaseContractTests(unittest.TestCase):
-    def test_accepts_connector_bound_first_rc_and_latest_rc_stable_transition(self):
-        first = rs.validate_release_contract(release_receipt())
-        self.assertEqual(first["release_candidate"], 1)
-
-        stable = rs.validate_release_contract(
-            release_receipt(
-                tag="v0.1.0",
-                approved_rc_tag="v0.1.0-rc.2",
-                entries=(
-                    {"tag": "v0.1.0-rc.1", "source_sha": SHA_A, "approval_id": "approval-old-1", "rc_approved": True},
-                    {"tag": "v0.1.0-rc.2", "source_sha": SHA_B, "approval_id": "approval-old-2", "rc_approved": True},
-                ),
-            )
-        )
-        self.assertEqual(stable["release_line"], "v0.1.0")
-        self.assertIsNone(stable["release_candidate"])
-
     def test_documented_and_runtime_grammar_reject_the_same_tags(self):
         policy = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
         documented = re.search(r"The only tag grammar is `([^`]+)`", policy).group(1)
@@ -797,149 +684,26 @@ class ReleaseContractTests(unittest.TestCase):
                 self.assertEqual(rs.parse_release_tag(tag)["tag"], tag)
                 self.assertIsNotNone(re.fullmatch(documented, tag))
 
-    def test_rejects_caller_supplied_release_mapping(self):
-        with self.assertRaises(rs.ScopeError):
-            rs.validate_release_contract(release_evidence())
+    def test_release_authority_fails_closed_without_a_trusted_gateway(self):
+        for payload in (None, {}, object()):
+            with self.subTest(payload=type(payload).__name__), self.assertRaises(rs.ScopeError):
+                rs.validate_release_contract(payload)
+            with self.subTest(payload=type(payload).__name__), self.assertRaises(rs.ScopeError):
+                rs.release_operations_require_trusted_gateway(payload)
 
-    def test_rejects_untrusted_source_environment_owner_and_checks(self):
-        def unreachable(value):
-            value["source"]["sha"] = SHA_B
-            value["source"]["reachable_from_protected_main"] = False
-            value["required_checks"]["results"][0]["sha"] = SHA_B
-            value["approval"]["source_sha"] = SHA_B
-            value["release_notes"]["source_sha"] = SHA_B
-
-        cases = (
-            (unreachable, "unreachable-full-sha"),
-            (lambda value: value["source"].update({"main_protected": False}), "unprotected-main"),
-            (lambda value: value["source"].update({"worktree_clean": False}), "dirty-worktree"),
-            (lambda value: value["release_environment"].update({"protected": False}), "unprotected-environment"),
-            (lambda value: value["approval"]["owner_actor"].update({"id": 999, "login": "not-the-owner"}), "wrong-verified-owner"),
-            (lambda value: value["approval"]["owner_actor"].update({"account_type": "Organization"}), "organization-approver"),
-            (lambda value: value["approval"]["owner_actor"].update({"account_type": "Bot"}), "bot-approver"),
-            (lambda value: value["approval"].update({"environment_approval_id": "other-environment-event"}), "unbound-environment-event"),
-            (lambda value: value["required_checks"].update({"required": ["unit", "lint"]}), "omitted-check"),
-            (lambda value: value["required_checks"]["results"][0].update({"conclusion": "failure"}), "failed-check"),
-        )
-        for mutate, label in cases:
-            with self.subTest(label=label), self.assertRaises((rs.ScopeError, rs.ValidationError)):
-                release_receipt(mutate=mutate)
-
-    def test_release_preflight_requires_public_release_capability_for_exact_repository(self):
-        refresh_value = state()
-        refresh_core = {
-            "verified_by_service": True,
-            "connector": "github",
-            "operation": rs.CONNECTOR_REFRESH_OPERATION,
-            "adapter_id": "github-adapter:refresh-test",
-            "activation_id": refresh_value["activation"]["id"],
-            "repository": "owner/project",
-            "repository_id": 123,
-            "orchestrator_thread_id": refresh_value["activation"]["orchestrator_thread_id"],
-            "project_identity": refresh_value["activation"]["orchestrator_creation_receipt"]["project_identity"],
-            "created_at": "2026-07-14T00:00:00Z",
-        }
-        refresh_adapter = rs.bind_github_connector_read_adapter(
-            refresh_value,
-            service_receipt={**refresh_core, "receipt_digest": rs.digest_json(refresh_core)},
-            read_connector=lambda request: {},
-        )
-        with self.assertRaises(rs.ScopeError):
-            rs.execute_release_preflight(refresh_adapter, tag="v0.1.0-rc.1", skill_root=SKILL_ROOT)
-
-        with self.assertRaises(rs.ScopeError):
-            rs.execute_release_preflight(
-                rs._GitHubConnectorReadAdapter(
-                    seal=rs._CONNECTOR_ADAPTER_SEAL,
-                    adapter_id="github-adapter:private-test",
-                    activation_id="activation-0001",
-                    read=lambda request: {},
-                ),
-                tag="v0.1.0-rc.1",
-                skill_root=SKILL_ROOT,
-            )
-
-        private_release_adapter = rs._GitHubReleasePreflightAdapter(
-            seal=rs._RELEASE_ADAPTER_SEAL,
-            adapter_id="github-adapter:private-test",
-            activation_id="activation-0001",
-            repository=rs.SKILL_SOURCE_REPOSITORY,
-            repository_id=123,
-            owner_actor=OWNER_ACTOR,
-            read=lambda request: {},
-            capability_token=object(),
-        )
-        with self.assertRaises(rs.ScopeError):
-            rs.execute_release_preflight(private_release_adapter, tag="v0.1.0-rc.1", skill_root=SKILL_ROOT)
-
-        foreign = release_adapter(
-            lambda request: {},
-            value=state(),
-            repository="owner/project",
-        )
-        with self.assertRaises(rs.ScopeError):
-            rs.execute_release_preflight(foreign, tag="v0.1.0-rc.1", skill_root=SKILL_ROOT)
-
-    def test_release_receipt_is_immutable_integrity_bound_and_one_shot(self):
-        receipt = release_receipt()
-        with self.assertRaises(AttributeError):
-            receipt.tag = "v9.9.9-rc.1"
-        object.__setattr__(receipt, "source_sha", "f" * 40)
-        with self.assertRaises(rs.ScopeError):
-            rs.validate_release_contract(receipt)
-
-        receipt = release_receipt()
-        accepted, rejected = [], []
-
-        def consume():
-            try:
-                accepted.append(rs.validate_release_contract(receipt))
-            except rs.ScopeError as error:
-                rejected.append(error)
-
-        threads = [threading.Thread(target=consume), threading.Thread(target=consume)]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join()
-        self.assertEqual(len(accepted), 1)
-        self.assertEqual(len(rejected), 1)
-
-    def test_rejects_non_append_only_or_incomplete_history(self):
-        rc1 = {"tag": "v0.1.0-rc.1", "source_sha": SHA_A, "approval_id": "approval-old-1", "rc_approved": True}
-        rc2 = {"tag": "v0.1.0-rc.2", "source_sha": SHA_B, "approval_id": "approval-old-2", "rc_approved": True}
-        rc3 = {"tag": "v0.1.0-rc.3", "source_sha": SHA_A, "approval_id": "approval-old-3", "rc_approved": True}
-        cases = (
-            ("v9.9.9-rc.1", (), None, None, "wrong-first-tag"),
-            ("v0.1.0", (rc1, rc3), "v0.1.0-rc.3", None, "gapped-history"),
-            ("v0.1.0-rc.2", (rc1,), None, lambda value: value["history"].update({"tombstones": [copy.deepcopy(rc1)]}), "deleted-tag"),
-            ("v0.1.0-rc.2", (rc1,), None, lambda value: value["history"]["live_tags"][0].update({"source_sha": SHA_B}), "moved-tag"),
-            ("v0.1.0-rc.2", (rc1,), None, lambda value: value["approval"].update({"id": "approval-old-1"}), "approval-replay"),
-            ("v0.1.0-rc.1", (rc1,), None, None, "tag-replay"),
-        )
-        for tag, entries, approved_rc_tag, mutate, label in cases:
-            with self.subTest(label=label), self.assertRaises((rs.ScopeError, rs.ValidationError)):
-                release_receipt(tag=tag, entries=entries, approved_rc_tag=approved_rc_tag, mutate=mutate)
-
-    def test_rejects_release_note_digest_and_compatibility_mismatches(self):
-        cases = (
-            (lambda value: value["release_notes"].update({"installed_skill_digest": "f" * 64}), "note-digest"),
-            (lambda value: value["source"].update({"installed_skill_digest": "f" * 64}), "source-digest"),
-            (lambda value: value["source"]["versions"].update({"policy": "999"}), "source-policy"),
-            (lambda value: value["release_notes"].update({"protocol_version": "999"}), "note-protocol"),
-        )
-        for mutate, label in cases:
-            with self.subTest(label=label), self.assertRaises((rs.ScopeError, rs.ValidationError)):
-                release_receipt(mutate=mutate)
-
-    def test_rejects_missing_or_incomplete_release_notes(self):
-        for field in rs.RELEASE_NOTE_FIELDS:
-            with self.subTest(field=field), self.assertRaises((rs.ScopeError, rs.ValidationError)):
-                release_receipt(mutate=lambda value, field=field: value["release_notes"].pop(field))
-
-        for field in ("supported_python", "supported_os", "supported_codex", "forward_test_evidence"):
-            with self.subTest(field=f"empty-{field}"), self.assertRaises((rs.ScopeError, rs.ValidationError)):
-                release_receipt(mutate=lambda value, field=field: value["release_notes"].update({field: ""}))
+    def test_policy_does_not_add_a_local_release_gateway(self):
+        source = (SKILL_ROOT / "scripts" / "orchestration_state.py").read_text(encoding="utf-8")
+        policy = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("external trusted service", policy)
+        for forbidden in (
+            "execute_release_preflight",
+            "bind_github_release_preflight_adapter",
+            "_GitHubReleasePreflightAdapter",
+            "_ReleaseEvidenceReceipt",
+            "_RELEASE_ADAPTER_TOKENS",
+        ):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, source)
 
 
 class ActivationTests(unittest.TestCase):
