@@ -801,6 +801,68 @@ def compute_scope_digest(
     return digest_json(payload)
 
 
+def _validate_schema6_review_policy(policy: Mapping[str, Any]) -> dict[str, int]:
+    if not isinstance(policy, Mapping) or set(policy) != {"max_supervisor_cycles"}:
+        raise MigrationError("schema-6 review policy must contain exactly max_supervisor_cycles")
+    maximum = policy.get("max_supervisor_cycles")
+    if type(maximum) is not int or not 1 <= maximum <= 64:
+        raise MigrationError("schema-6 review policy maximum is invalid")
+    return {"max_supervisor_cycles": maximum}
+
+
+def compute_schema6_scope_digest(
+    repository: Mapping[str, Any],
+    base_branch: str,
+    umbrella_issues: Sequence[int],
+    allowed_operations: Mapping[str, bool],
+    installed_roundlet_digest: str,
+    *,
+    owner_actor: Mapping[str, Any],
+    capability_preflight: Mapping[str, Any],
+    orchestrator_creation_receipt: Mapping[str, Any],
+    role_model_snapshot: Mapping[str, Any],
+    role_model_snapshot_digest: str,
+    review_policy_snapshot: Mapping[str, Any],
+    review_policy_snapshot_digest: str,
+    legacy_unbounded_review: bool,
+) -> str:
+    """Preserve the exact schema-6/policy-5 scope algorithm for migration."""
+    require_content_digest(installed_roundlet_digest)
+    snapshot = _validate_role_model_snapshot(role_model_snapshot)
+    if role_model_snapshot_digest != digest_json(snapshot):
+        raise ScopeError("schema-6 role model snapshot digest does not match the snapshot")
+    review_policy = _validate_schema6_review_policy(review_policy_snapshot)
+    if review_policy_snapshot_digest != digest_json(review_policy):
+        raise ScopeError("schema-6 review policy snapshot digest does not match the snapshot")
+    if type(legacy_unbounded_review) is not bool:
+        raise ScopeError("schema-6 legacy_unbounded_review must be boolean")
+    normalized_repo = {
+        "owner_name": normalize_owner_name(str(repository["owner_name"])),
+        "repository_id": repository.get("repository_id"),
+        "git_common_dir_fingerprint": repository["git_common_dir_fingerprint"],
+        "origin_fingerprint": repository["origin_fingerprint"],
+        "origin_push_fingerprint": repository["origin_push_fingerprint"],
+        "origin_host": repository["origin_host"],
+    }
+    return digest_json(
+        {
+            "repository": normalized_repo,
+            "base_branch": validate_branch_name(base_branch, "base_branch"),
+            "umbrella_issues": [require_positive_issue(item) for item in umbrella_issues],
+            "allowed_operations": {key: bool(allowed_operations[key]) for key in ALLOWED_OPERATION_KEYS},
+            "owner_actor": validate_owner_actor(owner_actor),
+            "capability_preflight": validate_capability_preflight(capability_preflight),
+            "orchestrator_creation_receipt_digest": digest_json(orchestrator_creation_receipt),
+            "role_model_snapshot_digest": role_model_snapshot_digest,
+            "review_policy_snapshot_digest": review_policy_snapshot_digest,
+            "legacy_unbounded_review": legacy_unbounded_review,
+            "installed_roundlet_digest": installed_roundlet_digest,
+            "protocol_version": PROTOCOL_VERSION,
+            "policy_version": "5",
+        }
+    )
+
+
 def compute_policy3_scope_digest(
     repository: Mapping[str, Any],
     base_branch: str,
@@ -1841,6 +1903,22 @@ class StateStore:
                 raise MigrationError("migration requires every GitHub mutation to be reconciled")
             if original.get("review", {}).get("supervisor_creation_intent") is not None:
                 raise MigrationError("migration requires the Supervisor creation intent to be reconciled")
+            if (
+                versions.get("schema") == 6
+                and original.get("activation", {}).get("legacy_unbounded_review") is True
+            ):
+                try:
+                    authority = read_json(
+                        self.legacy_review_authority_path,
+                        max_bytes=MAX_RECEIPT_BYTES,
+                    )
+                except ValidationError as exc:
+                    raise MigrationError(
+                        "schema-6 legacy review migration lacks durable authority"
+                    ) from exc
+                if authority != _expected_legacy_review_authority(original):
+                    raise MigrationError("schema-6 legacy review migration authority is stale")
+                original = _MigrationAuthorizedState(original, legacy_review_authority=authority)
             migrated = _migrate_state_document(
                 original,
                 target_version,
@@ -3457,6 +3535,48 @@ def resume_maintenance(
         raise
 
 
+def _validate_schema6_predecessor(document: Mapping[str, Any]) -> None:
+    """Fail closed before schema-6 data can be rebound to schema-7 identity."""
+    if document.get("versions") != {
+        "schema": 6,
+        "protocol": PROTOCOL_VERSION,
+        "review_contract": "4",
+        "policy": "5",
+    }:
+        raise MigrationError("schema-6 predecessor versions are invalid")
+    activation = document.get("activation")
+    if not isinstance(activation, Mapping):
+        raise MigrationError("schema-6 activation identity is missing")
+    policy = _validate_schema6_review_policy(activation.get("review_policy_snapshot", {}))
+    if activation.get("review_policy_snapshot_digest") != digest_json(policy):
+        raise MigrationError("schema-6 review policy snapshot digest is stale")
+    legacy_unbounded = activation.get("legacy_unbounded_review")
+    if type(legacy_unbounded) is not bool:
+        raise MigrationError("schema-6 legacy review marker is malformed")
+    if legacy_unbounded and getattr(document, "legacy_review_authority", None) != _expected_legacy_review_authority(document):
+        raise MigrationError("schema-6 legacy review migration lacks durable authority")
+    try:
+        expected_scope = compute_schema6_scope_digest(
+            activation["repository"],
+            activation["base_branch"],
+            activation["umbrella_issues"],
+            activation["allowed_operations"],
+            document["skill"]["content_digest"],
+            owner_actor=activation["owner_actor"],
+            capability_preflight=activation["capability_preflight"],
+            orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+            role_model_snapshot=activation["role_model_snapshot"],
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+            review_policy_snapshot=policy,
+            review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+            legacy_unbounded_review=legacy_unbounded,
+        )
+    except (KeyError, TypeError, RoundletError) as exc:
+        raise MigrationError("schema-6 activation scope is incomplete") from exc
+    if activation.get("scope_digest") != expected_scope:
+        raise MigrationError("schema-6 scope digest is stale")
+
+
 def _migrate_state_document(
     document: Mapping[str, Any],
     target_version: int = SCHEMA_VERSION,
@@ -3706,10 +3826,7 @@ def _migrate_state_document(
         }
         # A schema-5 activation had no review ceiling.  Preserve that behavior
         # explicitly; 64 is only the validator's maximum for *new* activations.
-        legacy_unbounded = {
-            "max_supervisor_cycles": 64,
-            "converge_after_supervisor_cycles": 64,
-        }
+        legacy_unbounded = {"max_supervisor_cycles": 64}
         activation.setdefault("review_policy_snapshot", legacy_unbounded)
         activation.setdefault("review_policy_snapshot_digest", digest_json(legacy_unbounded))
         activation["legacy_unbounded_review"] = True
@@ -3724,8 +3841,8 @@ def _migrate_state_document(
             {
                 "schema": 6,
                 "protocol": PROTOCOL_VERSION,
-                "review_contract": REVIEW_CONTRACT_VERSION,
-                "policy": POLICY_VERSION,
+                "review_contract": "4",
+                "policy": "5",
             }
         )
         maintenance = result.get("maintenance")
@@ -3734,7 +3851,7 @@ def _migrate_state_document(
             receipt = maintenance.get("migration_receipt")
             if isinstance(receipt, MutableMapping):
                 receipt["to_schema"] = 6
-        activation["scope_digest"] = compute_scope_digest(
+        activation["scope_digest"] = compute_schema6_scope_digest(
             activation["repository"],
             activation.get("base_branch"),
             activation.get("umbrella_issues", []),
@@ -3748,23 +3865,28 @@ def _migrate_state_document(
             review_policy_snapshot=activation.get("review_policy_snapshot"),
             review_policy_snapshot_digest=activation.get("review_policy_snapshot_digest"),
             legacy_unbounded_review=activation.get("legacy_unbounded_review"),
-            policy_version=POLICY_VERSION,
         )
         current = 6
 
     if current == 6 and target_version >= 7:
+        legacy_authority = getattr(document, "legacy_review_authority", None)
+        if (
+            legacy_authority is None
+            and original_versions.get("schema", 0) < 6
+            and result.get("activation", {}).get("legacy_unbounded_review") is True
+        ):
+            legacy_authority = _expected_legacy_review_authority(result)
+        _validate_schema6_predecessor(
+            _MigrationAuthorizedState(
+                result,
+                legacy_review_authority=legacy_authority,
+            )
+        )
         activation = result.get("activation")
         if not isinstance(activation, MutableMapping):
             raise MigrationError("schema-6 activation identity is missing")
         prior_policy = activation.get("review_policy_snapshot")
-        if not isinstance(prior_policy, Mapping) or set(prior_policy) not in (
-            {"max_supervisor_cycles"},
-            {"max_supervisor_cycles", "converge_after_supervisor_cycles"},
-        ):
-            raise MigrationError("schema-6 review policy cannot establish a convergence threshold")
-        maximum = prior_policy.get("max_supervisor_cycles")
-        if type(maximum) is not int or not 1 <= maximum <= 64:
-            raise MigrationError("schema-6 review policy maximum is invalid")
+        maximum = _validate_schema6_review_policy(prior_policy or {})["max_supervisor_cycles"]
         # Existing bounded activations retain their old non-converging behavior.
         # Legacy-unbounded activations also remain COMPLETE regardless of this
         # placeholder threshold (enforced by supervisor_review_guidance).
@@ -3774,6 +3896,14 @@ def _migrate_state_document(
         }
         activation["review_policy_snapshot"] = review_policy
         activation["review_policy_snapshot_digest"] = digest_json(review_policy)
+        review = result.get("review")
+        if not isinstance(review, MutableMapping):
+            raise MigrationError("schema-6 review state is missing")
+        # A contract-4 PASS cannot authorize a contract-5 merge.  Clear it
+        # before validation; resume_maintenance then restores a safe fresh
+        # review boundary from its recorded pre-maintenance phase.
+        review["pass_identity"] = None
+        review["last_result"] = None
         versions.update(
             {
                 "schema": 7,

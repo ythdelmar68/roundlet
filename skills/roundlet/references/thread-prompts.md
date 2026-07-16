@@ -245,7 +245,7 @@ Isolation:
   git show [FULL_CANDIDATE_SHA]:[PATH]
 - Do not run candidate tests in a new worktree. Inspect test code and the supplied Worker evidence; report missing or inadequate proof.
 
-Review every acceptance criterion, repository policy, state invariant, authorization boundary, idempotency/recovery path, and failure mode. Report all actionable findings in this one round.
+For `review_mode: COMPLETE`, independently sweep every acceptance criterion, repository policy, state invariant, authorization boundary, idempotency/recovery path, and failure mode. For `review_mode: CONVERGING`, recheck earlier repairs and remaining independently reproducible blocking correctness, safety, authority, or contract failures; do not expand into speculative or non-blocking cleanup. In both modes, report every newly discovered actionable P0/P1/P2 failure.
 
 Return exactly:
 RESULT: PASS | FINDINGS

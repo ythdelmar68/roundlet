@@ -609,6 +609,33 @@ def set_review_budget(value, maximum, *, converge_after=None, legacy_unbounded=F
     )
 
 
+def downgrade_to_schema6(value):
+    activation = value["activation"]
+    maximum = activation["review_policy_snapshot"]["max_supervisor_cycles"]
+    activation["review_policy_snapshot"] = {"max_supervisor_cycles": maximum}
+    activation["review_policy_snapshot_digest"] = rs.digest_json(
+        activation["review_policy_snapshot"]
+    )
+    value["versions"].update({"schema": 6, "protocol": "3", "review_contract": "4", "policy": "5"})
+    if isinstance(value["review"].get("pass_identity"), dict):
+        value["review"]["pass_identity"]["review_contract"] = "4"
+    activation["scope_digest"] = rs.compute_schema6_scope_digest(
+        activation["repository"],
+        activation["base_branch"],
+        activation["umbrella_issues"],
+        activation["allowed_operations"],
+        value["skill"]["content_digest"],
+        owner_actor=activation["owner_actor"],
+        capability_preflight=activation["capability_preflight"],
+        orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+        role_model_snapshot=activation["role_model_snapshot"],
+        role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+        review_policy_snapshot=activation["review_policy_snapshot"],
+        review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+        legacy_unbounded_review=activation["legacy_unbounded_review"],
+    )
+
+
 def downgrade_to_schema5_unbounded(value):
     value["versions"].update({"schema": 5, "protocol": "3", "review_contract": "3", "policy": "4"})
     activation = value["activation"]
@@ -1329,58 +1356,97 @@ class StateMachineTests(unittest.TestCase):
         self.assertEqual(calls, [])
 
     def test_supervisor_guidance_is_round_aware_and_reaches_creation_callback(self):
-        value = assigned_state()
-        set_review_budget(value, 5, converge_after=3)
-        rs.set_candidate(value, SHA_B, clean=True)
-        value["phase"] = "draft-pr"
-        self.assertEqual(rs.supervisor_review_guidance(value)["mode"], "COMPLETE")
-        value["review"]["round"] = 3
-        converging = rs.supervisor_review_guidance(value)
-        self.assertEqual(
-            converging,
-            {
-                "current_cycle": 4,
-                "completed_cycles": 3,
-                "max_cycles": 5,
-                "converge_after_cycles": 3,
-                "mode": "CONVERGING",
-                "directive": (
-                    "After 3 complete Supervisor reviews, begin progressively converging the review. "
-                    "Prioritize regressions against earlier findings and independently reproducible blocking "
-                    "correctness, safety, authority, or contract failures. Do not expand into speculative or "
-                    "non-blocking cleanup. Do not suppress a newly discovered blocking finding."
-                ),
-            },
-        )
         fresh = assigned_state()
         rs.set_candidate(fresh, SHA_B, clean=True)
-        fresh["phase"] = "draft-pr"
+        record_draft(fresh)
+        for generation in range(1, 4):
+            thread_id = f"supervisor-complete-{generation}"
+            begin_review(fresh, thread_id)
+            rs.accept_supervisor_result(
+                fresh,
+                thread_id=thread_id,
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=[f"finding-{generation}"],
+            )
+            rs.record_supervisor_archived(fresh, supervisor_thread_id=thread_id)
+            rs.set_candidate(fresh, SHA_B, clean=True)
         with tempfile.TemporaryDirectory() as temporary:
             store = rs.StateStore(temporary)
             store.initialize(fresh)
             seen = []
-            rs.create_supervisor_after_preflight(
-                fresh,
-                final=False,
-                state_store=store,
-                create_task=lambda intent: seen.append(intent) or {
-                    "thread_id": "supervisor-guidance",
+
+            def create(intent):
+                seen.append(intent)
+                generation = intent["generation"]
+                thread_id = f"supervisor-guidance-{generation}"
+                return {
+                    "thread_id": thread_id,
                     "creation_receipt": {
                         "activation_id": intent["activation_id"],
                         "issue": intent["issue"],
-                        "generation": intent["generation"],
+                        "generation": generation,
                         "installed_roundlet_digest": intent["installed_roundlet_digest"],
                         "review_contract": intent["review_contract"],
                         "created": True,
                         "service_receipt": role_receipt(
-                            "supervisor", "supervisor-guidance", created_at="2026-07-14T00:00:00.000001Z"
+                            "supervisor", thread_id, created_at=f"2026-07-14T00:00:00.{generation:06d}Z"
                         ),
                     },
+                }
+
+            rs.create_supervisor_after_preflight(
+                fresh,
+                final=False,
+                state_store=store,
+                create_task=create,
+            )
+            rs.accept_supervisor_result(
+                fresh,
+                thread_id="supervisor-guidance-4",
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=["finding-4"],
+            )
+            rs.record_supervisor_archived(fresh, supervisor_thread_id="supervisor-guidance-4")
+            rs.set_candidate(fresh, SHA_B, clean=True)
+            record_ready(fresh)
+            store.save(fresh)
+            rs.create_supervisor_after_preflight(
+                fresh,
+                final=True,
+                state_store=store,
+                create_task=create,
+            )
+        for generation, final in ((4, False), (5, True)):
+            intent = seen[generation - 4]
+            self.assertEqual(intent["generation"], generation)
+            self.assertIs(intent["final"], final)
+            self.assertEqual(
+                intent["guidance"],
+                {
+                    "current_cycle": generation,
+                    "completed_cycles": generation - 1,
+                    "max_cycles": 5,
+                    "converge_after_cycles": 3,
+                    "mode": "CONVERGING",
+                    "directive": (
+                        "After 3 complete Supervisor reviews, begin progressively converging the review. "
+                        "Prioritize regressions against earlier findings and independently reproducible blocking "
+                        "correctness, safety, authority, or contract failures. Do not expand into speculative or "
+                        "non-blocking cleanup. Do not suppress a newly discovered blocking finding."
+                    ),
                 },
             )
-        self.assertEqual(seen[0]["guidance"]["converge_after_cycles"], 3)
-        self.assertEqual(seen[0]["guidance"]["mode"], "COMPLETE")
-        self.assertEqual(seen[0]["guidance_digest"], rs.digest_json(seen[0]["guidance"]))
+            self.assertEqual(intent["guidance_digest"], rs.digest_json(intent["guidance"]))
+        equality = assigned_state()
+        set_review_budget(equality, 3, converge_after=3)
+        rs.set_candidate(equality, SHA_B, clean=True)
+        equality["phase"] = "draft-pr"
+        equality["review"].update(
+            {"round": 2, "archived_supervisor_count": 2, "last_supervisor_created_at": "2026-07-14T00:00:00.000002Z"}
+        )
+        self.assertEqual(rs.preflight_supervisor_creation(equality)["guidance"]["mode"], "COMPLETE")
 
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
@@ -2349,11 +2415,7 @@ class MaintenanceTests(unittest.TestCase):
 
     def test_schema_six_migration_preserves_non_converging_review_behavior(self):
         old = state()
-        old["versions"].update({"schema": 6, "review_contract": "4", "policy": "5"})
-        old["activation"]["review_policy_snapshot"] = {"max_supervisor_cycles": 5}
-        old["activation"]["review_policy_snapshot_digest"] = rs.digest_json(
-            old["activation"]["review_policy_snapshot"]
-        )
+        downgrade_to_schema6(old)
         old["review"]["round"] = 4
         migrated = rs._migrate_state_document(old)
         self.assertEqual(
@@ -2361,6 +2423,77 @@ class MaintenanceTests(unittest.TestCase):
             {"max_supervisor_cycles": 5, "converge_after_supervisor_cycles": 5},
         )
         self.assertEqual(rs.supervisor_review_guidance(migrated)["mode"], "COMPLETE")
+
+    def test_schema_six_durable_migration_rejects_stale_policy_or_scope_atomically(self):
+        for tamper in ("policy", "scope"):
+            with self.subTest(tamper=tamper), tempfile.TemporaryDirectory() as temporary:
+                old = assigned_state()
+                old["task"]["active_role"] = None
+                downgrade_to_schema6(old)
+                rs.request_maintenance(old, "schema-7 migration")
+                rs.create_maintenance_checkpoint(
+                    old, checkpoint_id="checkpoint-001", schedule_id="schedule-1", schedule_state="paused"
+                )
+                if tamper == "policy":
+                    old["activation"]["review_policy_snapshot"]["max_supervisor_cycles"] = 64
+                else:
+                    old["activation"]["scope_digest"] = "0" * 64
+                store = rs.StateStore(temporary)
+                rs.atomic_write_json(store.path, old)
+                original_bytes = store.path.read_bytes()
+                with self.assertRaisesRegex(rs.MigrationError, "schema-6 .*stale"):
+                    store.migrate(
+                        activation_id="activation-0001",
+                        checkpoint_id="checkpoint-001",
+                        schedule_id="schedule-1",
+                        expected_installed_digest=DIGEST,
+                        expected_from_schema=6,
+                        skill_root=SKILL_ROOT,
+                    )
+                self.assertEqual(store.path.read_bytes(), original_bytes)
+
+    def test_schema_six_pass_migration_clears_stale_authority_and_resumes_safely(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        begin_review(value, "supervisor-schema-six-pass")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-schema-six-pass",
+            candidate_sha=SHA_B,
+            result="PASS",
+        )
+        rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-schema-six-pass")
+        downgrade_to_schema6(value)
+        rs.request_maintenance(value, "schema-7 migration")
+        rs.drain_worker_for_maintenance(
+            value, worker_thread_id="worker-11", candidate_sha=SHA_B, clean=True
+        )
+        rs.create_maintenance_checkpoint(
+            value, checkpoint_id="checkpoint-001", schedule_id="schedule-1", schedule_state="paused"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            rs.atomic_write_json(store.path, value)
+            migrated = store.migrate(
+                activation_id="activation-0001",
+                checkpoint_id="checkpoint-001",
+                schedule_id="schedule-1",
+                expected_installed_digest=DIGEST,
+                expected_from_schema=6,
+                skill_root=SKILL_ROOT,
+            )
+            self.assertIsNone(migrated["review"]["pass_identity"])
+            self.assertIsNone(migrated["review"]["last_result"])
+            rs.resume_maintenance(
+                migrated,
+                checkpoint_id="checkpoint-001",
+                installed_roundlet_digest=DIGEST,
+                current_versions=migrated["versions"],
+                repository_identity=identity(),
+                schedule_id="schedule-1",
+            )
+            self.assertEqual(migrated["phase"], "draft-pr")
 
     def test_schema_five_migration_preserves_round_64_and_higher_as_unbounded(self):
         for review_round in (64, 65, 200):
