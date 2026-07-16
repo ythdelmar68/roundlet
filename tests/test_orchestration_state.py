@@ -1600,6 +1600,46 @@ class StateMachineTests(unittest.TestCase):
             with self.assertRaisesRegex(rs.ValidationError, "unarchived Supervisor is not the latest"):
                 rs.preflight_supervisor_creation(tampered)
 
+    def test_active_supervisor_cannot_have_completion_evidence(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for generation in (1, 2):
+            thread_id = f"supervisor-active-boundary-{generation}"
+            begin_review(value, thread_id)
+            rs.accept_supervisor_result(
+                value,
+                thread_id=thread_id,
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=[f"finding-{generation}"],
+            )
+            rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
+            rs.set_candidate(value, SHA_B, clean=True)
+        begin_review(value, "supervisor-active-boundary-3")
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            tampered = store.load()
+            review = tampered["review"]
+            review["completed_supervisor_count"] = 3
+            review["completed_supervisor_results"].append(
+                {"thread_id": "supervisor-active-boundary-3", "generation": 3, "result": "FINDINGS"}
+            )
+            review["completed_supervisor_digest"] = rs.fold_archive_digest(
+                "0" * 64, review["completed_supervisor_results"]
+            )
+            rs.atomic_write_json(store.path, tampered)
+            with self.assertRaisesRegex(rs.ValidationError, "active Supervisor has durable completion evidence"):
+                store.load()
+            with self.assertRaisesRegex(rs.ValidationError, "active Supervisor has durable completion evidence"):
+                rs.preflight_supervisor_creation(tampered)
+            rs.request_maintenance(tampered, "interrupt forged active completion")
+            with self.assertRaisesRegex(rs.ValidationError, "active Supervisor has durable completion evidence"):
+                rs.discard_supervisor_for_maintenance(
+                    tampered, supervisor_thread_id="supervisor-active-boundary-3"
+                )
+
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)

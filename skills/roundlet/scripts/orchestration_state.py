@@ -1416,6 +1416,8 @@ def validate_state(state: Mapping[str, Any]) -> None:
         if current_supervisor is not None:
             if current_supervisor != latest_thread:
                 raise ValidationError("active Supervisor boundary is not an uncompleted latest task")
+            if any(completion.get("thread_id") == latest_thread for completion in completed_results):
+                raise ValidationError("active Supervisor has durable completion evidence")
         else:
             latest_completion = completed_results[-1] if completed_results else None
             if (
@@ -3383,6 +3385,12 @@ def discard_supervisor_for_maintenance(
         raise ValidationError("maintenance Supervisor state is missing")
     if task.get("active_role") != "supervisor" or review.get("current_supervisor_thread_id") != supervisor_thread_id:
         raise ScopeError("maintenance discard differs from the active Supervisor")
+    completed_results = review.get("completed_supervisor_results")
+    if isinstance(completed_results, list) and any(
+        isinstance(completion, Mapping) and completion.get("thread_id") == supervisor_thread_id
+        for completion in completed_results
+    ):
+        raise ValidationError("active Supervisor has durable completion evidence")
     previous_phase = state["maintenance"].get("previous_phase")
     if previous_phase == "supervisor-running":
         state["maintenance"]["previous_phase"] = "draft-pr"
