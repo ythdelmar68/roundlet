@@ -236,7 +236,7 @@ ROLE: SUPERVISOR — INDEPENDENT READ-ONLY REVIEW
 Independently attempt to falsify the implementation of selected issue #[ISSUE_NUMBER] at immutable candidate [FULL_CANDIDATE_SHA] against base [FULL_BASE_SHA].
 
 Isolation:
-- Do not use or infer Worker confidence or hidden reasoning. In `CONVERGING` mode, bounded earlier finding/repair summaries may be used only as non-authoritative targets for independent rechecking; do not copy prior Supervisor conclusions or treat them as proof.
+- Do not use or infer Worker confidence or hidden reasoning. In `CONVERGING` mode, bounded earlier finding/repair summaries may be used only as non-authoritative independent recheck targets; do not copy prior Supervisor conclusions or treat them as authority or proof.
 - Do not create or modify files, branches, worktrees, state, or artifacts.
 - Do not use GitHub, gh, web, external network, moving branch names, current HEAD, or uncommitted content as candidate identity.
 - Inspect only immutable objects with commands equivalent to:

@@ -133,6 +133,8 @@ def downgrade_to_policy3(value):
     value["review"].pop("exhaustion", None)
     value["review"].pop("supervisor_creation_intent", None)
     value["review"].pop("completed_supervisor_count", None)
+    value["review"].pop("completed_supervisor_results", None)
+    value["review"].pop("completed_supervisor_digest", None)
     value["versions"].update({"schema": 4, "review_contract": "3", "policy": "3"})
     refresh_policy3_scope(value)
 
@@ -614,6 +616,8 @@ def downgrade_to_schema6(value):
     activation = value["activation"]
     maximum = activation["review_policy_snapshot"]["max_supervisor_cycles"]
     value["review"].pop("completed_supervisor_count", None)
+    value["review"].pop("completed_supervisor_results", None)
+    value["review"].pop("completed_supervisor_digest", None)
     activation["review_policy_snapshot"] = {"max_supervisor_cycles": maximum}
     activation["review_policy_snapshot_digest"] = rs.digest_json(
         activation["review_policy_snapshot"]
@@ -651,6 +655,8 @@ def downgrade_to_schema5_unbounded(value):
     value["review"].pop("exhaustion", None)
     value["review"].pop("supervisor_creation_intent", None)
     value["review"].pop("completed_supervisor_count", None)
+    value["review"].pop("completed_supervisor_results", None)
+    value["review"].pop("completed_supervisor_digest", None)
     activation["scope_digest"] = rs.compute_scope_digest(
         activation["repository"],
         activation["base_branch"],
@@ -1505,9 +1511,47 @@ class StateMachineTests(unittest.TestCase):
             result="FINDINGS",
             non_blocking_items=["finding-3"],
         )
+        rs.validate_state(value)
+        self.assertEqual(
+            value["review"]["completed_supervisor_results"][-1],
+            {"thread_id": "supervisor-completed-3", "generation": 4, "result": "FINDINGS"},
+        )
         rs.record_supervisor_archived(value, supervisor_thread_id="supervisor-completed-3")
         rs.set_candidate(value, SHA_B, clean=True)
         self.assertEqual(rs.preflight_supervisor_creation(value)["guidance"]["mode"], "CONVERGING")
+
+    def test_inflated_completed_counter_fails_before_preflight(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for generation in range(1, 4):
+            thread_id = f"supervisor-discarded-{generation}"
+            begin_review(value, thread_id)
+            rs.request_maintenance(value, "interrupt incomplete review")
+            rs.discard_supervisor_for_maintenance(value, supervisor_thread_id=thread_id)
+            rs.create_maintenance_checkpoint(
+                value,
+                checkpoint_id=f"checkpoint-{generation:03d}",
+                schedule_id="schedule-1",
+                schedule_state="paused",
+            )
+            rs.resume_maintenance(
+                value,
+                checkpoint_id=f"checkpoint-{generation:03d}",
+                installed_roundlet_digest=DIGEST,
+                current_versions=value["versions"],
+                repository_identity=identity(),
+                schedule_id="schedule-1",
+            )
+        self.assertEqual(value["review"]["completed_supervisor_count"], 0)
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            tampered = store.load()
+            tampered["review"]["completed_supervisor_count"] = 3
+            rs.atomic_write_json(store.path, tampered)
+            with self.assertRaisesRegex(rs.ValidationError, "durable result evidence"):
+                store.load()
 
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
@@ -4949,6 +4993,14 @@ class StaticSkillTests(unittest.TestCase):
         skill = (SKILL_ROOT / "SKILL.md").read_text()
         self.assertIn("Do not write a mailbox file", prompts)
         self.assertIn("root Orchestrator validates that response", skill)
+
+    def test_converging_prior_findings_contract_is_consistent(self):
+        prompts = (SKILL_ROOT / "references/thread-prompts.md").read_text()
+        skill = (SKILL_ROOT / "SKILL.md").read_text()
+        for text in (prompts, skill):
+            self.assertIn("bounded earlier finding/repair summaries", text)
+            self.assertIn("independent recheck targets", text)
+            self.assertIn("authority or proof", text)
 
     def test_skill_internal_links_resolve_within_publishable_root(self):
         skill = (SKILL_ROOT / "SKILL.md").read_text()
