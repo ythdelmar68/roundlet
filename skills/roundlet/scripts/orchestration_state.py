@@ -2015,12 +2015,17 @@ def _advance_supervisor_archive_authority(
     old_pending = normalized.get("pending_completion")
     new_pending = candidate.get("pending_completion")
     compacted = False
+    appended: Mapping[str, Any] | None = None
     if not old_entries:
-        # No outcome was previously committed to external authority.  The
-        # first durable save may contain a bounded in-memory batch.
-        pass
+        if len(new_entries) > 1:
+            raise ScopeError("Supervisor archive authority can append only one outcome")
+        appended = new_entries[0] if new_entries else None
     elif new_entries[: len(old_entries)] == old_entries:
         candidate["anchor_digest"] = normalized["anchor_digest"]
+        appended_entries = new_entries[len(old_entries) :]
+        if len(appended_entries) > 1:
+            raise ScopeError("Supervisor archive authority can append only one outcome")
+        appended = appended_entries[0] if appended_entries else None
     elif (
         len(old_entries) == 64
         and len(new_entries) == 64
@@ -2028,6 +2033,7 @@ def _advance_supervisor_archive_authority(
     ):
         candidate["anchor_digest"] = old_entries[0]["archive_digest"]
         compacted = True
+        appended = new_entries[-1]
     elif (
         len(old_entries) == 64
         and len(new_entries) == 63
@@ -2047,10 +2053,6 @@ def _advance_supervisor_archive_authority(
     else:
         if new_pending is not None and not (compacted and old_pending is None):
             raise ScopeError("Supervisor archive append cannot retain a pending completion")
-        if compacted and len(new_entries) == 63:
-            appended = None
-        else:
-            appended = new_entries[-1]
         if appended is None:
             pass
         elif appended.get("outcome") == "COMPLETED":

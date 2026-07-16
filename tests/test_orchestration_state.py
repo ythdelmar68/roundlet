@@ -1860,6 +1860,82 @@ class StateMachineTests(unittest.TestCase):
             )
             self.assertIsNone(archived.supervisor_archive_authority["pending_completion"])
 
+    def test_multi_outcome_append_cannot_batch_forged_completions(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for generation in range(1, 5):
+            thread_id = f"supervisor-batch-discard-{generation}"
+            begin_review(value, thread_id)
+            rs.request_maintenance(value, "interrupt incomplete review")
+            rs.discard_supervisor_for_maintenance(value, supervisor_thread_id=thread_id)
+            rs.create_maintenance_checkpoint(
+                value,
+                checkpoint_id=f"batch-checkpoint-{generation:03d}",
+                schedule_id="schedule-1",
+                schedule_state="paused",
+            )
+            rs.resume_maintenance(
+                value,
+                checkpoint_id=f"batch-checkpoint-{generation:03d}",
+                installed_roundlet_digest=DIGEST,
+                current_versions=value["versions"],
+                repository_identity=identity(),
+                schedule_id="schedule-1",
+            )
+        forged = copy.deepcopy(value)
+        review = forged["review"]
+        predecessor = "0" * 64
+        outcomes = []
+        for generation in range(1, 5):
+            outcome = "COMPLETED" if generation < 4 else "DISCARDED"
+            payload = {
+                "thread_id": f"supervisor-batch-discard-{generation}",
+                "generation": generation,
+                "outcome": outcome,
+            }
+            archive_digest = rs.fold_archive_digest(predecessor, [payload])
+            outcomes.append(
+                {**payload, "predecessor_digest": predecessor, "archive_digest": archive_digest}
+            )
+            predecessor = archive_digest
+        review["completed_supervisor_count"] = 3
+        review["completed_supervisor_results"] = [
+            {
+                "thread_id": f"supervisor-batch-discard-{generation}",
+                "generation": generation,
+                "result": "FINDINGS",
+            }
+            for generation in range(1, 4)
+        ]
+        review["completed_supervisor_digest"] = rs.fold_archive_digest(
+            "0" * 64, review["completed_supervisor_results"]
+        )
+        review["archived_supervisor_outcomes"] = outcomes
+        review["archived_supervisor_outcome_digest"] = rs.fold_archive_digest(
+            "0" * 64, outcomes
+        )
+        review["archived_supervisor_digest"] = predecessor
+        rs.validate_state(forged)
+
+        initial = assigned_state()
+        rs.set_candidate(initial, SHA_B, clean=True)
+        record_draft(initial)
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(initial)
+            with self.assertRaisesRegex(rs.ScopeError, "append only one outcome"):
+                store.save(forged)
+            self.assertEqual(store.load()["review"]["round"], 0)
+            forged_with_authority = rs._MigrationAuthorizedState(
+                forged,
+                supervisor_archive_authority=rs.read_json(
+                    store.supervisor_archive_authority_path
+                ),
+            )
+            with self.assertRaisesRegex(rs.ScopeError, "differs from durable outcome history"):
+                rs.preflight_supervisor_creation(forged_with_authority)
+
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
