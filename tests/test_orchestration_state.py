@@ -151,8 +151,14 @@ def release_evidence(*, tag="v0.1.0-rc.1", entries=(), approved_rc_tag=None, mut
             "versions": {"schema": rs.SCHEMA_VERSION, "protocol": rs.PROTOCOL_VERSION, "review_contract": rs.REVIEW_CONTRACT_VERSION, "policy": rs.POLICY_VERSION},
         },
         "required_checks": {"required": ["unit"], "results": [{"name": "unit", "sha": SHA_A, "conclusion": "success"}]},
-        "release_environment": {"name": "release", "protected": True},
-        "approval": {"id": "approval-1", "tag": tag, "source_sha": SHA_A, "owner_actor": copy.deepcopy(OWNER_ACTOR)},
+        "release_environment": {"name": "release", "protected": True, "approval_id": "environment-approval-1"},
+        "approval": {
+            "id": "approval-1",
+            "tag": tag,
+            "source_sha": SHA_A,
+            "owner_actor": copy.deepcopy(OWNER_ACTOR),
+            "environment_approval_id": "environment-approval-1",
+        },
         "approved_rc_tag": approved_rc_tag,
         "history": {
             "entries": list(entries),
@@ -181,13 +187,38 @@ def release_evidence(*, tag="v0.1.0-rc.1", entries=(), approved_rc_tag=None, mut
 
 def release_receipt(*, tag="v0.1.0-rc.1", entries=(), approved_rc_tag=None, mutate=None):
     evidence = release_evidence(tag=tag, entries=entries, approved_rc_tag=approved_rc_tag, mutate=mutate)
-    adapter = rs._GitHubConnectorReadAdapter(
-        seal=rs._CONNECTOR_ADAPTER_SEAL,
-        adapter_id="github-adapter:release-test",
-        activation_id="activation-0001",
-        read=lambda request: release_preflight_response(request, evidence),
-    )
+    adapter = release_adapter(lambda request: release_preflight_response(request, evidence))
     return rs.execute_release_preflight(adapter, tag=tag, skill_root=SKILL_ROOT)
+
+
+def release_state():
+    value = state()
+    value["activation"]["repository"] = {
+        "owner_name": rs.SKILL_SOURCE_REPOSITORY,
+        "repository_id": 123,
+    }
+    return value
+
+
+def release_adapter(read_connector, *, value=None, repository=rs.SKILL_SOURCE_REPOSITORY):
+    value = release_state() if value is None else value
+    core = {
+        "verified_by_service": True,
+        "connector": "github",
+        "operation": rs.RELEASE_PREFLIGHT_OPERATION,
+        "adapter_id": "github-adapter:release-test",
+        "activation_id": value["activation"]["id"],
+        "repository": repository,
+        "repository_id": 123,
+        "orchestrator_thread_id": value["activation"]["orchestrator_thread_id"],
+        "project_identity": value["activation"]["orchestrator_creation_receipt"]["project_identity"],
+        "created_at": "2026-07-14T00:00:00Z",
+    }
+    return rs.bind_github_release_preflight_adapter(
+        value,
+        service_receipt={**core, "receipt_digest": rs.digest_json(core)},
+        read_connector=read_connector,
+    )
 
 
 def release_preflight_response(request, evidence):
@@ -783,13 +814,96 @@ class ReleaseContractTests(unittest.TestCase):
             (lambda value: value["source"].update({"main_protected": False}), "unprotected-main"),
             (lambda value: value["source"].update({"worktree_clean": False}), "dirty-worktree"),
             (lambda value: value["release_environment"].update({"protected": False}), "unprotected-environment"),
-            (lambda value: value["approval"]["owner_actor"].update({"verified": False}), "spoofed-owner"),
+            (lambda value: value["approval"]["owner_actor"].update({"id": 999, "login": "not-the-owner"}), "wrong-verified-owner"),
+            (lambda value: value["approval"]["owner_actor"].update({"account_type": "Organization"}), "organization-approver"),
+            (lambda value: value["approval"]["owner_actor"].update({"account_type": "Bot"}), "bot-approver"),
+            (lambda value: value["approval"].update({"environment_approval_id": "other-environment-event"}), "unbound-environment-event"),
             (lambda value: value["required_checks"].update({"required": ["unit", "lint"]}), "omitted-check"),
             (lambda value: value["required_checks"]["results"][0].update({"conclusion": "failure"}), "failed-check"),
         )
         for mutate, label in cases:
             with self.subTest(label=label), self.assertRaises((rs.ScopeError, rs.ValidationError)):
                 release_receipt(mutate=mutate)
+
+    def test_release_preflight_requires_public_release_capability_for_exact_repository(self):
+        refresh_value = state()
+        refresh_core = {
+            "verified_by_service": True,
+            "connector": "github",
+            "operation": rs.CONNECTOR_REFRESH_OPERATION,
+            "adapter_id": "github-adapter:refresh-test",
+            "activation_id": refresh_value["activation"]["id"],
+            "repository": "owner/project",
+            "repository_id": 123,
+            "orchestrator_thread_id": refresh_value["activation"]["orchestrator_thread_id"],
+            "project_identity": refresh_value["activation"]["orchestrator_creation_receipt"]["project_identity"],
+            "created_at": "2026-07-14T00:00:00Z",
+        }
+        refresh_adapter = rs.bind_github_connector_read_adapter(
+            refresh_value,
+            service_receipt={**refresh_core, "receipt_digest": rs.digest_json(refresh_core)},
+            read_connector=lambda request: {},
+        )
+        with self.assertRaises(rs.ScopeError):
+            rs.execute_release_preflight(refresh_adapter, tag="v0.1.0-rc.1", skill_root=SKILL_ROOT)
+
+        with self.assertRaises(rs.ScopeError):
+            rs.execute_release_preflight(
+                rs._GitHubConnectorReadAdapter(
+                    seal=rs._CONNECTOR_ADAPTER_SEAL,
+                    adapter_id="github-adapter:private-test",
+                    activation_id="activation-0001",
+                    read=lambda request: {},
+                ),
+                tag="v0.1.0-rc.1",
+                skill_root=SKILL_ROOT,
+            )
+
+        private_release_adapter = rs._GitHubReleasePreflightAdapter(
+            seal=rs._RELEASE_ADAPTER_SEAL,
+            adapter_id="github-adapter:private-test",
+            activation_id="activation-0001",
+            repository=rs.SKILL_SOURCE_REPOSITORY,
+            repository_id=123,
+            owner_actor=OWNER_ACTOR,
+            read=lambda request: {},
+            capability_token=object(),
+        )
+        with self.assertRaises(rs.ScopeError):
+            rs.execute_release_preflight(private_release_adapter, tag="v0.1.0-rc.1", skill_root=SKILL_ROOT)
+
+        foreign = release_adapter(
+            lambda request: {},
+            value=state(),
+            repository="owner/project",
+        )
+        with self.assertRaises(rs.ScopeError):
+            rs.execute_release_preflight(foreign, tag="v0.1.0-rc.1", skill_root=SKILL_ROOT)
+
+    def test_release_receipt_is_immutable_integrity_bound_and_one_shot(self):
+        receipt = release_receipt()
+        with self.assertRaises(AttributeError):
+            receipt.tag = "v9.9.9-rc.1"
+        object.__setattr__(receipt, "source_sha", "f" * 40)
+        with self.assertRaises(rs.ScopeError):
+            rs.validate_release_contract(receipt)
+
+        receipt = release_receipt()
+        accepted, rejected = [], []
+
+        def consume():
+            try:
+                accepted.append(rs.validate_release_contract(receipt))
+            except rs.ScopeError as error:
+                rejected.append(error)
+
+        threads = [threading.Thread(target=consume), threading.Thread(target=consume)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(len(rejected), 1)
 
     def test_rejects_non_append_only_or_incomplete_history(self):
         rc1 = {"tag": "v0.1.0-rc.1", "source_sha": SHA_A, "approval_id": "approval-old-1", "rc_approved": True}

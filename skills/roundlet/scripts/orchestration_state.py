@@ -23,7 +23,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
+from types import MappingProxyType
 from urllib.parse import urlparse
 
 
@@ -4018,7 +4020,11 @@ class IssueSnapshot:
 
 _CONNECTOR_ADAPTER_SEAL = object()
 _CONNECTOR_REFRESH_SEAL = object()
+_RELEASE_ADAPTER_SEAL = object()
+_RELEASE_EVIDENCE_SEAL = object()
+_RELEASE_ADAPTER_TOKENS: set[object] = set()
 CONNECTOR_REFRESH_OPERATION = "complete-scope-refresh"
+RELEASE_PREFLIGHT_OPERATION = "release-preflight"
 
 
 class _GitHubConnectorReadAdapter:
@@ -4042,22 +4048,85 @@ class _GitHubConnectorReadAdapter:
         self.read = read
 
 
-_RELEASE_EVIDENCE_SEAL = object()
-RELEASE_PREFLIGHT_OPERATION = "release-preflight"
+class _GitHubReleasePreflightAdapter:
+    """Process-local capability restricted to one repository and release preflight."""
+
+    __slots__ = ("_seal", "_capability_token", "adapter_id", "activation_id", "repository", "repository_id", "owner_actor", "read")
+
+    def __init__(
+        self,
+        *,
+        seal: object,
+        adapter_id: str,
+        activation_id: str,
+        repository: str,
+        repository_id: int,
+        owner_actor: Mapping[str, Any],
+        read: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+        capability_token: object,
+    ) -> None:
+        if seal is not _RELEASE_ADAPTER_SEAL:
+            raise ScopeError("release preflight adapters require a release-specific service capability")
+        self._seal = seal
+        self._capability_token = capability_token
+        self.adapter_id = adapter_id
+        self.activation_id = activation_id
+        self.repository = repository
+        self.repository_id = repository_id
+        self.owner_actor = MappingProxyType(dict(owner_actor))
+        self.read = read
 
 
 class _ReleaseEvidenceReceipt:
     """Opaque, connector-bound release evidence; caller-built mappings are never authority."""
 
-    __slots__ = ("_seal", "tag", "source_sha", "approval_id")
+    __slots__ = (
+        "_seal", "_lock", "_consumed", "_initialized", "tag", "source_sha", "approval_id",
+        "service_receipt_id", "request_digest", "response_digest", "evidence_digest", "integrity_digest",
+    )
 
-    def __init__(self, *, seal: object, tag: str, source_sha: str, approval_id: str) -> None:
+    def __init__(
+        self,
+        *,
+        seal: object,
+        tag: str,
+        source_sha: str,
+        approval_id: str,
+        service_receipt_id: str,
+        request_digest: str,
+        response_digest: str,
+        evidence_digest: str,
+    ) -> None:
         if seal is not _RELEASE_EVIDENCE_SEAL:
             raise ScopeError("release evidence must be issued by the connector read gateway")
-        self._seal = seal
-        self.tag = tag
-        self.source_sha = source_sha
-        self.approval_id = approval_id
+        object.__setattr__(self, "_seal", seal)
+        object.__setattr__(self, "_lock", threading.Lock())
+        object.__setattr__(self, "_consumed", False)
+        object.__setattr__(self, "_initialized", False)
+        for name, value in (
+            ("tag", tag), ("source_sha", source_sha), ("approval_id", approval_id),
+            ("service_receipt_id", service_receipt_id), ("request_digest", request_digest),
+            ("response_digest", response_digest), ("evidence_digest", evidence_digest),
+        ):
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "integrity_digest", digest_json(self._integrity_fields()))
+        object.__setattr__(self, "_initialized", True)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        if getattr(self, "_initialized", False):
+            raise AttributeError("release evidence receipts are immutable")
+        object.__setattr__(self, name, value)
+
+    def _integrity_fields(self) -> dict[str, Any]:
+        return {
+            "tag": self.tag,
+            "source_sha": self.source_sha,
+            "approval_id": self.approval_id,
+            "service_receipt_id": self.service_receipt_id,
+            "request_digest": self.request_digest,
+            "response_digest": self.response_digest,
+            "evidence_digest": self.evidence_digest,
+        }
 
 
 def bind_github_connector_read_adapter(
@@ -4127,21 +4196,90 @@ def bind_github_connector_read_adapter(
     )
 
 
+def bind_github_release_preflight_adapter(
+    state: Mapping[str, Any],
+    *,
+    service_receipt: Mapping[str, Any],
+    read_connector: Callable[[Mapping[str, Any]], Mapping[str, Any]],
+) -> _GitHubReleasePreflightAdapter:
+    """Bind a release-only GitHub capability to the activated repository and owner."""
+    required = {
+        "verified_by_service", "connector", "operation", "adapter_id", "activation_id",
+        "repository", "repository_id", "orchestrator_thread_id", "project_identity",
+        "created_at", "receipt_digest",
+    }
+    if not isinstance(service_receipt, Mapping) or set(service_receipt) != required:
+        raise ValidationError("release preflight adapter requires exact service capability metadata")
+    core = {key: copy.deepcopy(value) for key, value in service_receipt.items() if key != "receipt_digest"}
+    if require_content_digest(service_receipt.get("receipt_digest"), "release adapter receipt digest") != digest_json(core):
+        raise ScopeError("release adapter capability receipt digest is invalid")
+    if (
+        service_receipt.get("verified_by_service") is not True
+        or service_receipt.get("connector") != "github"
+        or service_receipt.get("operation") != RELEASE_PREFLIGHT_OPERATION
+    ):
+        raise ScopeError("service did not verify the required GitHub release preflight adapter")
+    activation = state.get("activation", {})
+    if activation.get("capability_preflight", {}).get("connector_read_adapter_receipts") is not True:
+        raise ScopeError("activation cannot prove connector adapter receipt enforcement")
+    if service_receipt.get("activation_id") != activation.get("id"):
+        raise ScopeError("release adapter capability belongs to another activation")
+    assert_repository_target(
+        activation.get("repository", {}),
+        str(service_receipt.get("repository", "")),
+        target_repository_id=service_receipt.get("repository_id"),
+    )
+    orchestrator = activation.get("orchestrator_creation_receipt", {})
+    if (
+        service_receipt.get("orchestrator_thread_id") != activation.get("orchestrator_thread_id")
+        or service_receipt.get("project_identity") != orchestrator.get("project_identity")
+    ):
+        raise ScopeError("release adapter capability is not bound to the active Orchestrator project")
+    adapter_id = service_receipt.get("adapter_id")
+    if not isinstance(adapter_id, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{7,127}", adapter_id):
+        raise ValidationError("release adapter ID is malformed")
+    parse_utc_timestamp(service_receipt.get("created_at"), "release adapter creation time")
+    if not callable(read_connector):
+        raise ValidationError("release adapter callback is unavailable")
+    owner_actor = validate_owner_actor(activation.get("owner_actor", {}))
+    repository = normalize_owner_name(str(service_receipt["repository"]))
+    repository_id = require_positive_issue(service_receipt["repository_id"], "release repository ID")
+    capability_token = object()
+    _RELEASE_ADAPTER_TOKENS.add(capability_token)
+    return _GitHubReleasePreflightAdapter(
+        seal=_RELEASE_ADAPTER_SEAL,
+        adapter_id=adapter_id,
+        activation_id=str(activation["id"]),
+        repository=repository,
+        repository_id=repository_id,
+        owner_actor=owner_actor,
+        read=read_connector,
+        capability_token=capability_token,
+    )
+
+
 def execute_release_preflight(
-    adapter: _GitHubConnectorReadAdapter,
+    adapter: _GitHubReleasePreflightAdapter,
     *,
     tag: str,
     skill_root: str | os.PathLike[str],
 ) -> _ReleaseEvidenceReceipt:
     """Read and seal exact GitHub evidence for one prospective release tag."""
     parsed_tag = parse_release_tag(tag)
-    if not isinstance(adapter, _GitHubConnectorReadAdapter) or adapter._seal is not _CONNECTOR_ADAPTER_SEAL:
-        raise ScopeError("release preflight requires a service-issued GitHub adapter capability")
+    if (
+        not isinstance(adapter, _GitHubReleasePreflightAdapter)
+        or adapter._seal is not _RELEASE_ADAPTER_SEAL
+        or adapter._capability_token not in _RELEASE_ADAPTER_TOKENS
+    ):
+        raise ScopeError("release preflight requires a release-specific service-issued GitHub adapter capability")
+    if adapter.repository != SKILL_SOURCE_REPOSITORY:
+        raise ScopeError("release preflight adapter is bound to another repository")
     request = {
         "operation": RELEASE_PREFLIGHT_OPERATION,
         "adapter_id": adapter.adapter_id,
         "activation_id": adapter.activation_id,
-        "repository": SKILL_SOURCE_REPOSITORY,
+        "repository": adapter.repository,
+        "repository_id": adapter.repository_id,
         "tag": parsed_tag["tag"],
     }
     response = adapter.read(copy.deepcopy(request))
@@ -4166,16 +4304,33 @@ def execute_release_preflight(
     core = {key: copy.deepcopy(value) for key, value in response.items() if key != "response_digest"}
     if require_content_digest(response.get("response_digest"), "release preflight response digest") != digest_json(core):
         raise ScopeError("release preflight response digest is invalid")
-    _validate_release_evidence(response["evidence"], parsed_tag["tag"], skill_root)
+    _validate_release_evidence(
+        response["evidence"],
+        parsed_tag["tag"],
+        skill_root,
+        authorized_owner_actor=adapter.owner_actor,
+        repository_id=adapter.repository_id,
+    )
     return _ReleaseEvidenceReceipt(
         seal=_RELEASE_EVIDENCE_SEAL,
         tag=parsed_tag["tag"],
         source_sha=response["evidence"]["source"]["sha"],
         approval_id=response["evidence"]["approval"]["id"],
+        service_receipt_id=receipt_id,
+        request_digest=response["request_digest"],
+        response_digest=response["response_digest"],
+        evidence_digest=digest_json(response["evidence"]),
     )
 
 
-def _validate_release_evidence(evidence: Any, tag: str, skill_root: str | os.PathLike[str]) -> None:
+def _validate_release_evidence(
+    evidence: Any,
+    tag: str,
+    skill_root: str | os.PathLike[str],
+    *,
+    authorized_owner_actor: Mapping[str, Any],
+    repository_id: int,
+) -> None:
     required = {"repository", "source", "required_checks", "release_environment", "approval", "approved_rc_tag", "history", "release_notes"}
     if not isinstance(evidence, Mapping) or set(evidence) != required:
         raise ValidationError("release evidence has unknown or missing fields")
@@ -4184,7 +4339,8 @@ def _validate_release_evidence(evidence: Any, tag: str, skill_root: str | os.Pat
         raise ValidationError("release evidence repository is malformed")
     if normalize_owner_name(str(repository.get("owner_name", ""))) != SKILL_SOURCE_REPOSITORY:
         raise ScopeError("release evidence identifies another repository")
-    require_positive_issue(repository.get("repository_id"), "release repository ID")
+    if require_positive_issue(repository.get("repository_id"), "release repository ID") != repository_id:
+        raise ScopeError("release evidence repository ID does not match the release adapter")
     source = evidence["source"]
     if not isinstance(source, Mapping) or set(source) != {"sha", "reachable_from_protected_main", "main_protected", "worktree_clean", "installed_skill_digest", "versions"}:
         raise ValidationError("release source evidence is malformed")
@@ -4213,14 +4369,28 @@ def _validate_release_evidence(evidence: Any, tag: str, skill_root: str | os.Pat
         if result.get("sha") != sha or result.get("conclusion") != "success":
             raise ScopeError("release required checks must succeed for the exact source SHA")
     environment = evidence["release_environment"]
-    if not isinstance(environment, Mapping) or environment != {"name": "release", "protected": True}:
+    if (
+        not isinstance(environment, Mapping)
+        or set(environment) != {"name", "protected", "approval_id"}
+        or environment.get("name") != "release"
+        or environment.get("protected") is not True
+        or not isinstance(environment.get("approval_id"), str)
+        or not environment["approval_id"]
+    ):
         raise ScopeError("release environment is not protected")
     approval = evidence["approval"]
-    if not isinstance(approval, Mapping) or set(approval) != {"id", "tag", "source_sha", "owner_actor"}:
+    if not isinstance(approval, Mapping) or set(approval) != {"id", "tag", "source_sha", "owner_actor", "environment_approval_id"}:
         raise ValidationError("release approval evidence is malformed")
-    if not isinstance(approval.get("id"), str) or not approval["id"] or approval.get("tag") != tag or approval.get("source_sha") != sha:
+    if (
+        not isinstance(approval.get("id"), str)
+        or not approval["id"]
+        or approval.get("tag") != tag
+        or approval.get("source_sha") != sha
+        or approval.get("environment_approval_id") != environment["approval_id"]
+    ):
         raise ScopeError("release approval is not bound to the exact tag and source SHA")
-    validate_owner_actor(approval["owner_actor"])
+    if validate_owner_actor(approval["owner_actor"]) != dict(authorized_owner_actor):
+        raise ScopeError("release approval was not issued by the activation-authorized owner")
     _validate_release_history(evidence["history"], tag, sha, approval["id"], evidence["approved_rc_tag"])
     notes = evidence["release_notes"]
     if not isinstance(notes, Mapping) or set(notes) != RELEASE_NOTE_FIELDS or notes.get("tag") != tag or notes.get("source_sha") != sha:
@@ -4315,10 +4485,23 @@ def _validate_release_history(history: Any, tag: str, sha: str, approval_id: str
 
 
 def validate_release_contract(receipt: _ReleaseEvidenceReceipt) -> dict[str, Any]:
+    """Atomically consume one validated preflight receipt for a later release operation."""
     if not isinstance(receipt, _ReleaseEvidenceReceipt) or receipt._seal is not _RELEASE_EVIDENCE_SEAL:
         raise ScopeError("release validation requires an opaque connector evidence receipt")
-    parsed = parse_release_tag(receipt.tag)
-    return {"tag": receipt.tag, "source_sha": receipt.source_sha, "approval_id": receipt.approval_id, "release_line": parsed["line"], "release_candidate": parsed["rc"]}
+    with receipt._lock:
+        if digest_json(receipt._integrity_fields()) != receipt.integrity_digest:
+            raise ScopeError("release evidence receipt integrity is invalid")
+        if receipt._consumed:
+            raise ScopeError("release evidence receipt has already been consumed")
+        parsed = parse_release_tag(receipt.tag)
+        object.__setattr__(receipt, "_consumed", True)
+        return {
+            "tag": receipt.tag,
+            "source_sha": receipt.source_sha,
+            "approval_id": receipt.approval_id,
+            "release_line": parsed["line"],
+            "release_candidate": parsed["rc"],
+        }
 
 
 class _ConnectorRefreshReceipt:
