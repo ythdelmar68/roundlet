@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 import shutil
@@ -42,6 +43,7 @@ SHA_B = "b" * 40
 SHA_C = "c" * 40
 SHA_D = "d" * 40
 DIGEST = rs.skill_content_digest(SKILL_ROOT)
+APACHE_2_LICENSE_SHA256 = "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
 REFRESH_TIME = "2026-07-14T01:00:00Z"
 OWNER_ACTOR = {
     "id": 7,
@@ -3968,6 +3970,14 @@ class SkillDigestTests(unittest.TestCase):
             operator_guide.rename(operator_guide.with_name("operator-manual.md"))
             self.assertNotEqual(rs.skill_content_digest(copied_root), baseline)
 
+    def test_skill_digest_changes_when_payload_license_changes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            copied_root = self.copy_skill(temporary, "roundlet")
+            baseline = rs.skill_content_digest(copied_root)
+            license_path = copied_root / "LICENSE"
+            license_path.write_bytes(license_path.read_bytes() + b"\nroundlet-license-digest-regression\n")
+            self.assertNotEqual(rs.skill_content_digest(copied_root), baseline)
+
     def test_skill_digest_ignores_python_cache_artifacts(self):
         with tempfile.TemporaryDirectory() as temporary:
             copied_root = self.copy_skill(temporary, "roundlet")
@@ -4488,6 +4498,7 @@ class StaticSkillTests(unittest.TestCase):
             ".github/workflows/ci.yml",
             ".gitignore",
             "AGENTS.md",
+            "LICENSE",
             "tests/test_orchestration_state.py",
         }
         actual = {
@@ -4516,6 +4527,7 @@ class StaticSkillTests(unittest.TestCase):
     def test_publishable_skill_contract(self):
         expected = {
             "SKILL.md",
+            "LICENSE",
             "agents/openai.yaml",
             "assets/roundlet.rules",
             "assets/roundlet-config.json",
@@ -4533,6 +4545,22 @@ class StaticSkillTests(unittest.TestCase):
         self.assertEqual(actual, expected)
         for excluded in ("tests", "AGENTS.md", ".gitignore"):
             self.assertFalse((SKILL_ROOT / excluded).exists())
+
+    def test_root_and_payload_licenses_are_identical_canonical_apache_text(self):
+        root_license = (REPO_ROOT / "LICENSE").read_bytes()
+        payload_license = (SKILL_ROOT / "LICENSE").read_bytes()
+        self.assertEqual(payload_license, root_license)
+        self.assertEqual(hashlib.sha256(root_license).hexdigest(), APACHE_2_LICENSE_SHA256)
+
+    def test_skill_only_install_contains_the_license(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            destination = Path(temporary) / "skills" / "roundlet"
+            destination.parent.mkdir(parents=True)
+            shutil.copytree(SKILL_ROOT, destination)
+            self.assertEqual(
+                (destination / "LICENSE").read_bytes(),
+                (REPO_ROOT / "LICENSE").read_bytes(),
+            )
 
     def test_role_model_literals_exist_only_in_configuration(self):
         for path in SKILL_ROOT.rglob("*"):

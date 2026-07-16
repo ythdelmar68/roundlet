@@ -5621,7 +5621,7 @@ def skill_content_digest(skill_root: str | os.PathLike[str]) -> str:
     if not (root / "SKILL.md").is_file():
         raise ValidationError("skill root does not contain SKILL.md")
     hasher = hashlib.sha256()
-    included_roots = {"SKILL.md", "agents", "scripts", "references", "assets"}
+    included_roots = {"SKILL.md", "LICENSE", "agents", "scripts", "references", "assets"}
     files = [
         path
         for path in root.rglob("*")
