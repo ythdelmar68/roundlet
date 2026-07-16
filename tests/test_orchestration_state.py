@@ -409,6 +409,16 @@ def pass_identity_for(value, candidate=SHA_B):
         value["review"]["supervisor_thread_ids"] = ["supervisor-pass"]
         value["review"]["unarchived_supervisor_thread_ids"] = ["supervisor-pass"]
         value["review"]["last_supervisor_created_at"] = "2026-07-14T00:00:00Z"
+        value["review"]["supervisor_creation_receipts"] = [
+            role_receipt("supervisor", "supervisor-pass", created_at="2026-07-14T00:00:00Z")
+        ]
+        value["review"]["completed_supervisor_count"] = 1
+        value["review"]["completed_supervisor_results"] = [
+            {"thread_id": "supervisor-pass", "generation": 1, "result": "PASS"}
+        ]
+        value["review"]["completed_supervisor_digest"] = rs.fold_archive_digest(
+            "0" * 64, value["review"]["completed_supervisor_results"]
+        )
     return {
         "activation_id": value["activation"]["id"],
         "repository": value["activation"]["repository"]["owner_name"],
@@ -1455,7 +1465,7 @@ class StateMachineTests(unittest.TestCase):
         equality["review"].update(
             {"round": 2, "archived_supervisor_count": 2, "last_supervisor_created_at": "2026-07-14T00:00:00.000002Z"}
         )
-        self.assertEqual(rs.preflight_supervisor_creation(equality)["guidance"]["mode"], "COMPLETE")
+        self.assertEqual(rs.supervisor_review_guidance(equality)["mode"], "COMPLETE")
 
     def test_maintenance_discard_does_not_advance_convergence(self):
         value = assigned_state()
@@ -1552,6 +1562,43 @@ class StateMachineTests(unittest.TestCase):
             rs.atomic_write_json(store.path, tampered)
             with self.assertRaisesRegex(rs.ValidationError, "durable result evidence"):
                 store.load()
+
+    def test_unarchived_supervisor_must_be_the_exact_latest_completion(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for generation in (1, 2):
+            thread_id = f"supervisor-boundary-{generation}"
+            begin_review(value, thread_id)
+            rs.accept_supervisor_result(
+                value,
+                thread_id=thread_id,
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=[f"finding-{generation}"],
+            )
+            rs.record_supervisor_archived(value, supervisor_thread_id=thread_id)
+            rs.set_candidate(value, SHA_B, clean=True)
+        begin_review(value, "supervisor-boundary-3")
+        rs.accept_supervisor_result(
+            value,
+            thread_id="supervisor-boundary-3",
+            candidate_sha=SHA_B,
+            result="FINDINGS",
+            non_blocking_items=["finding-3"],
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            tampered = store.load()
+            tampered["review"]["unarchived_supervisor_thread_ids"] = ["supervisor-boundary-1"]
+            rs.atomic_write_json(store.path, tampered)
+            with self.assertRaisesRegex(rs.ValidationError, "unarchived Supervisor is not the latest"):
+                store.load()
+            with self.assertRaisesRegex(rs.ScopeError, "does not match an unarchived review thread"):
+                rs.record_supervisor_archived(tampered, supervisor_thread_id="supervisor-boundary-1")
+            with self.assertRaisesRegex(rs.ValidationError, "unarchived Supervisor is not the latest"):
+                rs.preflight_supervisor_creation(tampered)
 
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
@@ -2579,6 +2626,71 @@ class MaintenanceTests(unittest.TestCase):
         denied["phase"] = "draft-pr"
         with self.assertRaisesRegex(rs.GuardError, "budget is exhausted"):
             rs.preflight_supervisor_creation(denied)
+
+    def test_schema_six_durable_migration_rebinds_the_reviewed_installation(self):
+        old = assigned_state()
+        old["task"]["active_role"] = None
+        downgrade_to_schema6(old)
+        rs.request_maintenance(old, "schema-9 installation migration")
+        rs.create_maintenance_checkpoint(
+            old, checkpoint_id="checkpoint-001", schedule_id="schedule-1", schedule_state="paused"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            target_root = Path(temporary) / "roundlet"
+            shutil.copytree(SKILL_ROOT, target_root)
+            operator_guide = target_root / "references" / "operator-guide.md"
+            operator_guide.write_text(
+                operator_guide.read_text(encoding="utf-8") + "\n\nTarget installation binding regression.\n",
+                encoding="utf-8",
+            )
+            target_digest = rs.skill_content_digest(target_root)
+            self.assertNotEqual(target_digest, DIGEST)
+            store = rs.StateStore(Path(temporary) / "state")
+            rs.atomic_write_json(store.path, old)
+            original_bytes = store.path.read_bytes()
+            with self.assertRaisesRegex(rs.MigrationError, "skill root does not match"):
+                store.migrate(
+                    activation_id="activation-0001",
+                    checkpoint_id="checkpoint-001",
+                    schedule_id="schedule-1",
+                    expected_installed_digest=target_digest,
+                    expected_from_schema=6,
+                    skill_root=SKILL_ROOT,
+                )
+            self.assertEqual(store.path.read_bytes(), original_bytes)
+            migrated = store.migrate(
+                activation_id="activation-0001",
+                checkpoint_id="checkpoint-001",
+                schedule_id="schedule-1",
+                expected_installed_digest=target_digest,
+                expected_from_schema=6,
+                skill_root=target_root,
+            )
+            self.assertEqual(migrated["skill"]["content_digest"], target_digest)
+            self.assertEqual(migrated["maintenance"]["installed_digest"], target_digest)
+            self.assertEqual(
+                migrated["maintenance"]["migration_receipt"]["original_installed_digest"], DIGEST
+            )
+            self.assertEqual(
+                migrated["maintenance"]["migration_receipt"]["migrated_installed_digest"], target_digest
+            )
+            with self.assertRaisesRegex(rs.ValidationError, "maintenance resume digest"):
+                rs.resume_maintenance(
+                    migrated,
+                    checkpoint_id="checkpoint-001",
+                    installed_roundlet_digest=DIGEST,
+                    current_versions=migrated["versions"],
+                    repository_identity=identity(),
+                    schedule_id="schedule-1",
+                )
+            rs.resume_maintenance(
+                migrated,
+                checkpoint_id="checkpoint-001",
+                installed_roundlet_digest=target_digest,
+                current_versions=migrated["versions"],
+                repository_identity=identity(),
+                schedule_id="schedule-1",
+            )
 
     def test_schema_six_durable_migration_rejects_stale_policy_or_scope_atomically(self):
         for tamper in ("policy", "scope"):

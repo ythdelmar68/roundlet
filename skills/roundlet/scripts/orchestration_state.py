@@ -1362,6 +1362,10 @@ def validate_state(state: Mapping[str, Any]) -> None:
         raise ValidationError("Supervisor round exceeds the activation review budget")
     if review_round != archived_count + len(unarchived_thread_ids):
         raise ValidationError("Supervisor round count differs from archived and active receipts")
+    if len(unarchived_thread_ids) > 1:
+        raise ValidationError("only the latest Supervisor may remain unarchived")
+    if unarchived_thread_ids and unarchived_thread_ids[0] != thread_ids[-1]:
+        raise ValidationError("unarchived Supervisor is not the latest fresh task")
     completed_count = review.get("completed_supervisor_count")
     if (
         isinstance(completed_count, bool)
@@ -1407,12 +1411,24 @@ def validate_state(state: Mapping[str, Any]) -> None:
     accepted_but_unarchived = completed_count - archived_count
     if accepted_but_unarchived > 1:
         raise ValidationError("completed Supervisor count differs from archival evidence")
-    if accepted_but_unarchived == 1 and (
-        len(unarchived_thread_ids) != 1
-        or current_supervisor is not None
-        or review.get("last_result") not in {"PASS", "FINDINGS"}
-    ):
-        raise ValidationError("completed Supervisor result lacks an unarchived archival boundary")
+    if unarchived_thread_ids:
+        latest_thread = unarchived_thread_ids[0]
+        if current_supervisor is not None:
+            if current_supervisor != latest_thread:
+                raise ValidationError("active Supervisor boundary is not an uncompleted latest task")
+        else:
+            latest_completion = completed_results[-1] if completed_results else None
+            if (
+                review.get("last_result") not in {None, "PASS", "FINDINGS"}
+                or not isinstance(latest_completion, Mapping)
+                or latest_completion.get("thread_id") != latest_thread
+                or latest_completion.get("generation") != review_round
+                or (
+                    review.get("last_result") is not None
+                    and latest_completion.get("result") != review.get("last_result")
+                )
+            ):
+                raise ValidationError("completed Supervisor result lacks an exact unarchived boundary")
     exhaustion = review.get("exhaustion")
     if exhaustion is not None:
         if legacy_unbounded_review:
@@ -2178,6 +2194,10 @@ def supervisor_review_guidance(state: Mapping[str, Any]) -> dict[str, Any]:
 
 def preflight_supervisor_creation(state: Mapping[str, Any], *, final: bool = False) -> dict[str, Any]:
     """Validate deterministic review capacity before any external task creation."""
+    # The pure guard is also used by callers that have not yet opened the
+    # StateStore gateway.  Validate the durable review boundary first so a
+    # swapped historical receipt cannot turn into a new task-creation intent.
+    validate_state(state)
     task = state.get("task")
     if not isinstance(task, Mapping) or not task.get("candidate_sha"):
         raise TransitionError("Supervisor requires an immutable candidate")
@@ -2459,6 +2479,8 @@ def record_supervisor_archived(
         not isinstance(thread_ids, list)
         or not isinstance(unarchived, list)
         or supervisor_thread_id not in unarchived
+        or not thread_ids
+        or supervisor_thread_id != thread_ids[-1]
     ):
         raise ScopeError("Supervisor archival receipt does not match an unarchived review thread")
     review["unarchived_supervisor_thread_ids"] = [
@@ -3484,6 +3506,10 @@ def resume_maintenance(
         if checkpoint_id != maintenance.get("checkpoint_id"):
             raise ValidationError("checkpoint_id does not match")
         new_digest = require_content_digest(installed_roundlet_digest)
+        receipt = maintenance.get("migration_receipt")
+        if isinstance(receipt, Mapping) and "migrated_installed_digest" in receipt:
+            if new_digest != receipt.get("migrated_installed_digest"):
+                raise ValidationError("maintenance resume digest does not match the migrated installation")
         if maintenance.get("installed_digest") != state["skill"]["content_digest"]:
             raise ValidationError("checkpoint installed digest differs from paused state")
         if maintenance.get("stored_versions") != state.get("versions"):
@@ -3777,6 +3803,8 @@ def _migrate_state_document(
         raise MigrationError("state versions are missing")
     current = versions.get("schema")
     original_versions = copy.deepcopy(dict(versions))
+    migration_original_installed_digest: str | None = None
+    migration_target_installed_digest: str | None = None
     config = (
         load_role_model_config(Path(__file__).resolve().parents[1])
         if role_model_config is None
@@ -4067,6 +4095,19 @@ def _migrate_state_document(
                 legacy_review_authority=legacy_authority,
             )
         )
+        if installed_roundlet_digest is not None and original_versions.get("schema", 0) >= 5:
+            skill = result.get("skill")
+            if not isinstance(skill, MutableMapping):
+                raise MigrationError("schema-6 skill identity is missing")
+            migration_original_installed_digest = require_content_digest(
+                skill.get("content_digest"), "schema-6 installed digest"
+            )
+            migration_target_installed_digest = require_content_digest(
+                installed_roundlet_digest, "migrated installed digest"
+            )
+            # Validate the predecessor with its old binding, then atomically
+            # carry every successor scope forward under the reviewed target.
+            skill["content_digest"] = migration_target_installed_digest
         activation = result.get("activation")
         if not isinstance(activation, MutableMapping):
             raise MigrationError("schema-6 activation identity is missing")
@@ -4124,6 +4165,17 @@ def _migrate_state_document(
 
     if current == 7 and target_version >= 8:
         _validate_schema7_predecessor(result)
+        if installed_roundlet_digest is not None and original_versions.get("schema", 0) >= 7:
+            skill = result.get("skill")
+            if not isinstance(skill, MutableMapping):
+                raise MigrationError("schema-7 skill identity is missing")
+            migration_original_installed_digest = require_content_digest(
+                skill.get("content_digest"), "schema-7 installed digest"
+            )
+            migration_target_installed_digest = require_content_digest(
+                installed_roundlet_digest, "migrated installed digest"
+            )
+            skill["content_digest"] = migration_target_installed_digest
         activation = result.get("activation")
         review = result.get("review")
         if not isinstance(activation, MutableMapping) or not isinstance(review, MutableMapping):
@@ -4170,6 +4222,17 @@ def _migrate_state_document(
 
     if current == 8 and target_version >= 9:
         _validate_schema8_predecessor(result)
+        if installed_roundlet_digest is not None and original_versions.get("schema", 0) >= 8:
+            skill = result.get("skill")
+            if not isinstance(skill, MutableMapping):
+                raise MigrationError("schema-8 skill identity is missing")
+            migration_original_installed_digest = require_content_digest(
+                skill.get("content_digest"), "schema-8 installed digest"
+            )
+            migration_target_installed_digest = require_content_digest(
+                installed_roundlet_digest, "migrated installed digest"
+            )
+            skill["content_digest"] = migration_target_installed_digest
         activation = result.get("activation")
         review = result.get("review")
         if not isinstance(activation, MutableMapping) or not isinstance(review, MutableMapping):
@@ -4217,6 +4280,27 @@ def _migrate_state_document(
 
     if current != target_version:
         raise MigrationError(f"no supported migration from schema {current} to {target_version}")
+    if migration_original_installed_digest is not None:
+        maintenance = result.get("maintenance")
+        if result.get("phase") == "paused-maintenance" and isinstance(maintenance, MutableMapping):
+            if migration_target_installed_digest is None:
+                raise MigrationError("migration target installed digest is missing")
+            maintenance["installed_digest"] = migration_target_installed_digest
+            maintenance["migrated_from_versions"] = original_versions
+            maintenance["stored_versions"] = copy.deepcopy(dict(versions))
+            prior_receipt = maintenance.get("migration_receipt")
+            receipt = dict(prior_receipt) if isinstance(prior_receipt, Mapping) else {}
+            receipt.update(
+                {
+                    "from_schema": original_versions.get("schema"),
+                    "to_schema": current,
+                    "input_digest": digest_json(document),
+                    "original_installed_digest": migration_original_installed_digest,
+                    "migrated_installed_digest": migration_target_installed_digest,
+                    "migrated_at": utc_now(),
+                }
+            )
+            maintenance["migration_receipt"] = receipt
     return result
 
 
