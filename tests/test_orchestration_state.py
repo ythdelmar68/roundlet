@@ -3993,6 +3993,43 @@ class PersistenceAndMailboxTests(unittest.TestCase):
             store.initialize(state())
             self.assertEqual(store.load()["activation"]["id"], "activation-0001")
 
+    def test_archive_authority_partial_write_recovers_to_consistent_prior_state(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            durable = store.load()
+            begin_review(durable, "supervisor-archive-transaction")
+            rs.accept_supervisor_result(
+                durable,
+                thread_id="supervisor-archive-transaction",
+                candidate_sha=SHA_B,
+                result="FINDINGS",
+                non_blocking_items=["repair required"],
+            )
+            rs.record_supervisor_archived(
+                durable, supervisor_thread_id="supervisor-archive-transaction"
+            )
+            original_write = rs.atomic_write_json
+
+            def fail_state_replace(path, value, **kwargs):
+                if Path(path) == store.path:
+                    raise OSError("injected state replacement interruption")
+                return original_write(path, value, **kwargs)
+
+            with mock.patch.object(rs, "atomic_write_json", side_effect=fail_state_replace):
+                with self.assertRaisesRegex(OSError, "state replacement interruption"):
+                    store.save(durable)
+            self.assertTrue(store.supervisor_archive_transaction_path.exists())
+            recovered = store.load()
+            self.assertFalse(store.supervisor_archive_transaction_path.exists())
+            self.assertEqual(recovered["review"]["round"], 0)
+            self.assertEqual(recovered["review"]["archived_supervisor_count"], 0)
+            self.assertEqual(recovered["review"]["archived_supervisor_outcomes"], [])
+            rs.preflight_supervisor_creation(recovered)
+
     def test_oversized_state_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
             value = state()

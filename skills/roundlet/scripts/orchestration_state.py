@@ -35,6 +35,8 @@ STATE_FILENAME = "state.json"
 LEGACY_REVIEW_AUTHORITY_FILENAME = ".legacy-review-authority.json"
 SUPERVISOR_ARCHIVE_AUTHORITY_FILENAME = ".supervisor-archive-authority.json"
 SUPERVISOR_ARCHIVE_AUTHORITY_SCHEMA = 1
+SUPERVISOR_ARCHIVE_TRANSACTION_FILENAME = ".supervisor-archive-transaction.json"
+SUPERVISOR_ARCHIVE_TRANSACTION_SCHEMA = 1
 SUMMARY_FILENAME = "last-scope-summary.json"
 MAILBOX_NAMES = {
     "github-context": "github-context.json",
@@ -1931,6 +1933,42 @@ def _advance_supervisor_archive_authority(
     return {**core, "authority_digest": digest_json(core)}
 
 
+def _archive_transaction(
+    old_state: Mapping[str, Any] | None,
+    new_state: Mapping[str, Any],
+    old_authority: Mapping[str, Any] | None,
+    new_authority: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        "schema_version": SUPERVISOR_ARCHIVE_TRANSACTION_SCHEMA,
+        "old_state_digest": None if old_state is None else digest_json(old_state),
+        "new_state_digest": digest_json(new_state),
+        "old_authority": copy.deepcopy(dict(old_authority)) if old_authority is not None else None,
+        "new_authority": copy.deepcopy(dict(new_authority)),
+    }
+
+
+def _validate_archive_transaction(transaction: Mapping[str, Any]) -> dict[str, Any]:
+    required = {
+        "schema_version", "old_state_digest", "new_state_digest", "old_authority", "new_authority"
+    }
+    if not isinstance(transaction, Mapping) or set(transaction) != required:
+        raise ScopeError("Supervisor archive transaction intent is malformed")
+    old_state_digest = transaction.get("old_state_digest")
+    if old_state_digest is not None and not CONTENT_DIGEST.fullmatch(str(old_state_digest)):
+        raise ScopeError("Supervisor archive transaction old state digest is malformed")
+    if (
+        transaction.get("schema_version") != SUPERVISOR_ARCHIVE_TRANSACTION_SCHEMA
+        or not CONTENT_DIGEST.fullmatch(str(transaction.get("new_state_digest")))
+    ):
+        raise ScopeError("Supervisor archive transaction state digest is malformed")
+    old_authority = transaction.get("old_authority")
+    if old_authority is not None:
+        _validate_supervisor_archive_authority(old_authority)
+    _validate_supervisor_archive_authority(transaction.get("new_authority", {}))
+    return copy.deepcopy(dict(transaction))
+
+
 class StateStore:
     def __init__(self, state_directory: str | os.PathLike[str]):
         self.directory = Path(state_directory)
@@ -1939,6 +1977,81 @@ class StateStore:
         self.supervisor_archive_authority_path = (
             self.directory / SUPERVISOR_ARCHIVE_AUTHORITY_FILENAME
         )
+        self.supervisor_archive_transaction_path = (
+            self.directory / SUPERVISOR_ARCHIVE_TRANSACTION_FILENAME
+        )
+
+    def _reconcile_supervisor_archive_transaction(self) -> None:
+        if not self.supervisor_archive_transaction_path.exists():
+            return
+        transaction = _validate_archive_transaction(
+            read_json(self.supervisor_archive_transaction_path, max_bytes=MAX_RECEIPT_BYTES)
+        )
+        state = read_json(self.path, max_bytes=MAX_STATE_BYTES) if self.path.exists() else None
+        authority = (
+            read_json(self.supervisor_archive_authority_path, max_bytes=MAX_RECEIPT_BYTES)
+            if self.supervisor_archive_authority_path.exists()
+            else None
+        )
+        state_digest = None if state is None else digest_json(state)
+        authority_digest = None if authority is None else digest_json(authority)
+        old_authority = transaction["old_authority"]
+        new_authority = transaction["new_authority"]
+        old_authority_digest = None if old_authority is None else digest_json(old_authority)
+        new_authority_digest = digest_json(new_authority)
+        old_state_digest = transaction["old_state_digest"]
+        new_state_digest = transaction["new_state_digest"]
+        if state_digest == old_state_digest and authority_digest == old_authority_digest:
+            self.supervisor_archive_transaction_path.unlink()
+            return
+        if state_digest == new_state_digest and authority_digest == new_authority_digest:
+            self.supervisor_archive_transaction_path.unlink()
+            return
+        if state_digest == old_state_digest and authority_digest == new_authority_digest:
+            if old_authority is None:
+                self.supervisor_archive_authority_path.unlink()
+            else:
+                atomic_write_json(
+                    self.supervisor_archive_authority_path,
+                    old_authority,
+                    max_bytes=MAX_RECEIPT_BYTES,
+                )
+            self.supervisor_archive_transaction_path.unlink()
+            return
+        if state_digest == new_state_digest and authority_digest == old_authority_digest:
+            atomic_write_json(
+                self.supervisor_archive_authority_path,
+                new_authority,
+                max_bytes=MAX_RECEIPT_BYTES,
+            )
+            self.supervisor_archive_transaction_path.unlink()
+            return
+        raise ScopeError("Supervisor archive transaction cannot reconcile durable state")
+
+    def _persist_state_and_supervisor_archive_authority(
+        self,
+        state: Mapping[str, Any],
+        authority: Mapping[str, Any],
+    ) -> None:
+        old_state = read_json(self.path, max_bytes=MAX_STATE_BYTES) if self.path.exists() else None
+        old_authority = (
+            read_json(self.supervisor_archive_authority_path, max_bytes=MAX_RECEIPT_BYTES)
+            if self.supervisor_archive_authority_path.exists()
+            else None
+        )
+        transaction = _archive_transaction(old_state, state, old_authority, authority)
+        atomic_write_json(
+            self.supervisor_archive_transaction_path,
+            transaction,
+            max_bytes=MAX_RECEIPT_BYTES,
+        )
+        atomic_write_json(
+            self.supervisor_archive_authority_path,
+            authority,
+            max_bytes=MAX_RECEIPT_BYTES,
+        )
+        atomic_write_json(self.path, state, max_bytes=MAX_STATE_BYTES)
+        self.supervisor_archive_transaction_path.unlink()
 
     def _read_supervisor_archive_authority(self, state: Mapping[str, Any]) -> dict[str, Any] | None:
         if not self.supervisor_archive_authority_path.exists():
@@ -1978,7 +2091,8 @@ class StateStore:
             finally:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
-    def load(self) -> dict[str, Any]:
+    def _load(self) -> dict[str, Any]:
+        self._reconcile_supervisor_archive_transaction()
         state = read_json(self.path, max_bytes=MAX_STATE_BYTES)
         archive_authority = self._read_supervisor_archive_authority(state)
         if state.get("activation", {}).get("legacy_unbounded_review") is True:
@@ -2006,7 +2120,11 @@ class StateStore:
         _validate_loaded_supervisor_archive_authority(state)
         return state
 
-    def save(self, state: Mapping[str, Any]) -> None:
+    def load(self) -> dict[str, Any]:
+        with self.single_writer():
+            return self._load()
+
+    def _save(self, state: Mapping[str, Any], *, initialize_authority: bool = False) -> None:
         validate_state(state)
         mutable = copy.deepcopy(dict(state))
         mutable.setdefault("timestamps", {})["updated_at"] = utc_now()
@@ -2014,48 +2132,51 @@ class StateStore:
             authority = getattr(state, "legacy_review_authority", None)
             mutable = _MigrationAuthorizedState(mutable, legacy_review_authority=authority)
         validate_state(mutable)
-        archive_authority = self._next_supervisor_archive_authority(mutable)
-        atomic_write_json(
-            self.supervisor_archive_authority_path,
-            archive_authority,
-            max_bytes=MAX_RECEIPT_BYTES,
+        archive_authority = (
+            _archive_authority_from_state(mutable)
+            if initialize_authority
+            else self._next_supervisor_archive_authority(mutable)
         )
-        atomic_write_json(self.path, mutable, max_bytes=MAX_STATE_BYTES)
+        self._persist_state_and_supervisor_archive_authority(mutable, archive_authority)
         if state.get("activation", {}).get("legacy_unbounded_review") is not True:
             try:
                 self.legacy_review_authority_path.unlink()
             except FileNotFoundError:
                 pass
 
+    def save(self, state: Mapping[str, Any]) -> None:
+        with self.single_writer():
+            self._save(state)
+
     def initialize(self, state: Mapping[str, Any], *, replace_completed_scope: bool = False) -> None:
-        replacement = copy.deepcopy(dict(state))
-        replacing_completed_scope = False
-        if self.path.exists():
-            existing = self.load()
-            if not replace_completed_scope or existing.get("phase") != "scope-complete":
-                raise ValidationError("state already exists; explicit reconciliation is required")
-            if existing["activation"]["id"] == state.get("activation", {}).get("id"):
-                raise ValidationError("next activation must use a fresh activation ID")
-            old_activation = existing["activation"]
-            new_activation = replacement.get("activation", {})
-            if old_activation.get("orchestrator_thread_id") != new_activation.get("orchestrator_thread_id"):
-                raise ScopeError("completed scope replacement must reuse the dedicated Orchestrator task")
-            old_repo = old_activation.get("repository", {})
-            new_repo = new_activation.get("repository", {})
-            for key in ("owner_name", "repository_id", "git_common_dir_fingerprint"):
-                if old_repo.get(key) != new_repo.get(key):
-                    raise ScopeError("completed scope replacement cannot cross repository identity")
-            replacement.setdefault("maintenance", {})["schedule_id"] = existing.get("maintenance", {}).get(
-                "schedule_id"
+        with self.single_writer():
+            replacement = copy.deepcopy(dict(state))
+            replacing_completed_scope = False
+            if self.path.exists():
+                existing = self._load()
+                if not replace_completed_scope or existing.get("phase") != "scope-complete":
+                    raise ValidationError("state already exists; explicit reconciliation is required")
+                if existing["activation"]["id"] == state.get("activation", {}).get("id"):
+                    raise ValidationError("next activation must use a fresh activation ID")
+                old_activation = existing["activation"]
+                new_activation = replacement.get("activation", {})
+                if old_activation.get("orchestrator_thread_id") != new_activation.get("orchestrator_thread_id"):
+                    raise ScopeError("completed scope replacement must reuse the dedicated Orchestrator task")
+                old_repo = old_activation.get("repository", {})
+                new_repo = new_activation.get("repository", {})
+                for key in ("owner_name", "repository_id", "git_common_dir_fingerprint"):
+                    if old_repo.get(key) != new_repo.get(key):
+                        raise ScopeError("completed scope replacement cannot cross repository identity")
+                replacement.setdefault("maintenance", {})["schedule_id"] = existing.get("maintenance", {}).get(
+                    "schedule_id"
+                )
+                replacing_completed_scope = True
+            self._save(
+                replacement,
+                initialize_authority=(
+                    replacing_completed_scope or not self.supervisor_archive_authority_path.exists()
+                ),
             )
-            replacing_completed_scope = True
-        if replacing_completed_scope or not self.supervisor_archive_authority_path.exists():
-            atomic_write_json(
-                self.supervisor_archive_authority_path,
-                _archive_authority_from_state(replacement),
-                max_bytes=MAX_RECEIPT_BYTES,
-            )
-        self.save(replacement)
 
     def transition(self, new_phase: str, *, expected_phase: str | None = None) -> dict[str, Any]:
         state = self.load()
@@ -2262,12 +2383,11 @@ class StateStore:
                     max_bytes=MAX_RECEIPT_BYTES,
                 )
             if migrated.get("versions", {}).get("schema") == SCHEMA_VERSION:
-                atomic_write_json(
-                    self.supervisor_archive_authority_path,
-                    _archive_authority_from_state(migrated),
-                    max_bytes=MAX_RECEIPT_BYTES,
+                self._persist_state_and_supervisor_archive_authority(
+                    migrated, _archive_authority_from_state(migrated)
                 )
-            atomic_write_json(self.path, migrated, max_bytes=MAX_STATE_BYTES)
+            else:
+                atomic_write_json(self.path, migrated, max_bytes=MAX_STATE_BYTES)
             return migrated
 
 
