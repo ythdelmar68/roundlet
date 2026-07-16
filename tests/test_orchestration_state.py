@@ -1672,6 +1672,52 @@ class StateMachineTests(unittest.TestCase):
                     tampered, supervisor_thread_id="supervisor-active-archived"
                 )
 
+    def test_discarded_supervisors_cannot_be_forged_into_completed_reviews(self):
+        value = assigned_state()
+        rs.set_candidate(value, SHA_B, clean=True)
+        record_draft(value)
+        for generation in range(1, 4):
+            thread_id = f"supervisor-discard-outcome-{generation}"
+            begin_review(value, thread_id)
+            rs.request_maintenance(value, "interrupt incomplete review")
+            rs.discard_supervisor_for_maintenance(value, supervisor_thread_id=thread_id)
+            rs.create_maintenance_checkpoint(
+                value,
+                checkpoint_id=f"checkpoint-{generation:03d}",
+                schedule_id="schedule-1",
+                schedule_state="paused",
+            )
+            rs.resume_maintenance(
+                value,
+                checkpoint_id=f"checkpoint-{generation:03d}",
+                installed_roundlet_digest=DIGEST,
+                current_versions=value["versions"],
+                repository_identity=identity(),
+                schedule_id="schedule-1",
+            )
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            store.initialize(value)
+            tampered = store.load()
+            review = tampered["review"]
+            review["completed_supervisor_count"] = 3
+            review["completed_supervisor_results"] = [
+                {
+                    "thread_id": f"supervisor-discard-outcome-{generation}",
+                    "generation": generation,
+                    "result": "FINDINGS",
+                }
+                for generation in range(1, 4)
+            ]
+            review["completed_supervisor_digest"] = rs.fold_archive_digest(
+                "0" * 64, review["completed_supervisor_results"]
+            )
+            rs.atomic_write_json(store.path, tampered)
+            with self.assertRaisesRegex(rs.ValidationError, "completed archive outcome"):
+                store.load()
+            with self.assertRaisesRegex(rs.ValidationError, "completed archive outcome"):
+                rs.preflight_supervisor_creation(tampered)
+
     def test_supervisor_creation_reconciles_a_durable_intent_after_interruption(self):
         value = assigned_state()
         rs.set_candidate(value, SHA_B, clean=True)
@@ -2763,6 +2809,51 @@ class MaintenanceTests(unittest.TestCase):
                 repository_identity=identity(),
                 schedule_id="schedule-1",
             )
+
+    def test_schema_nine_durable_migration_resets_unbound_archive_outcomes(self):
+        old = assigned_state()
+        old["task"]["active_role"] = None
+        rs.request_maintenance(old, "schema-10 outcome migration")
+        rs.create_maintenance_checkpoint(
+            old, checkpoint_id="checkpoint-001", schedule_id="schedule-1", schedule_state="paused"
+        )
+        old["versions"].update({"schema": 9, "protocol": "3", "review_contract": "7", "policy": "8"})
+        old["maintenance"]["stored_versions"] = copy.deepcopy(old["versions"])
+        old["review"].pop("archived_supervisor_outcomes")
+        old["review"].pop("archived_supervisor_outcome_digest")
+        activation = old["activation"]
+        activation["scope_digest"] = rs.compute_scope_digest(
+            activation["repository"],
+            activation["base_branch"],
+            activation["umbrella_issues"],
+            activation["allowed_operations"],
+            old["skill"]["content_digest"],
+            owner_actor=activation["owner_actor"],
+            capability_preflight=activation["capability_preflight"],
+            orchestrator_creation_receipt=activation["orchestrator_creation_receipt"],
+            role_model_snapshot=activation["role_model_snapshot"],
+            role_model_snapshot_digest=activation["role_model_snapshot_digest"],
+            review_policy_snapshot=activation["review_policy_snapshot"],
+            review_policy_snapshot_digest=activation["review_policy_snapshot_digest"],
+            legacy_unbounded_review=activation["legacy_unbounded_review"],
+            protocol_version="3",
+            policy_version="8",
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            store = rs.StateStore(temporary)
+            rs.atomic_write_json(store.path, old)
+            migrated = store.migrate(
+                activation_id="activation-0001",
+                checkpoint_id="checkpoint-001",
+                schedule_id="schedule-1",
+                expected_installed_digest=DIGEST,
+                expected_from_schema=9,
+                skill_root=SKILL_ROOT,
+            )
+        self.assertEqual(migrated["versions"]["schema"], rs.SCHEMA_VERSION)
+        self.assertEqual(migrated["review"]["completed_supervisor_count"], 0)
+        self.assertEqual(migrated["review"]["archived_supervisor_outcomes"], [])
+        rs.validate_state(migrated)
 
     def test_schema_six_durable_migration_rejects_stale_policy_or_scope_atomically(self):
         for tamper in ("policy", "scope"):
