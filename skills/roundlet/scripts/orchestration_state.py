@@ -23,6 +23,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from typing import Any, Callable, Iterable, Mapping, MutableMapping, Sequence
 from urllib.parse import urlparse
 
@@ -1980,6 +1981,7 @@ class StateStore:
         self.supervisor_archive_transaction_path = (
             self.directory / SUPERVISOR_ARCHIVE_TRANSACTION_FILENAME
         )
+        self._writer_local = threading.local()
 
     def _reconcile_supervisor_archive_transaction(self) -> None:
         if not self.supervisor_archive_transaction_path.exists():
@@ -2019,13 +2021,10 @@ class StateStore:
             self.supervisor_archive_transaction_path.unlink()
             return
         if state_digest == new_state_digest and authority_digest == old_authority_digest:
-            atomic_write_json(
-                self.supervisor_archive_authority_path,
-                new_authority,
-                max_bytes=MAX_RECEIPT_BYTES,
-            )
-            self.supervisor_archive_transaction_path.unlink()
-            return
+            # The ordinary order is intent -> authority -> state.  A
+            # state-ahead/authority-old pair is therefore forged, not a
+            # recoverable prefix, and must not promote new authority.
+            raise ScopeError("Supervisor archive transaction has an impossible state-ahead boundary")
         raise ScopeError("Supervisor archive transaction cannot reconcile durable state")
 
     def _persist_state_and_supervisor_archive_authority(
@@ -2082,13 +2081,23 @@ class StateStore:
     @contextmanager
     def single_writer(self):
         """Serialize one activation's read/intent/mutation/receipt critical section."""
+        depth = getattr(self._writer_local, "depth", 0)
+        if depth:
+            self._writer_local.depth = depth + 1
+            try:
+                yield
+            finally:
+                self._writer_local.depth -= 1
+            return
         self.directory.mkdir(parents=True, exist_ok=True)
         lock_path = self.directory / ".single-writer.lock"
         with lock_path.open("a+", encoding="utf-8") as handle:
             fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
             try:
+                self._writer_local.depth = 1
                 yield
             finally:
+                self._writer_local.depth = 0
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _load(self) -> dict[str, Any]:
@@ -2665,9 +2674,9 @@ def create_supervisor_after_preflight(
         return copy.deepcopy(intent), True
 
     with state_store.single_writer():
-        durable = state_store.load()
+        durable = state_store._load()
         intent, invoke_create = begin_intent(durable)
-        state_store.save(durable)
+        state_store._save(durable)
     if invoke_create:
         created = create_task(copy.deepcopy(intent))
     else:
@@ -2677,7 +2686,7 @@ def create_supervisor_after_preflight(
     if not isinstance(created, Mapping) or set(created) != {"thread_id", "creation_receipt"}:
         raise ValidationError("Supervisor task-service callback returned an invalid creation result")
     with state_store.single_writer():
-        durable = state_store.load()
+        durable = state_store._load()
         pending = durable["review"].get("supervisor_creation_intent")
         if pending != intent:
             raise MailboxError("Supervisor creation intent changed before reconciliation")
@@ -2688,7 +2697,7 @@ def create_supervisor_after_preflight(
             final=final,
         )
         durable["review"]["supervisor_creation_intent"] = None
-        state_store.save(durable)
+        state_store._save(durable)
     state.clear()
     state.update(durable)
 

@@ -1745,6 +1745,8 @@ class StateMachineTests(unittest.TestCase):
             store = rs.StateStore(temporary)
             store.initialize(value)
             tampered = store.load()
+            original_state = copy.deepcopy(dict(tampered))
+            original_authority = rs.read_json(store.supervisor_archive_authority_path)
             review = tampered["review"]
             predecessor = "0" * 64
             forged_outcomes = []
@@ -1777,7 +1779,16 @@ class StateMachineTests(unittest.TestCase):
             )
             review["archived_supervisor_digest"] = predecessor
             rs.atomic_write_json(store.path, tampered)
-            with self.assertRaisesRegex(rs.ScopeError, "archive authority"):
+            rs.atomic_write_json(
+                store.supervisor_archive_transaction_path,
+                rs._archive_transaction(
+                    original_state,
+                    tampered,
+                    original_authority,
+                    rs._archive_authority_from_state(tampered),
+                ),
+            )
+            with self.assertRaisesRegex(rs.ScopeError, "impossible state-ahead"):
                 store.load()
             with self.assertRaisesRegex(rs.ScopeError, "archive authority"):
                 rs.preflight_supervisor_creation(tampered)
