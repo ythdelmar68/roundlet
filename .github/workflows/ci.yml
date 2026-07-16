@@ -19,3 +19,19 @@ jobs:
         with:
           python-version: "3.14"
       - run: python3 -m unittest discover -s tests -v
+
+  windows-runtime-contract:
+    name: Windows runtime contract (Python ${{ matrix.python-version }})
+    runs-on: windows-2025
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: python -m unittest discover -s tests -v
+      - run: python skills/roundlet/scripts/orchestration_state.py runtime-contract

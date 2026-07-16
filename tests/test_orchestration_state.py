@@ -5659,7 +5659,82 @@ class GuardTests(unittest.TestCase):
             self.assertFalse(any(call[0][:3] == ["git", "worktree", "remove"] for call in runner.calls))
 
 
+class RuntimeCompatibilityTests(unittest.TestCase):
+    def test_published_python_and_os_contract_accepts_mac_and_windows_11(self):
+        self.assertEqual(rs.SUPPORTED_PYTHON_MINORS, ((3, 12), (3, 13), (3, 14)))
+        with mock.patch.object(rs, "fcntl", object()):
+            self.assertEqual(
+                rs.validate_runtime_compatibility(version=(3, 14), platform_identifier="darwin"),
+                {"python": "3.14", "os": "macOS"},
+            )
+        backend = mock.Mock()
+        with mock.patch.object(rs, "msvcrt", backend):
+            self.assertEqual(
+                rs.validate_runtime_compatibility(
+                    version=(3, 12), platform_identifier="win32", windows_build=22_000
+                ),
+                {"python": "3.12", "os": "Windows 11"},
+            )
+
+    def test_runtime_contract_rejects_unsupported_python_platform_and_windows_build(self):
+        with mock.patch.object(rs, "fcntl", object()):
+            with self.assertRaisesRegex(rs.ScopeError, "Python"):
+                rs.validate_runtime_compatibility(version=(3, 11), platform_identifier="darwin")
+        with self.assertRaisesRegex(rs.ScopeError, "operating system"):
+            rs.validate_runtime_compatibility(version=(3, 12), platform_identifier="linux")
+        with mock.patch.object(rs, "msvcrt", object()):
+            with self.assertRaisesRegex(rs.ScopeError, "Windows version"):
+                rs.validate_runtime_compatibility(
+                    version=(3, 12), platform_identifier="win32", windows_build=21_999
+                )
+        with self.assertRaisesRegex(rs.ScopeError, "Windows file locking"):
+            rs.validate_runtime_compatibility(
+                version=(3, 12), platform_identifier="win32", windows_build=22_000
+            )
+
+    def test_windows_lock_backend_locks_and_unlocks_one_byte(self):
+        backend = mock.Mock(LK_LOCK=1, LK_UNLCK=2)
+        handle = mock.Mock()
+        handle.fileno.return_value = 41
+        with mock.patch.object(rs.sys, "platform", "win32"), mock.patch.object(rs, "msvcrt", backend):
+            rs._acquire_single_writer_lock(handle)
+            rs._release_single_writer_lock(handle)
+        self.assertEqual(handle.seek.call_args_list, [mock.call(0), mock.call(0)])
+        self.assertEqual(
+            backend.locking.call_args_list,
+            [mock.call(41, 1, 1), mock.call(41, 2, 1)],
+        )
+
+    def test_posix_lock_backend_and_cross_platform_atomic_write_remain_available(self):
+        backend = mock.Mock(LOCK_EX=1, LOCK_UN=2)
+        handle = mock.Mock()
+        handle.fileno.return_value = 42
+        with mock.patch.object(rs.sys, "platform", "darwin"), mock.patch.object(rs, "fcntl", backend):
+            rs._acquire_single_writer_lock(handle)
+            rs._release_single_writer_lock(handle)
+        self.assertEqual(backend.flock.call_args_list, [mock.call(42, 1), mock.call(42, 2)])
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(rs.sys, "platform", "win32"):
+            target = Path(temporary) / "state.json"
+            rs.atomic_write_json(target, {"platform": "windows"})
+            self.assertEqual(rs.read_json(target), {"platform": "windows"})
+
+
 class StaticSkillTests(unittest.TestCase):
+    def test_operator_guide_declares_the_runtime_and_capability_contract(self):
+        guide = (SKILL_ROOT / "references" / "operator-guide.md").read_text(encoding="utf-8")
+        self.assertIn("## Compatibility contract", guide)
+        self.assertIn("Python 3.12, 3.13, and 3.14", guide)
+        self.assertIn("macOS", guide)
+        self.assertIn("Windows 11", guide)
+        self.assertIn("runtime-contract", guide)
+        self.assertIn("GitHub connector", guide)
+        self.assertIn("model` and `reasoning_effort`", guide)
+        self.assertIn("supported_python", guide)
+        self.assertIn("supported_os", guide)
+        self.assertIn("supported_codex", guide)
+        self.assertEqual(rs.SUPPORTED_PYTHON_MINORS, ((3, 12), (3, 13), (3, 14)))
+        self.assertEqual(rs.SUPPORTED_PLATFORM_IDENTIFIERS, ("darwin", "win32"))
+
     def test_repository_layout_contract(self):
         expected = {
             ".github/workflows/ci.yml",

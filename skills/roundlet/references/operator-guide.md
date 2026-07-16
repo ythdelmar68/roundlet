@@ -71,6 +71,16 @@ python3 <installed-roundlet>/scripts/orchestration_state.py role-config \
 
 `defaults.roles` supplies model and reasoning effort, and `defaults.review.max_supervisor_cycles` supplies the total Supervisor budget, for the next activation only. At activation, Roundlet validates the complete installed digest, copies both snapshots into durable scope, and never rereads this file for an active role. Do not edit the file during an activation to change an existing Orchestrator, Worker, Supervisor, or review budget. The `legacy_profiles` section is migration-only and must never be selected for a new activation. An unbounded legacy review exemption requires both a valid bounded schema-5 predecessor and the separate authority receipt written by the durable `StateStore.migrate` gateway; predecessor JSON by itself is rejected.
 
+## Compatibility contract
+
+Roundlet supports **Python 3.12, 3.13, and 3.14** on **macOS** and **Windows 11** only. Do not claim Linux, earlier Windows releases, another Python minor, or another Codex surface as supported until it has equivalent reviewed implementation and exact-candidate evidence. Before activation, run `<PYTHON> <installed-roundlet>/scripts/orchestration_state.py runtime-contract`; it must reject an unsupported Python, operating system, Windows build, or missing platform lock backend before any Roundlet resource is created.
+
+The contract is capability-based rather than a floating Codex product-version claim. The Codex App/service must return and enforce receipts for per-task model and reasoning selection; project and parent/fork identity; permission profile; filesystem-write state; GitHub connector, `gh`, web, and network authority; Worker continuation and child archive; and schedule create, pause, update, and reactivate operations. The exact Codex CLI version and `execpolicy` regression gate are deliberately a separate required contract; do not substitute an unverified CLI or skip that gate.
+
+The GitHub connector must prove same-repository reads of issues, sub-issues, comments, PRs, checks, and merge state, plus every specifically authorized write. Host Git must provide unattended exact-base fetch, recorded `codex/` branch push, fast-forward synchronization, and guarded cleanup. Authentication or any missing receipt is an owner-safe blocker: never fall back to shell HTTP, a different connector, copied credentials, or another authority surface.
+
+Every role's `model` and `reasoning_effort` in `assets/roundlet-config.json` is a required activation input. The service receipt must match that immutable snapshot for the Orchestrator, Worker, and Supervisor; an unavailable configured model blocks with an actionable diagnostic and is never silently substituted. The canonical release metadata fields `supported_python`, `supported_os`, and `supported_codex` must repeat this contract exactly.
+
 ## Prepare one target repository
 
 Open a dedicated Codex project/worktree for exactly one target repository. Do not pass a repository name to Roundlet.

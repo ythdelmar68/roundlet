@@ -12,9 +12,16 @@ from __future__ import annotations
 import argparse
 import copy
 from contextlib import contextmanager
-import fcntl
+try:
+    import fcntl
+except ImportError:  # Windows does not provide the POSIX locking module.
+    fcntl = None  # type: ignore[assignment]
 import hashlib
 import json
+try:
+    import msvcrt
+except ImportError:  # POSIX platforms do not provide the Windows locking module.
+    msvcrt = None  # type: ignore[assignment]
 import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -89,6 +96,10 @@ MODEL_ID = re.compile(r"^[a-z0-9]+(?:[.-][a-z0-9]+)*$")
 # Canonical digest of the immutable policy-3 role profile.  Pinning the digest
 # keeps migration compatible without carrying duplicate model literals in code.
 POLICY3_ROLE_MODEL_SNAPSHOT_DIGEST = "be1680d41063b90e22fef16e5a207fa6aea59004624be5e5bfb08d8de07c77bf"
+
+SUPPORTED_PYTHON_MINORS = ((3, 12), (3, 13), (3, 14))
+SUPPORTED_PLATFORM_IDENTIFIERS = ("darwin", "win32")
+WINDOWS_11_MINIMUM_BUILD = 22_000
 
 SCHEMA_VERSION = 12
 PROTOCOL_VERSION = "3"
@@ -261,6 +272,40 @@ class MigrationError(RoundletError):
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def validate_runtime_compatibility(
+    *,
+    version: tuple[int, int] | None = None,
+    platform_identifier: str | None = None,
+    windows_build: int | None = None,
+) -> dict[str, str]:
+    """Fail closed unless this host matches the published runtime contract.
+
+    The caller supplies no capability receipt here: Python and OS identity are
+    host facts.  Activation preflight must invoke this before creating any
+    Roundlet resource.
+    """
+    resolved_version = version or (sys.version_info.major, sys.version_info.minor)
+    if resolved_version not in SUPPORTED_PYTHON_MINORS:
+        raise ScopeError("unsupported Python runtime; Roundlet supports Python 3.12-3.14")
+    resolved_platform = platform_identifier or sys.platform
+    if resolved_platform == "darwin":
+        if fcntl is None:
+            raise ScopeError("macOS file locking is unavailable")
+        return {"python": f"{resolved_version[0]}.{resolved_version[1]}", "os": "macOS"}
+    if resolved_platform != "win32":
+        raise ScopeError("unsupported operating system; Roundlet supports macOS and Windows 11")
+    if msvcrt is None:
+        raise ScopeError("Windows file locking is unavailable")
+    if windows_build is None:
+        get_windows_version = getattr(sys, "getwindowsversion", None)
+        if get_windows_version is None:
+            raise ScopeError("Windows version evidence is unavailable")
+        windows_build = get_windows_version().build
+    if type(windows_build) is not int or windows_build < WINDOWS_11_MINIMUM_BUILD:
+        raise ScopeError("unsupported Windows version; Roundlet supports Windows 11 or later")
+    return {"python": f"{resolved_version[0]}.{resolved_version[1]}", "os": "Windows 11"}
 
 
 def parse_utc_timestamp(value: Any, label: str) -> datetime:
@@ -1812,6 +1857,38 @@ def atomic_write_json(
         raise
 
 
+def _acquire_single_writer_lock(handle: Any) -> None:
+    """Acquire one advisory byte-range lock using the supported host backend."""
+    if sys.platform == "win32":
+        if msvcrt is None:
+            raise ScopeError("Windows file locking is unavailable")
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        return
+    if os.name == "posix":
+        if fcntl is None:
+            raise ScopeError("macOS file locking is unavailable")
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return
+    raise ScopeError("unsupported operating system; Roundlet supports macOS and Windows 11")
+
+
+def _release_single_writer_lock(handle: Any) -> None:
+    """Release a lock acquired by :func:`_acquire_single_writer_lock`."""
+    if sys.platform == "win32":
+        if msvcrt is None:
+            raise ScopeError("Windows file locking is unavailable")
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+    if os.name == "posix":
+        if fcntl is None:
+            raise ScopeError("macOS file locking is unavailable")
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        return
+    raise ScopeError("unsupported operating system; Roundlet supports macOS and Windows 11")
+
+
 def read_json(path: str | os.PathLike[str], *, max_bytes: int | None = None) -> Any:
     try:
         source = Path(path)
@@ -2278,14 +2355,19 @@ class StateStore:
             return
         self.directory.mkdir(parents=True, exist_ok=True)
         lock_path = self.directory / ".single-writer.lock"
-        with lock_path.open("a+", encoding="utf-8") as handle:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        with lock_path.open("a+b") as handle:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write(b"\0")
+                handle.flush()
+                os.fsync(handle.fileno())
+            _acquire_single_writer_lock(handle)
             try:
                 self._writer_local.depth = 1
                 yield
             finally:
                 self._writer_local.depth = 0
-                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                _release_single_writer_lock(handle)
 
     def _load(self) -> dict[str, Any]:
         self._reconcile_supervisor_archive_transaction()
@@ -7852,6 +7934,11 @@ def build_parser() -> argparse.ArgumentParser:
     role_config = sub.add_parser("role-config", help="Print validated Roundlet role-model configuration")
     role_config.add_argument("--skill-root", required=True)
 
+    sub.add_parser(
+        "runtime-contract",
+        help="Fail closed unless this host satisfies the published Python/OS contract",
+    )
+
     for name in GUARDED_CLI_COMMANDS:
         guarded = sub.add_parser(name)
         guarded.add_argument("--state-dir", required=True)
@@ -7885,6 +7972,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         elif args.command == "role-config":
             config = load_role_model_config(args.skill_root)
             print(canonical_json(config))
+            return 0
+        elif args.command == "runtime-contract":
+            print(canonical_json(validate_runtime_compatibility()))
             return 0
         elif args.command == "skill-digest":
             print(skill_content_digest(args.skill_root))
