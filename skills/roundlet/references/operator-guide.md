@@ -161,7 +161,7 @@ After a valid initial handoff:
 1. Verify the reported before/after SHAs, diff, status, tests, and issue scope independently.
 2. Push the exact candidate commit without force.
 3. Append the Worker handoff to the leaf issue.
-4. Create a draft pull request linking the umbrella when present, linking the leaf, and including `Closes #<leaf>`.
+4. Create a draft pull request linking the umbrella with a non-closing reference when present, linking the leaf, and including `Closes #<leaf>` for that active leaf only. Never couple `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, or `resolved` to an umbrella or any other non-terminal issue number, even inside a negated sentence.
 5. Append a draft-pull-request trace to the pull request and update the local recovery index.
 
 If the initial handoff reveals a genuine owner-only decision, enter `NEEDS_OWNER_INPUT`; do not move to a different issue.
@@ -262,6 +262,7 @@ Before marking ready or merging, reread and prove:
 - the pull request is mergeable with no conflict;
 - every required check for that exact SHA concluded success;
 - no new allowlisted owner comment changes scope, requests changes, pauses, stops, or blocks merge;
+- GitHub's parsed closing-issue references contain exactly the active leaf and no umbrella or other issue;
 - repository authority permits marking ready, merging, and the merge keyword's automatic leaf closure;
 - branch rules permit the operation;
 - the configured merge method is available and equals `merge`.
@@ -272,7 +273,7 @@ Mark the pull request ready only when its authority switch is true. Merge using 
 
 ## Leaf closure
 
-The pull request body must include `Closes #<leaf>`. After merge:
+The pull request body must include `Closes #<leaf>`, and GitHub must parse exactly that active leaf as the only closing issue. Negation does not make a closing-keyword reference safe; use a plain issue link or `Parent: #<umbrella>` for non-terminal context. After merge:
 
 1. Read the live leaf and verify whether GitHub closed it.
 2. If still open and `allow_close_leaf_issue` is true, close it explicitly with a traceable comment.
