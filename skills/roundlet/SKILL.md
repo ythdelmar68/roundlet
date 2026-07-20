@@ -19,6 +19,7 @@ Operate a single-target-repository outer loop through Codex tasks, GitHub, Git w
 - Read repository authority only from the root `AGENTS.md` on authoritative `origin/main`. Boolean authority may narrow Roundlet, never override stricter repository or platform policy.
 - Fail closed when configured models, reasoning efforts, tools, GitHub permissions, merge method, repository authority, or required state cannot be verified. Never substitute a model or effort silently.
 - Never auto-expire, steal, or replace a lease. Recovery requires explicit owner direction after reconciliation.
+- Couple a GitHub closing keyword only to the one active leaf that the pull request is intended to close. A negated phrase does not neutralize GitHub's keyword parser.
 - Never rebase, force-push, bypass protection, destroy unique work, close an umbrella issue, or claim Supervisor PASS after the review limit.
 
 ## Read the operating contract
