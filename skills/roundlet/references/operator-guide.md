@@ -1,459 +1,300 @@
-# Roundlet operator guide
+# Operator guide
 
-## Contents
+This is the detailed operating contract for Roundlet. The Orchestrator must reread the live sources it depends on before every mutation. Natural-language judgment is intentional; local files provide an advisory recovery index, not deterministic coordination.
 
-1. Authority model
-2. Install and pin Roundlet
-3. Prepare one target repository
-4. Synchronization and worktree gate
-5. Connector, Git, thread, and permission preflight
-6. Install narrow command rules
-7. Activate an umbrella scope
-8. Verify dependency selection
-9. Run the manual smoke path
-10. Attach the heartbeat
-11. Observe normal operation
-12. Pause for Roundlet maintenance
-13. Maintain and install Roundlet
-14. Resume directly or with assistance
-15. Recover idempotently
-16. Handle blockers
-17. Retain and compact state
-18. Complete or replace scope
+## Operating envelope
 
-## Authority model
+Roundlet is safe only inside this deliberately narrow envelope:
 
-Keep these independent:
+- one GitHub target repository;
+- one authoritative local checkout on one authoritative machine;
+- one long-lived Orchestrator Codex task;
+- one recurring heartbeat attached to that Orchestrator;
+- zero or one active leaf issue;
+- one persistent Worker task for that issue;
+- one fresh Supervisor task for each review round;
+- one isolated worktree and one `codex/` branch for that issue;
+- one Orchestrator identity as the only GitHub mutator.
 
-1. The Roundlet source repository governs Roundlet development and publication.
-2. The current target repository's trusted instructions govern target work.
-3. Codex sandbox, approval policy, permission profile, and command rules bound local capabilities.
-4. The GitHub connector authorizes and performs GitHub operations.
-5. Host Git credentials and GitHub branch protection constrain fetch, push, checks, and merge.
+Do not start a second Roundlet run for the same target from another Codex task, clone, or machine. A local file lease is advisory: two independent actors can both read an apparently free file or cannot see each other's file at all, then both believe they own the run. That is split-brain. The operating envelope, activation preflight, GitHub trace, and refusal to auto-take over reduce the risk; they do not create distributed locking.
 
-An explicit target activation authorizes only its current repository, base branch, ordered umbrella set, enabled operations, activation ID, installed digest, and protocol/policy versions. It never authorizes Roundlet source maintenance, installation, another repository, or an omitted mutation.
+## Configuration and capability preflight
 
-Treat `approval_policy = "never"` as "do not prompt." It does not grant network, filesystem, connector, organization, or GitHub authority. Fail closed when any layer denies an expected unattended action.
+Read `roundlet-config.json` exactly. Do not supply defaults, coerce values, or silently fall back.
 
-## Install and pin Roundlet
+Before activation, prove all of the following:
 
-Install only a reviewed source commit or tag after its pull request has explicit owner approval and is merged. Do not install a dirty checkout, unreviewed feature branch, floating default branch, or target-repository candidate.
+- every configured model/reasoning-effort pair is selectable on the current Codex host;
+- tasks can be created, addressed, waited on, resumed, and archived;
+- one recurring heartbeat can be created, inspected, paused/resumed, and stopped;
+- Git and the authoritative checkout are usable;
+- GitHub identity, repository identity, issues, comments, branches, pull requests, reviews, checks, mergeability, and merge operations can be inspected;
+- authorized GitHub mutations are available to the Orchestrator;
+- the root authority block on `origin/main` is valid;
+- the repository supports the configured merge method;
+- `HEAD`, local `main`, and `origin/main` initially name the same full commit;
+- the authoritative checkout is clean and no other Roundlet evidence is active or unreconciled;
+- the target's rules and required checks can be determined well enough to fail closed at merge time.
 
-Record:
+If any capability cannot be proven, report the exact unsupported value or missing capability and stop. Capability preflight is performed through Codex/tool inspection; it is not an executable validator or cross-platform test matrix.
 
-- canonical source repository and reviewed commit/tag;
-- resolved full commit SHA;
-- content digest from `scripts/orchestration_state.py` `skill_content_digest`;
-- state, protocol, review-contract, and policy versions;
-- installation path and installed `SKILL.md` path.
+## Advisory local state
 
-Place or symlink the exact reviewed skill directory in a user/admin skill location outside every target repository and target worktree. Require the installed files to be read-only to target Workers, or enforce equivalent write isolation. Never make a repository-local skill copy the active runtime: a target candidate could otherwise change the next invocation's contract. Verify that Codex discovers `$roundlet`; restart Codex only when discovery does not refresh automatically.
+Add `.roundlet/` to the authoritative checkout's local `.git/info/exclude`. Never commit the exclusion or state files. Keep only:
 
-Never copy credentials, local runtime state, test caches, Git metadata, or an unreviewed rules file with the installation.
+- `.roundlet/lease.json`: stable run ownership and task identities;
+- `.roundlet/current.md`: concise human-readable recovery index for the current state.
 
-Before activation, compute and record the installed digest from the installed directory itself:
+The lease contains no expiry and authorizes no automatic takeover. A representative lease is:
 
-```text
-python3 <installed-roundlet>/scripts/orchestration_state.py skill-digest \
-  --skill-root <installed-roundlet>
+```json
+{
+  "run_id": "unguessable-stable-id",
+  "target": "owner/repository",
+  "authoritative_checkout": "/absolute/path",
+  "authoritative_machine": "stable-machine-identity",
+  "owner": "allowlisted-github-login",
+  "activated_at": "ISO-8601 timestamp",
+  "orchestrator_task": "opaque-task-id",
+  "heartbeat": "opaque-heartbeat-id"
+}
 ```
 
-For a new activation, use this exact order with one reviewed `<installed-roundlet>` root: run `role-config` and `skill-digest`; create and read back the Orchestrator using the validated default model and reasoning effort; then call `new_state(..., skill_root=<installed-roundlet>, installed_roundlet_digest=..., orchestrator_creation_receipt=...)`. `new_state` repeats the stable-root validation and binds the defaults as the activation snapshot; it does not create an Orchestrator. Do not load the configuration and digest from separate paths or observations. The guarded CLI later compares this digest to both the activation and installed files.
+`current.md` records only pointers and reconciliation facts: phase, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, branch, worktree, base and candidate full SHAs, review epoch/round/mode, last durable GitHub event, blocking condition, and last reconciliation time. Do not treat it as durable history or append a transcript.
 
-## Configure role models
+Before every tick or mutation, reconcile both files against GitHub, Git, Codex tasks, and the heartbeat. Prefer live authoritative evidence. When evidence conflicts, stop with `STATE_RECONCILIATION_REQUIRES_OWNER`; never guess or overwrite the conflict.
 
-The only supported Roundlet configuration setting is `<installed-roundlet>/assets/roundlet-config.json`. Validate it before activation:
+## Backlog classification
 
-```text
-python3 <installed-roundlet>/scripts/orchestration_state.py role-config \
-  --skill-root <installed-roundlet>
+Scan all open issues in the target repository on activation and every idle heartbeat, including issues created after activation.
+
+Classify from live GitHub parent/sub-issue relationships, labels, body, comments, and canonical notes:
+
+- **Umbrella**: an issue with one or more formal GitHub sub-issues and a body containing a clearly identified `Canonical scheduling note`. It is scheduling context, never an implementation candidate, and Roundlet never closes it.
+- **Scheduling-blocked parent**: an issue with one or more formal sub-issues but no Canonical scheduling note. Enter `NEEDS_OWNER_INPUT`; do not reinterpret it as a leaf or silently schedule around it.
+- **Leaf**: an open issue with no formal sub-issues. It may be a formal sub-issue or a standalone issue with no parent.
+- **Ignored**: an issue carrying `roundlet:ignore`. Exclude it even if it would otherwise be a leaf.
+
+Only leaves are implementation candidates. A standalone open leaf is eligible on the same terms as an umbrella sub-issue.
+
+Do not require a rigid issue template. Consider a leaf actionable when its live issue, repository evidence, and scheduling context provide enough scope, boundaries, acceptance intent, and dependency information to proceed safely. Infer ordinary implementation detail when risk is low. If a genuinely owner-only choice, destructive ambiguity, security decision, incompatible acceptance criteria, or missing prerequisite prevents safe progress, select no substitute: enter `NEEDS_OWNER_INPUT` on that leaf and stop global scheduling.
+
+## Dependencies and ranking
+
+Build one live candidate set across every umbrella plus standalone leaves. Use formal sub-issue status, Canonical scheduling notes, explicit dependency statements, linked issues/pull requests, and current repository evidence.
+
+Apply the following order:
+
+1. Exclude ignored, owned, closed, umbrella, and scheduling-blocked issues.
+2. Gate on dependency readiness. A leaf is ready only when every required predecessor is complete or the canonical note explicitly says it may proceed.
+3. Compare effective priority: `P0`, then `P1`, then `P2`, then unclassified.
+4. When a dependency has a lower written priority but blocks a higher-priority ready path, inherit the highest downstream priority it unblocks.
+5. Within the effective priority, prefer explicit order in the Canonical scheduling note.
+6. Then prefer greater direct and transitive unblock impact.
+7. Break remaining ties by oldest creation time, then lowest issue number.
+
+Explain the selected issue and its dependency/priority basis in the selection trace. Never implement the umbrella itself.
+
+## State machine and one-transition ticks
+
+Use these logical phases:
+
+- `IDLE`
+- `SELECTING`
+- `WORKER_INITIAL`
+- `DRAFT_PR`
+- `SUPERVISOR_REVIEW`
+- `WORKER_REPAIR`
+- `WORKER_FINAL_REPAIR`
+- `READY_TO_MERGE`
+- `MERGING`
+- `CLOSING_ISSUE`
+- `CLEANUP_PREFLIGHT`
+- `CLEANUP`
+- `PAUSED`
+- `STOP_AFTER_CURRENT`
+- `NEEDS_OWNER_INPUT`
+- `REPOSITORY_AUTHORITY_REQUIRED`
+- `OWNER_ABORT_DECISION_REQUIRED`
+- `CLEANUP_BLOCKED`
+- `STOPPED`
+
+Every heartbeat tick must first reconcile live evidence, then make at most one externally meaningful state transition. Commands sent directly to the Orchestrator may continue through immediately related read-only checks, but must retain the same idempotence rules.
+
+Do not start another issue while any phase other than `IDLE` or `STOPPED` retains an active issue, branch, worktree, Worker, pull request, unresolved cleanup, or blocking owner decision.
+
+## Claim and implementation
+
+To claim one selected leaf:
+
+1. Recheck that it remains open, eligible, dependency-ready, unignored, and not already claimed by a live Roundlet trace.
+2. Record the selection event on the leaf.
+3. Create a descriptive `codex/` branch from exact `origin/main` and an isolated worktree.
+4. Record the branch, worktree, base SHA, and phase in local state.
+5. Create one Worker task with the configured model and effort.
+6. Send the Worker the initial contract from `thread-prompts.md`.
+
+Use the same Worker task for every subsequent repair, final repair, and cleanup preflight. The Worker may read GitHub but must never create/edit comments, issues, pull requests, labels, reviews, merges, or branches on GitHub. It modifies the isolated worktree and returns structured handoffs to the Orchestrator.
+
+After a valid initial handoff:
+
+1. Verify the reported before/after SHAs, diff, status, tests, and issue scope independently.
+2. Push the exact candidate commit without force.
+3. Append the Worker handoff to the leaf issue.
+4. Create a draft pull request linking the umbrella when present, linking the leaf, and including `Closes #<leaf>`.
+5. Append a draft-pull-request trace to the pull request and update the local recovery index.
+
+If the initial handoff reveals a genuine owner-only decision, enter `NEEDS_OWNER_INPUT`; do not move to a different issue.
+
+## GitHub trace
+
+GitHub is the durable audit trail. The Orchestrator is the sole writer. Worker and Supervisor outputs are proposals until the Orchestrator verifies and publishes them.
+
+Every Roundlet comment starts with one unique marker:
+
+```html
+<!-- roundlet:event=<event-id>;run=<run-id>;epoch=<number>;round=<number-or-0>;candidate=<full-sha-or-none> -->
 ```
 
-`defaults.roles` supplies model and reasoning effort, and `defaults.review.max_supervisor_cycles` supplies the total Supervisor budget, for the next activation only. At activation, Roundlet validates the complete installed digest, copies both snapshots into durable scope, and never rereads this file for an active role. Do not edit the file during an activation to change an existing Orchestrator, Worker, Supervisor, or review budget. The `legacy_profiles` section is migration-only and must never be selected for a new activation. An unbounded legacy review exemption requires both a valid bounded schema-5 predecessor and the separate authority receipt written by the durable `StateStore.migrate` gateway; predecessor JSON by itself is rejected.
+Use stable event IDs that identify the intended transition. Before writing, search the live issue or pull request for that event ID and reconcile its contents. If it already records the same transition, do not duplicate it. Never edit or delete a trace to hide a mistake; append a correction event that names the superseded event.
 
-## Prepare one target repository
+Record at least:
 
-Open a dedicated Codex project/worktree for exactly one target repository. Do not pass a repository name to Roundlet.
+- selection and dependency/ranking rationale on the leaf;
+- initial Worker handoff on the leaf;
+- draft pull-request creation on the pull request;
+- every valid Supervisor result on the pull request;
+- every Worker repair/final-repair handoff on the pull request;
+- review terminal result on the pull request;
+- owner-input, repository-authority, abort, and correction decisions on the active issue or pull request;
+- merge result, leaf closure readback, and cleanup result.
 
-Have the target owner independently adopt restrictive trusted instructions that require:
+A handoff trace summarizes commit SHA, files, tests, finding dispositions, unresolved risks, and terminal status. Do not paste hidden chain-of-thought, credentials, raw task transcripts, or unbounded logs.
 
-- explicit `$roundlet` invocation in a dedicated Orchestrator task;
-- binding to current-repository identity, exact base, umbrella scope, operations, activation, digest, and versions;
-- connector-mediated GitHub mutations by the root Orchestrator only;
-- exact-head fresh Supervisor PASS and Worker `READY_TO_MERGE` before merge;
-- merge commit, exact selected-issue closure, and ownership-proven cleanup;
-- fail-closed behavior for policy drift, cross-repository targets, stale review, failed checks, ambiguity, unique work, or cleanup proof failure;
-- permanent denial of force push, reset, rebase, releases, tags, publishing, version bumps, issue deletion, unrelated mutation, protection bypass, and deletion of unique work.
+## Review epochs and rounds
 
-Do not let Roundlet edit or weaken target instructions, protection, required checks, or connector policy during activation.
+Start review epoch 1, round 1, bound to the exact pushed candidate SHA. A new allowlisted owner scope change resets to a new epoch at round 1 COMPLETE; ordinary Worker repairs remain in the same epoch.
 
-Add `.codex-log/roundlet/` to the target repository's ignored runtime paths before activation. Commit that governance change through the target's normal review process; do not fold it into an automatically selected task unless explicitly scoped.
+For every round:
 
-## Synchronization and worktree gate
+1. Create a fresh Supervisor task with the configured model and effort.
+2. Give it read-only filesystem and GitHub instructions plus the exact contract in `thread-prompts.md`.
+3. Require a structured result bound to the full candidate SHA.
+4. Independently verify that it read the required context and reviewed the named SHA.
+5. Publish a valid result to the pull request.
+6. Archive that Supervisor task.
 
-Perform this gate before the dedicated Orchestrator, every Worker dispatch, resume, and next-task selection:
+Rounds 1–3 are COMPLETE if reached. Any valid PASS ends review immediately; three rounds are not a minimum.
 
-1. Resolve the Git root with `git rev-parse --show-toplevel`.
-2. Resolve the common directory with `git rev-parse --git-common-dir`.
-3. Resolve exactly one `origin`, canonical owner/name, and repository ID when the connector supplies it.
-4. Fetch exactly `git fetch origin <base-branch>`.
-5. Resolve full SHAs for `HEAD`, `refs/heads/<base>`, and `refs/remotes/origin/<base>`.
-6. Require a clean orchestration checkout and equality of all three SHAs.
-7. Inspect `git worktree list --porcelain` and the status/ownership of every current-repository worktree.
+Rounds 4–10 are CONVERGING. The Supervisor focuses on unresolved prior findings and changes since the previous reviewed candidate, while still reporting a new blocking regression, scope violation, or missing evidence.
 
-Block on:
+A failed, cancelled, inaccessible, malformed, mutating, or wrong-SHA Supervisor attempt does not consume a round. Retry with a fresh Supervisor at most `max_supervisor_attempts_per_round`. After the limit, enter `NEEDS_OWNER_INPUT` without selecting another issue.
 
-- missing or ambiguous origin;
-- detached context that cannot be tied to this Git common directory;
-- repository ID or origin fingerprint mismatch;
-- dirty, ahead, behind, or diverged orchestration checkout;
-- dirty/uncommitted, unmerged, uniquely owned, or ambiguously owned worktree;
-- unrelated active work that could conflict with the selected branch or files.
+When a valid result has findings before round 10:
 
-Never switch, reset, clean, rebase, delete, or otherwise mutate another checkout to make the gate pass. Let the owner finish or explicitly disposition that work first.
+1. Send the exact findings to the same Worker.
+2. Require a structured repair handoff and a new full candidate SHA.
+3. Verify and push without force.
+4. Append the Worker handoff to the pull request.
+5. Advance to the next review round.
 
-The dedicated Orchestrator checkout may be detached at the exact remote-base SHA when the owner's primary checkout already holds the local base branch. In that case, the guarded refresh/sync advances only detached HEAD and accepts a stale local base ref only while `git worktree list --porcelain` proves another worktree owns it. Treat equality by full commit identity, and do not advance another checkout behind the owner's back.
+When round 10 has findings:
 
-## Connector, Git, thread, and permission preflight
+1. Send the findings once to the same Worker as `WORKER_FINAL_REPAIR`.
+2. Verify, push, and publish that handoff.
+3. Do not create round 11 and do not state or imply Supervisor PASS.
+4. Record terminal state `REVIEW_LIMIT_REACHED_WORKER_FINALIZED`.
+5. Continue only through the same live checks and merge gates required after PASS.
 
-Verify each expected capability with the same identity and permission mode that the heartbeat will use.
+When any round returns PASS, record terminal state `SUPERVISOR_PASS` and proceed to merge gating.
 
-### GitHub connector
+## Owner input
 
-Verify current-repository-only reads for:
+`NEEDS_OWNER_INPUT` is a global logical stop, not permission to pick another issue. Retain the lease, Orchestrator, Worker when present, branch, worktree, and pull request. The five-minute heartbeat remains active and only:
 
-- umbrella and sub-issue body, comments, formal relationships, state, and revisions;
-- PR metadata, discussion, diff, head/base, checks, mergeability, conflict, and merged state;
-- existing branch/PR ownership evidence.
+- reconciles the current blocking issue and resources;
+- looks for a new comment by an identity in `owner_allowlist`; or
+- observes a direct instruction in the Orchestrator task.
 
-Verify the exact authorized writes for:
+An issue-body edit alone never resolves the block. A non-owner comment, reaction, label change, Worker/Supervisor message, or unrelated owner comment never resolves it.
 
-- curated issue and PR comments;
-- draft PR creation;
-- draft-to-ready transition;
-- merge method `merge` with expected full head SHA;
-- exact selected-issue close after merge;
-- exact recorded remote-branch deletion after cleanup proof.
+When a valid owner instruction arrives, append an owner-input trace, apply only that instruction, reread all live context, and decide whether it is an ordinary continuation or a scope change requiring a new review epoch.
 
-Route every write through `execute_github_mutation`. Supply one target-bound idempotency key and exact pre-mutation live target. The gateway checks the operation flag, repository/task/phase/PR identity and merge gates, persists intent before the callback, then requires connector live read-back before state advances. For `mark-ready`, it also runs the complete PASS/exhaustion/reserved-final-slot and inactive-Worker preflight before persisting intent or invoking the connector, then reuses that preflight during completion. For recovery, reconcile the pending intent through connector reads; do not call the post-mutation receipt helpers directly.
+## Repository authority block
 
-Do not silently fall back to `gh`, shell HTTP, a different connector, or a credential copied into the project.
+At each mutation boundary, reread the authority block from root `AGENTS.md` on current authoritative `origin/main`. If the required switch is false or ambiguous, enter `REPOSITORY_AUTHORITY_REQUIRED`, retain all current resources, and stop global scheduling.
 
-### Host Git credentials
+Release requires either:
 
-Verify unattended:
+- the allowlisted owner performs the blocked action manually and confirms it through a new comment or direct Orchestrator instruction; or
+- the authority block is updated on `origin/main` and the allowlisted owner leaves a new comment or direct instruction to reread it.
 
-- exact base fetch;
-- push of one recorded `codex/` task branch;
-- fast-forward-only synchronization;
-- safe local branch deletion after merged reachability.
+Never let an issue-body edit or an issue-branch policy change release the block.
 
-Do not store the credential, helper path, token, or authentication output in state, mailboxes, prompts, or GitHub comments.
+## Merge gates
 
-### Codex tasks and schedule
+Before marking ready or merging, reread and prove:
 
-Verify the root Orchestrator can:
+- the pull request is open, targets the authoritative primary branch, and names the expected head branch;
+- the remote head equals the exact terminal candidate SHA;
+- no uncommitted or unpushed Worker change exists;
+- review terminal state is either `SUPERVISOR_PASS` or `REVIEW_LIMIT_REACHED_WORKER_FINALIZED`;
+- the pull request is mergeable with no conflict;
+- every required check for that exact SHA concluded success;
+- no new allowlisted owner comment changes scope, requests changes, pauses, stops, or blocks merge;
+- repository authority permits marking ready, merging, and the merge keyword's automatic leaf closure;
+- branch rules permit the operation;
+- the configured merge method is available and equals `merge`.
 
-- create a project worktree Worker with explicit model/reasoning;
-- create a fresh local-project read-only Supervisor each round;
-- continue the same Worker task;
-- inspect and archive child tasks;
-- attach, pause, update, and reactivate one schedule on the existing Orchestrator task.
+If `origin/main` advanced, reread mergeability and repository rules. Merge directly when GitHub considers the branch mergeable, required checks remain valid for the exact candidate, and no rule requires an update. If the branch must be updated, send the same Worker an integration turn. It may merge current `origin/main` into the issue branch; it must not rebase or force-push. The resulting new candidate requires a new review epoch at round 1 COMPLETE.
 
-Require the task service to return verifiable creation metadata for every role: model, reasoning effort, project/environment identity, parent/fork identity, permission profile, filesystem-write capability, GitHub connector, `gh`, web, network, and UTC creation time. Also require service-returned connector-read adapter receipts that bind adapter ID, activation, exact repository, Orchestrator thread/project, operation, and creation time. Bind the Orchestrator receipt and a connector-verified human actor ID during activation; bind Worker/Supervisor receipts before dispatch. If this product surface cannot expose or enforce those fields, activation is blocked. Prompt text or caller-created mappings do not prove isolation or connector provenance.
+Mark the pull request ready only when its authority switch is true. Merge using a merge commit only when both `allow_merge_pr` and `allow_close_leaf_issue` are true. Record the resulting merge commit and exact head SHA.
 
-### Permissions
+## Leaf closure
 
-Prefer `workspace-write` with narrow reviewed rules. Verify every exact operation can run unattended. If managed policy disallows the expected mode or non-interactive approval behavior, stop before activation.
+The pull request body must include `Closes #<leaf>`. After merge:
 
-## Install narrow command rules
+1. Read the live leaf and verify whether GitHub closed it.
+2. If still open and `allow_close_leaf_issue` is true, close it explicitly with a traceable comment.
+3. Read it back and require closed state before cleanup.
 
-Treat `assets/roundlet.rules` as an inert reviewed template. Copy it to the target's trusted project rules layer only as a separate owner-reviewed setup action.
+Never close an umbrella. If the leaf cannot be closed or verified, enter `REPOSITORY_AUTHORITY_REQUIRED` or `NEEDS_OWNER_INPUT` as applicable. Do not schedule another issue, because an open leaf could be selected again.
 
-Replace every placeholder with an absolute immutable value:
+## Ordered cleanup
 
-- `<PYTHON>`: exact approved Python executable;
-- `<ROUNDLET_SCRIPT>`: exact installed `orchestration_state.py` path;
-- `<SKILL_ROOT>`: exact installed reviewed skill root;
-- `<STATE_DIR>`: exact target `.codex-log/roundlet` directory;
-- `<ACTIVATION_ID>`: exact active ID;
-- `<INSTALLED_DIGEST>`: exact installed content digest;
-- `<BASE_BRANCH>`: exact resolved base branch;
-- `<TARGET_ROOT>` and `<TASK_WORKTREE>` where present.
+Cleanup remains part of the active issue and must be automatic when authorized.
 
-Keep each rule's `match` and `not_match` examples and test it with `codex execpolicy check`. Confirm:
+1. Send the same Worker a cleanup-preflight turn. It verifies the issue branch is pushed, the pull request/merge/leaf status, the worktree status, unique commits, untracked files, and absence of unpreserved work. The Worker must not remove its own worktree or delete its own branch.
+2. The Orchestrator independently verifies the handoff and archives the Worker task.
+3. When `allow_remove_worktree` is true, remove the issue worktree through a non-destructive normal removal. Never force removal of unknown changes.
+4. When `allow_delete_local_branch` is true, delete the local issue branch only after proving its unique work is merged or explicitly authorized for abandonment.
+5. When `allow_delete_remote_branch` is true, delete the exact remote issue branch only after proving its identity and merge/abandon state.
+6. Fetch origin, fast-forward local `main`, and verify the authoritative checkout is clean and `HEAD == main == origin/main`.
+7. Append the cleanup trace, clear the active pointers, and remove the two advisory files only when stopping; while continuing, retain the lease and set `current.md` to `IDLE`.
 
-- only the exact `guarded-refresh` invocation may perform the validated base fetch;
-- guarded push permits only the state-recorded current-repository `codex/` branch;
-- guarded sync uses fetch plus fast-forward-only merge;
-- worktree removal and local branch deletion call the guarded script and prove ownership;
-- arbitrary Python, shell, repository, branch, worktree, remote, `git push`, force, reset, rebase, and remote deletion do not match.
+If any cleanup step fails, enter `CLEANUP_BLOCKED`, keep the leaf closed, retain the lease/current evidence, and select no next issue. Never reopen the leaf solely because cleanup failed.
 
-These are prefix rules: a recognized duplicate option appended to an allowed prefix can still receive an `allow` decision. The reviewed guarded CLI is the second boundary and must reject duplicate, reordered, or trailing tokens before it loads state or constructs a Git guard. Forward-test every guarded command with every repeated identity option after any parser or rules change.
+## Active issue closed, ignored, or withdrawn
 
-Restart/reload Codex as required for the trusted project rules layer. Re-test after installation-path, digest, activation, base, or state-directory changes. Never install this template globally or let Roundlet self-modify the rule.
+If the active leaf is closed, gains `roundlet:ignore`, or is withdrawn before the normal merge path completes, enter `OWNER_ABORT_DECISION_REQUIRED`. Accept only a new allowlisted comment or direct Orchestrator instruction choosing:
 
-Remote task-branch deletion remains a GitHub connector action; do not add a Git rule for it.
+- `resume`: remove the blocking condition when needed and continue the same work;
+- `preserve-and-stop`: keep the task, branch, worktree, pull request, and evidence, pause the heartbeat, and stop scheduling;
+- `abandon-and-cleanup`: with exact scope, append a trace, close the pull request if open, archive role tasks, and clean only the explicitly authorized branch/worktree resources before returning to `IDLE`.
 
-## Activate an umbrella scope
+There is no preserve-old-work-while-selecting-next option. Never infer abandon-and-cleanup.
 
-Start from the dedicated Orchestrator task with the Orchestrator model and reasoning effort from the validated activation snapshot. Use a title such as `Roundlet Orchestrator — owner/repository`.
+## Pause, resume, and stop
 
-Invoke:
+- `pause`: finish the current atomic mutation or stop before the next one, record `PAUSED`, pause the heartbeat, and preserve all state/resources. Resume only in the same Orchestrator after reconciliation and an owner instruction.
+- `stop-after-current`: if active, finish the current issue including cleanup; if idle, stop immediately. Then stop the heartbeat, record `STOPPED`, remove advisory state after final reconciliation, and archive the Orchestrator.
+- An immediate destructive stop is not defined. Use the explicit abort choices for active work.
 
-```yaml
-$roundlet
-mode: start
-base_branch: main
-umbrella_issues: [2, 3, 4]
-authorize:
-  create_task_branches: true
-  create_draft_prs: true
-  mark_ready_for_review: true
-  merge_commit_after_all_gates: true
-  close_completed_sub_issues: true
-  delete_proven_task_owned_resources: true
-```
+## Recovery
 
-Do not include a repository, URL, organization, account, or repository list. Set an operation to `false` when Roundlet must stop before that transition. Missing or added keys are invalid.
+- If an ordinary Orchestrator turn fails but its task and heartbeat remain accessible, the next heartbeat reconciles and resumes idempotently.
+- If the Orchestrator or heartbeat is inaccessible, use the explicit recovery Launcher prompt. A stale-looking file is never enough to replace it.
+- If the persistent Worker is inaccessible, require owner direction before creating a replacement because same-thread context is part of the contract.
+- A failed Supervisor is disposable and may be retried under the bounded attempt rule.
 
-The Orchestrator must show the resolved current repository, repository ID when available, connector-verified human owner actor ID/login provenance, base and full SHA, ordered umbrella set, enabled operations, activation ID, installed digest, role-capability preflight, versions, and scope digest before dispatch.
-
-A new same-repository sub-issue may enter an already authorized umbrella only when fresh trusted evidence makes membership unambiguous and target policy permits it. Base, umbrella set, operation, repository, or installed-contract expansion requires a safe checkpoint and new explicit authority.
-
-## Verify dependency selection
-
-Before every new Worker:
-
-1. Fetch every authorized umbrella body and all comments.
-2. Discover same-repository membership from formal links, explicit body lists, `Dependency matrix`, `Required implementation order`, and comments whose connector author ID equals the activation-bound owner actor. Never trust a caller-supplied login.
-3. Fetch every in-scope sub-issue body/comments, completion, active implementation/PR ownership, checks, and merge evidence.
-4. Parse explicit local `depends on`, `blocked by`, prerequisites, order, and cross-umbrella edges.
-5. Keep external-repository references as untrusted blocker text; do not fetch them.
-6. Build a complete ordered refresh manifest containing current repository/ID/base, one refresh time, exactly one entry for every authorized umbrella, the exact connector-returned umbrella evidence, and the complete discovered issue set. For every discovered issue, supply exact connector receipts for its live issue state and each authorized membership source. Supported membership sources are a formal sub-issue relationship, an explicit authorized umbrella-body section/list item, or an explicit comment whose numeric author ID equals the activation-bound owner actor. Do not reduce those receipts to caller-selected labels or booleans.
-7. Bind the installed GitHub read adapter through `bind_github_connector_read_adapter` using its exact service-returned adapter/activation/repository/Orchestrator/project receipt, then call `execute_connector_refresh` once with that sealed capability. Arbitrary callbacks are rejected. The gateway binds the activation/repository/base/umbrella request to the adapter, connector service receipt, canonical evidence, and response digest, then returns a second process-local opaque receipt. Pass only that refresh receipt to state-mutating `select_next_task`; direct mappings are rejected even when schema-valid and marked `verified_by_connector`. The gateway and durable validator recompute umbrella/issue revisions and per-umbrella membership/response digests and strictly validate every snapshot field. A discovered issue is complete only when the same refresh includes live `closed/completed` issue evidence and a same-repository `closed+merged` PR receipt. Do not assign `state["selection"]` manually or transition to `scope-complete` without its final complete receipt.
-
-Hard dependencies and required order are authoritative. Across eligible umbrella heads, use explicit cross-dependencies, work unlocked, overlap risk, owner priority, activation umbrella order, and issue number. Model judgment may interpret ambiguity but cannot invent dependencies or override a prerequisite.
-
-If no task is eligible, confirm `waiting-dependency` and retry later. If a cycle, contradiction, ambiguous active PR, or irreducible membership/ownership ambiguity exists, confirm `blocked`, pause the heartbeat, and display exact evidence. Never skip a blocked selected task to stay busy.
-
-## Run the manual smoke path
-
-Do not attach the heartbeat until one bounded manual path proves:
-
-- skill discovery and installed digest binding;
-- exact repository/base synchronization;
-- connector issue/comment/sub-issue/PR/check reads;
-- deterministic membership/dependency selection;
-- Worker creation with the activation snapshot values and network denial;
-- fixed Worker handoff mailbox and guarded push;
-- curated comment and draft PR connector mutations in an owner-approved smoke target;
-- fresh read-only Supervisor with the activation snapshot values and archive;
-- FINDINGS repair or PASS follow-up using the same Worker;
-- budget preflight before the Supervisor callback, plus the final-worker-repair exhaustion path with exact finding dispositions and ready read-back;
-- ready transition, fresh final review, expected-head merge gate without necessarily merging a production change;
-- maintenance pause, durable checkpoint, one-signal resume, and existing schedule reactivation behavior;
-- mailbox interruption recovery and no duplicate mutations;
-- task/scope compaction and bounded files;
-- no interactive permission prompt for the exact unattended operations.
-
-Use a real selected task only when its activation explicitly authorizes the mutations. Otherwise stop the smoke path before unauthorized transitions and record the missing owner decision.
-
-## Attach the heartbeat
-
-After the manual smoke path, attach exactly one five-minute schedule to the existing dedicated Orchestrator task. Do not create a standalone task per poll.
-
-Use a durable prompt equivalent to:
-
-```text
-$roundlet
-Resume the exact activation from .codex-log/roundlet/state.json. Validate current-repository, activation, installed digest, and durable phase. Perform at most one externally visible transition. Before a new Worker dispatch, refresh the full authorized umbrella scope through the GitHub connector and select deterministically. Wait when a child/check/retry is pending. Pause the existing schedule on paused-maintenance, scope-complete, or permanent blocked. Never create another Orchestrator or schedule.
-```
-
-Keep the original cadence and schedule ID in state. Review the first several wakes. Confirm that each wake either waits safely or completes one durable transition and receipt.
-
-Scheduled local work requires the machine to remain powered on, the desktop app running, and the project path available.
-
-## Observe normal operation
-
-Expect this lifecycle:
-
-```text
-select -> Worker -> draft PR -> preflight -> fresh Supervisor
-  FINDINGS before budget -> same Worker repair -> preflight -> fresh Supervisor
-  FINDINGS at budget -> archive -> final Worker handoff -> mark ready/read-back -> READY_TO_MERGE
-  PASS -> same Worker disposition -> ready -> fresh final Supervisor
-  one slot remaining -> choose ready/read-back + real final Supervisor, or one last draft review
-  last-slot draft PASS -> block (never relabel it as a final PASS)
-  final PASS or finalized budget exhaustion + live gates
-  -> merge commit -> exact issue close -> proven cleanup -> sync -> select
-```
-
-Every candidate change invalidates PASS. Every Supervisor uses a new task. The bundled schema-3 review policy is `max_supervisor_cycles: 5` and `converge_after_supervisor_cycles: 3`; strict activation validation accepts only integers with `1 <= converge_after_supervisor_cycles <= max_supervisor_cycles <= 64`. Snapshot both values and their digest at activation, so later disk edits apply only to new activations. Before that task exists, run deterministic budget preflight; it permits rounds 1 through the configured maximum, returns the exact round-aware convergence block, and blocks every later creation callback. The threshold counts separately persisted, exact accepted Supervisor results—not created or maintenance-discarded tasks—so with the defaults the request after three completed reviews is `CONVERGING`. Each bounded activation stores exact `{thread_id, generation, result}` completion receipts and chained `{thread_id, generation, outcome, predecessor_digest, archive_digest}` archive receipts. The matching bounded `.supervisor-archive-authority.json` sidecar independently binds both the archive chain and the sole accepted-but-unarchived `{thread_id, generation, candidate_sha, result}` commitment. Persist that pending commitment after consuming a result and before recording its `COMPLETED` archive outcome; archive may consume only the exact committed receipt. A transaction intent commits exact old/new state and authority identities before either file advances, and load deterministically rolls back or completes an exact one-step partial write. State loading and task preflight reject an outcome history that differs from this authority, so a discarded thread cannot later satisfy the completion threshold by rewriting the state document. In converging mode, bounded earlier finding/repair summaries are non-authoritative independent recheck targets only: independently reproduce every retained blocker, do not copy prior conclusions as authority or proof, do not expand into speculative cleanup, and never suppress a new P0/P1/P2 finding. Pass the exact preflight guidance/digest to the task request and Supervisor-only prompt, bind it in the durable intent/idempotency identity, and reuse it on reconciliation. A threshold equal to the maximum never converges within the bounded budget. Schema-6 bounded activations migrate with that equality to preserve behavior; an accepted-but-unarchived schema-6 result is retired as non-converging archive history before the new contract validates it. Schema-7/8 history lacks bound accepted-result evidence, so schema-9 migration initializes its completion ledger at zero rather than narrowing review from unverified task history; schema-9 archive history likewise lacks durable outcomes, so schema-10 resets completion and outcome ledgers; schema-10 archive outcomes lack an outcome-bound archive commitment, so schema-11 resets those ledgers; schema-11's state-only chain is reset and its retained archive digest becomes the initial schema-12 external-authority anchor. Legacy-unbounded activations remain complete/non-converging. At the last slot, choose explicitly between marking Ready for a real final review and retaining draft state so last-round draft FINDINGS can exhaust the budget. A last-slot draft PASS is fail-closed because it is not a post-ready PASS and has no findings to finalize. Persist the stable task-creation idempotency intent under the single-writer lock before calling the service; after an interruption, reconcile that intent and never create a second task. Immediately read every Worker/Supervisor back from the task service and durably bind the exact returned model/reasoning/project/parent/fork/permission/tool/network/task ID and UTC creation time; this is external capability evidence, not a value the Orchestrator may invent. Archive and record each Supervisor immediately after consuming and durably committing its result, before creating another or accepting final-worker repair. A bounded recent-ID/creation-receipt ledger and rolling archive digest retain freshness evidence. At budget exhaustion, retain reviewed, provisional repair, and final candidate identities separately, require an exact ordered finding/disposition digest match, and do not claim the PR ready without the authorized gateway and exact live read-back. Before creating any Worker branch, worktree, or task, verify `create_task_branches` both at the external callback boundary and in durable assignment. After draft PR creation or recovery, connector read-back must prove the exact PR is open/still draft and bind base/head repository names and IDs, base branch/SHA, head ref/SHA. The Worker task persists until merge/cleanup. The root Orchestrator alone mediates connector reads and writes.
-
-Use curated GitHub comments. Keep raw child prompts, raw transcripts, hidden reasoning, credentials, local paths, checkpoint internals, and internal ranking chains local and bounded.
-
-After the exact merge and issue-close receipts, clean up in this order: archive every remaining Supervisor and the task-owned Worker and call `record_children_archived`; require the recorded worktree's live current branch and exact porcelain branch entry to equal the task branch, then run guarded removal and save `worktree_removed`; run guarded safe local-branch deletion and save `local_branch_deleted`; then delete only the exact recorded remote task branch through the connector and save `record_remote_branch_deleted`. Detached, switched, ambiguous, or uniquely owned work blocks cleanup. Do not enter `sync-base` until all five durable cleanup flags are true. An already absent local resource is success only when the guard independently proves the same task ownership and merged reachability.
-
-## Pause for Roundlet maintenance
-
-In the existing dedicated Orchestrator task, send:
-
-```yaml
-$roundlet
-mode: maintenance-pause
-reason: <short reason>
-```
-
-Wait for visible acknowledgement:
-
-```text
-PAUSED_FOR_MAINTENANCE
-checkpoint_id: <id>
-activation_id: <id>
-current_task: <issue or none>
-pr: <url or none>
-installed_roundlet_digest: <digest>
-resume_prompt: <exact copy/paste prompt>
-```
-
-The Orchestrator must stop new selection, finish/reconcile every atomic mutation—including a pending Supervisor task-creation intent—drain the Worker at a clean safe turn boundary with `drain_worker_for_maintenance`, or invalidate/archive an interrupted Supervisor with `discard_supervisor_for_maintenance`. The drain records whether the same Worker turn must be reactivated; discarding a Supervisor restores `draft-pr` or `ready` so a new Supervisor can be created. Consume/quarantine complete mailboxes, prove no child is mutating, pause the single schedule, read back `schedule_state=paused`, and pass that proof to `create_maintenance_checkpoint`.
-
-Do not begin source maintenance until this acknowledgement appears. For urgent interruption, require stricter reconciliation and a fresh Supervisor for uncertain review identity.
-
-## Maintain and install Roundlet
-
-Maintenance authority comes from the Roundlet source repository owner, not the paused target activation.
-
-1. Synchronize a dedicated Roundlet maintenance checkout with its default branch.
-2. Inspect and preserve unrelated worktrees.
-3. Create an isolated maintenance branch/worktree following repository conventions.
-4. Implement only the approved source change.
-5. Run deterministic tests, quick validation, static prohibition scans, rule checks, and forward tests.
-6. Create focused Conventional Commits, push, and open a reviewed PR.
-7. Obtain explicit owner approval before merge.
-8. Merge through the source repository's normal gates.
-9. Prove the maintenance branch/worktree is clean and merged before safe reclamation.
-10. Synchronize the dedicated source maintenance checkout.
-11. Install the exact reviewed commit/tag and compute the installed content digest.
-
-Do not ask the paused target Orchestrator to self-update, infer installation, or activate a floating version.
-
-## Resume directly or with assistance
-
-Prefer the same Orchestrator task:
-
-```yaml
-$roundlet
-mode: maintenance-resume
-checkpoint_id: <checkpoint-id>
-installed_roundlet_digest: <reviewed-installed-digest>
-```
-
-One explicit signal is sufficient. The Orchestrator must then:
-
-- verify checkpoint, repository, activation, umbrella, base, selected task, and installed digest;
-- verify reviewed source merge and installed contents;
-- require the target orchestration checkout clean and synchronized;
-- compare state/schema/protocol/review/policy versions;
-- atomically run only a declared supported migration while preserving the original on failure;
-- refresh current-repository issues, comments, PR, discussion, checks, mergeability, merge state, and branch identity;
-- reconcile the same Worker, its worktree/branch/base/candidate/clean state, and complete unconsumed mailbox;
-- discard incomplete/stale Supervisor identity and create a fresh one when required;
-- invalidate PASS for candidate uncertainty or changed review/gate semantics;
-- preserve PASS only when connector read-back proves a merged PR in the independent reviewed Roundlet source repository changed exactly `skills/roundlet/references/operator-guide.md`, and the candidate, schedule, pending action, receipts, and protocol/review/policy contract are unchanged;
-- repair mutation receipts before a new visible action;
-- resume the recorded durable phase;
-- reactivate the same schedule/cadence and restore its normal heartbeat prompt.
-
-For a schema change, invoke `migrate-state` with the exact activation ID, checkpoint ID, schedule ID, reviewed installed digest, expected old schema, target schema, and `--skill-root <installed-roundlet>`. The command verifies that the supplied root has that digest before it reads the migration-only legacy profile. The persisted phase must be `paused-maintenance`, checkpoint versions/digest must match, schedule state must be `paused`, and all mailbox/connector intents must be reconciled. Any failure leaves the original bytes unchanged. The internal pure transformer is not permission to write a running activation.
-
-Expect:
-
-```text
-RESUMED_FROM_MAINTENANCE
-checkpoint_id: <id>
-phase: <restored phase>
-worker: <task id or none>
-pr: <url or none>
-candidate_sha: <sha or none>
-pass_valid: <yes/no>
-installed_roundlet_digest: <digest>
-next_transition: <bounded action>
-```
-
-If working from another Codex task, locate the existing task titled `Roundlet Orchestrator — owner/repository` and send the same resume prompt to it. Do not create another Orchestrator, checkout, state directory, or schedule.
-
-When only the Schedule UI is available, update the paused schedule prompt with the resume fields and reactivate it once. Editing the prompt alone does not wake a paused schedule. After success, restore the normal durable heartbeat prompt.
-
-## Recover idempotently
-
-Treat `state.json` as the sole mutable machine state. The durable migration gateway additionally owns `.legacy-review-authority.json` only for migrated schema-5 activations; it is an immutable capability receipt and must not be synthesized, copied to a new activation, or replaced from embedded predecessor JSON. Children return structured role handoffs; only the root Orchestrator wraps them with repository/role/thread/phase/SHA/idempotency metadata and writes fixed mailbox names in its state directory. Overwrite only consumed payloads.
-
-For every mailbox, `MailboxStore.consume` acquires the activation state directory's single-writer lock before reading state and holds it through intent claim, callback/reconciliation, receipt/state save, and deletion. Concurrent heartbeat/manual/resume consumers serialize; only the claimant may mutate.
-
-For every mailbox:
-
-1. Validate protocol/review versions, activation, selected task, phase, source role/task, base, candidate, and idempotency key. Per mailbox kind, the key must end in a decimal sequence starting at 1 and increasing by exactly 1 (for example, `worker-handoff-000001`).
-2. Check durable receipts and connector read-back before repeating a mutation.
-3. If completion is proven, record/repair the receipt and phase, then delete the mailbox.
-4. If no mutation exists, perform it once, verify when possible, atomically record state, then delete.
-5. If mutation identity is ambiguous, block instead of retrying.
-
-The durable per-kind high-water mark advances with a new mutation intent. A pending intent must be reconciled before the next sequence. Byte-aware rolling compaction may remove full completed receipts, but it folds their identity into an archive count/digest; every sequence at or below the high-water mark remains permanently consumed for that activation. Never use UUID-only keys, skip a number, reset a sequence between tasks, or treat a missing compacted receipt as permission to mutate again.
-
-Resume only from durable observable state: immutable commits, Git status, task IDs, PR identity, connector state, mailbox/receipt, installed digest, and phase. Do not claim recovery from the middle of model generation.
-
-## Handle blockers
-
-Classify and respond:
-
-| Condition | Action |
-| --- | --- |
-| Child still running | Wait for next heartbeat. |
-| Rate limit or pending check | Record bounded retry metadata and retry later. |
-| Connector auth/permission failure | Pause/block with exact authorization repair. |
-| Git credential failure | Pause/block; repair host helper outside state. |
-| Admin policy denies unattended operation | Block before start or pause safely. |
-| Malformed child protocol | Reject result and request a fresh role turn. |
-| Stale Supervisor candidate | Discard and create a fresh Supervisor. |
-| Failed test/check or conflict | Return safely actionable work to the same Worker. |
-| Ambiguous PR/branch/comment/membership/cleanup | Block with evidence. |
-| Incomplete dependency | Enter `waiting-dependency` and retry. |
-| Cycle/order contradiction | Block the full active scope. |
-| Selected task is unimplementable | Block; do not select a later task. |
-| Migration unavailable/fails | Preserve original state and remain paused. |
-| Resume signal absent | Remain paused; do not infer completion. |
-| Scope expansion requested | Reach a safe checkpoint and require new activation. |
-
-Never substitute a model, provider, connector, credential, repository, or task-selection policy to bypass a blocker.
-
-## Retain and compact state
-
-Keep local storage bounded to:
-
-- one `state.json`, capped at 1 MiB;
-- at most three fixed transient mailbox files, each capped at 128 KiB;
-- mutation receipts capped at 64 KiB inside state;
-- one `last-scope-summary.json`, capped at 1 MiB.
-
-Compact completed mutation receipts by serialized byte budget as well as count, while preserving unread mailboxes, pending intents, the per-kind high-water marks, and rolling archive count/digest. Keep at most the bounded recent Supervisor ID ledger; fold immediately archived Supervisor identities into their rolling count/digest.
-
-After a merged task, retain only umbrella/issue, public issue/PR URLs, merge SHA, review-round total, the bounded terminal-review outcome with relevant round/candidate/evidence digests, completion time, and final result. Remove full source content, selection detail, prompts, reviews, changed-file detail, archived child IDs, mailboxes, receipts no longer needed, and superseded maintenance detail.
-
-Archive Supervisor tasks immediately after consumption and the Worker after merge/cleanup. Do not create local transcript archives or assume service-side task history can be hard-deleted.
-
-After scope completion, write one summary, empty mailboxes, compact state to a completed header/summary pointer, and pause the schedule. Replace the prior state and summary on the next explicit activation rather than accumulating history.
-
-## Complete or replace scope
-
-Declare completion only after one final full connector refresh proves:
-
-- no authorized open sub-issue still requires implementation;
-- completion/merge evidence is verified;
-- no active task, PR ownership ambiguity, branch, worktree, child task, or pending mutation remains;
-- the dedicated checkout is clean and effectively synchronized: checked-out base/HEAD/local/remote are equal, or detached HEAD equals the remote base while another worktree provably owns the local base ref.
-
-Then enter `scope-complete`, compact, and pause the one heartbeat.
-
-To change repository, base, umbrella list, or operations, complete or safely checkpoint the current task, end the old activation, open the desired repository as the active project, pass synchronization/preflight again, and invoke a new explicit `mode: start`. Never carry state or authority across Git common directories.
+During recovery, reconstruct from GitHub trace first, then exact remote/local Git state, then Codex task evidence, then advisory files. Stop on contradictions. Never hide a recovery correction by editing old GitHub comments.
