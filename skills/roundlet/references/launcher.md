@@ -14,15 +14,15 @@ Use $roundlet as a short-lived Launcher for exactly one target repository.
 Target:
 - GitHub repository: <OWNER/REPOSITORY>
 - Authoritative local checkout: <ABSOLUTE_PATH>
-- Expected protected primary branch: main
-- Roundlet configuration: use skills/roundlet/references/roundlet-config.json from the installed skill without changing or defaulting any value
+- Expected primary branch: main
+- Roundlet configuration: use references/roundlet-config.json within the installed $roundlet skill without changing or defaulting any value
 
 Read the complete Roundlet SKILL.md and every reference it requires before acting. Do not implement an issue in this Launcher task.
 
 Perform a fail-closed activation preflight:
 1. Resolve the exact installed skill source and configuration. Validate that every required configuration value is present and internally consistent.
 2. Verify that this Codex host can create, address, wait for, archive, and resume tasks; create and manage one recurring five-minute heartbeat; select each configured model and reasoning effort exactly; and access Git, the target checkout, and GitHub with the required read/write capabilities. Do not substitute an unsupported model or effort.
-3. Verify the target identity, clean authoritative checkout, main branch, origin URL, GitHub default branch, HEAD == local main == origin/main, merge-commit support, issue and pull-request access, required checks and branch rules, and authenticated GitHub identity.
+3. Verify the target identity, clean authoritative checkout, main branch, origin URL, GitHub default branch, HEAD == local main == origin/main, merge-commit support, issue and pull-request access, and authenticated GitHub identity. Record whether the primary branch is protected. Inspect and obey every existing required check and branch rule; fail closed if existing rules cannot be inspected or conflict with the configured workflow. Absence of branch protection is not itself an activation blocker.
 4. Read the root AGENTS.md from authoritative origin/main and parse only the exact Roundlet authority switches defined by the skill. Fail closed on missing, malformed, duplicate, or conflicting values. Require `roundlet.enabled: true`; record every other `false` switch as a later mutation boundary rather than silently changing it or rejecting activation.
 5. Add `.roundlet/` to this checkout's local `.git/info/exclude` if it is not already excluded. Never commit that exclusion or any `.roundlet` file.
 6. Inspect `.roundlet/lease.json`, `.roundlet/current.md`, GitHub traces, active codex/* branches and pull requests, local worktrees, and relevant Codex tasks/heartbeats. If any evidence suggests another live or unreconciled run, stop with STALE_OR_ACTIVE_RUN_REQUIRES_OWNER; never expire, steal, replace, or overwrite it.

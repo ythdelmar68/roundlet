@@ -2,6 +2,26 @@
 
 This is the detailed operating contract for Roundlet. The Orchestrator must reread the live sources it depends on before every mutation. Natural-language judgment is intentional; local files provide an advisory recovery index, not deterministic coordination.
 
+## Contents
+
+- [Operating envelope](#operating-envelope)
+- [Configuration and capability preflight](#configuration-and-capability-preflight)
+- [Advisory local state](#advisory-local-state)
+- [Backlog classification](#backlog-classification)
+- [Dependencies and ranking](#dependencies-and-ranking)
+- [State machine and one-transition ticks](#state-machine-and-one-transition-ticks)
+- [Claim and implementation](#claim-and-implementation)
+- [GitHub trace](#github-trace)
+- [Review epochs and rounds](#review-epochs-and-rounds)
+- [Owner input](#owner-input)
+- [Repository authority block](#repository-authority-block)
+- [Merge gates](#merge-gates)
+- [Leaf closure](#leaf-closure)
+- [Ordered cleanup](#ordered-cleanup)
+- [Active issue closed, ignored, or withdrawn](#active-issue-closed-ignored-or-withdrawn)
+- [Pause, resume, and stop](#pause-resume-and-stop)
+- [Recovery](#recovery)
+
 ## Operating envelope
 
 Roundlet is safe only inside this deliberately narrow envelope:

@@ -2,6 +2,14 @@
 
 These are prompt contracts, not hidden role knowledge. The Launcher and Orchestrator fill every placeholder with live, exact values. Never send a role a floating branch name where a full commit SHA is required.
 
+## Contents
+
+- [Shared context envelope](#shared-context-envelope)
+- [Long-lived Orchestrator bootstrap](#long-lived-orchestrator-bootstrap)
+- [Heartbeat tick](#heartbeat-tick)
+- [Worker contract](#worker-contract)
+- [Supervisor contract](#supervisor-contract)
+
 ## Shared context envelope
 
 Begin every Worker and Supervisor turn with this fully populated envelope:
