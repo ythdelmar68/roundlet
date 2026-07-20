@@ -1,0 +1,31 @@
+{
+  "roles": {
+    "orchestrator": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "xhigh"
+    },
+    "worker": {
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "high"
+    },
+    "supervisor": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "xhigh"
+    }
+  },
+  "heartbeat": {
+    "minutes": 5
+  },
+  "review": {
+    "complete_rounds": 3,
+    "max_rounds": 10,
+    "max_supervisor_attempts_per_round": 3,
+    "on_final_findings": "worker-final-repair-then-merge"
+  },
+  "merge": {
+    "method": "merge"
+  },
+  "owner_allowlist": [
+    "ythdelmar68"
+  ]
+}
