@@ -12,12 +12,12 @@ Operate a single-target-repository outer loop through Codex tasks, GitHub, Git w
 - Use exactly one long-lived Orchestrator task, one heartbeat, one authoritative machine, and at most one active leaf issue for a target repository.
 - Refuse activation when another live or unreconciled Roundlet run may own that target. The file lease is advisory and never prevents split-brain across machines, clones, or Codex tasks.
 - Treat GitHub issues and pull requests as the durable backlog and audit history. Let only the Orchestrator mutate GitHub.
-- Keep the same Worker task for initial implementation, repairs, the optional final repair, and cleanup preflight. Create a fresh read-only Supervisor task for every review round.
-- Bind every Worker and Supervisor turn to explicit issue, pull-request, phase, review epoch/round, and full commit SHA context. Require each role to reread the live sources defined by the role contract.
+- Keep the same Worker task for initial implementation, repairs, the optional final repair, and cleanup preflight. Create a fresh read-only Supervisor task for every review attempt.
+- Bind every Worker and Supervisor turn to explicit issue, pull-request, phase, review epoch/round, and full commit SHA context. Bind each Supervisor turn and result to its attempt number and configured attempt profile. Require each role to reread the live sources defined by the role contract.
 - Run only one issue through implementation and cleanup before selecting another issue.
 - Keep core orchestration and safety rules in this file. Do not move them into a target repository's `AGENTS.md`.
 - Read repository authority only from the root `AGENTS.md` on authoritative `origin/main`. Boolean authority may narrow Roundlet, never override stricter repository or platform policy.
-- Fail closed when configured models, reasoning efforts, tools, GitHub permissions, merge method, repository authority, or required state cannot be verified. Never substitute a model or effort silently.
+- Fail closed when configured models, reasoning efforts, Supervisor attempt profiles, tools, GitHub permissions, merge method, repository authority, or required state cannot be verified. Never substitute a model, effort, or attempt profile silently.
 - Never auto-expire, steal, or replace a lease. Recovery requires explicit owner direction after reconciliation.
 - Couple a GitHub closing keyword only to the one active leaf that the pull request is intended to close. A negated phrase does not neutralize GitHub's keyword parser.
 - Never rebase, force-push, bypass protection, destroy unique work, close an umbrella issue, or claim Supervisor PASS after the review limit.
@@ -65,7 +65,8 @@ On activation and each heartbeat:
 
 - Rounds 1–3, when reached, are COMPLETE reviews. Any valid PASS ends review early.
 - Rounds 4–10 are CONVERGING reviews. They focus on prior findings and the delta but may report a new blocking regression or missing evidence.
-- A Supervisor attempt that fails, is cancelled, is malformed, or reviews the wrong SHA does not consume a round. Retry at most the configured attempts for that round, then enter `NEEDS_OWNER_INPUT`.
+- Keep the review epoch, round, mode, and candidate SHA unchanged while Supervisor attempts advance through the configured ordered profiles. Accept only a valid `SUPERVISOR_RESULT` bound to all of them; never treat task failure text as findings or PASS, and never send an invalid attempt to the Worker.
+- A Supervisor attempt that is invalid, fails, is cancelled, is inaccessible, is malformed, or reviews the wrong SHA does not consume a round. Advance only to the next configured attempt profile, without parsing display text to guess a policy or cybersecurity cause. After the configured attempt budget is exhausted, enter `NEEDS_OWNER_INPUT`.
 - When round 10 returns findings, send them once to the same Worker for a final repair. Do not run round 11 and do not claim PASS. Record `REVIEW_LIMIT_REACHED_WORKER_FINALIZED`, then apply all normal checks and merge gates.
 - An allowlisted owner scope change starts a new review epoch at round 1 COMPLETE.
 

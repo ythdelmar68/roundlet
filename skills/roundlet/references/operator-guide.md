@@ -32,7 +32,7 @@ Roundlet is safe only inside this deliberately narrow envelope:
 - one recurring heartbeat attached to that Orchestrator;
 - zero or one active leaf issue;
 - one persistent Worker task for that issue;
-- one fresh Supervisor task for each review round;
+- one fresh Supervisor task for each review attempt;
 - one isolated worktree and one `codex/` branch for that issue;
 - one Orchestrator identity as the only GitHub mutator.
 
@@ -45,6 +45,7 @@ Read `roundlet-config.json` exactly. Do not supply defaults, coerce values, or s
 Before activation, prove all of the following:
 
 - every configured model/reasoning-effort pair is selectable on the current Codex host;
+- Supervisor attempt-profile names are unique, the ordered profile count equals `max_supervisor_attempts_per_round`, and every position has an exact model and reasoning effort;
 - tasks can be created, addressed, waited on, resumed, and archived;
 - one recurring heartbeat can be created, inspected, paused/resumed, and stopped;
 - Git and the authoritative checkout are usable;
@@ -80,7 +81,7 @@ The lease contains no expiry and authorizes no automatic takeover. A representat
 }
 ```
 
-`current.md` records only pointers and reconciliation facts: phase, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, branch, worktree, base and candidate full SHAs, review epoch/round/mode, last durable GitHub event, blocking condition, and last reconciliation time. Do not treat it as durable history or append a transcript.
+`current.md` records only pointers and reconciliation facts: phase, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, current Supervisor task when one exists, branch, worktree, base and candidate full SHAs, review epoch/round/mode, Supervisor attempt number/profile, last durable GitHub event, blocking condition, and last reconciliation time. Do not treat it as durable history or append a transcript.
 
 Before every tick or mutation, reconcile both files against GitHub, Git, Codex tasks, and the heartbeat. Prefer live authoritative evidence. When evidence conflicts, stop with `STATE_RECONCILIATION_REQUIRES_OWNER`; never guess or overwrite the conflict.
 
@@ -183,32 +184,34 @@ Record at least:
 - selection and dependency/ranking rationale on the leaf;
 - initial Worker handoff on the leaf;
 - draft pull-request creation on the pull request;
+- every invalid Supervisor attempt as a bounded availability event naming its attempt, configured profile, task terminal state, review identity, and candidate SHA;
 - every valid Supervisor result on the pull request;
 - every Worker repair/final-repair handoff on the pull request;
 - review terminal result on the pull request;
 - owner-input, repository-authority, abort, and correction decisions on the active issue or pull request;
 - merge result, leaf closure readback, and cleanup result.
 
-A handoff trace summarizes commit SHA, files, tests, finding dispositions, unresolved risks, and terminal status. Do not paste hidden chain-of-thought, credentials, raw task transcripts, or unbounded logs.
+A handoff trace summarizes commit SHA, files, tests, finding dispositions, unresolved risks, and terminal status. For an invalid Supervisor availability event, record a service error identifier only when the task service actually exposes it as a stable typed field; otherwise record `none`. Never infer a cybersecurity, content-policy, or other cause from UI copy, display text, or prose error messages. Do not paste hidden chain-of-thought, credentials, raw task transcripts, blocked response content, or unbounded logs.
 
 ## Review epochs and rounds
 
 Start review epoch 1, round 1, bound to the exact pushed candidate SHA. A new allowlisted owner scope change resets to a new epoch at round 1 COMPLETE; ordinary Worker repairs remain in the same epoch.
 
-For every round:
+For every round, keep the review epoch, round, mode, and candidate SHA fixed while attempts advance:
 
-1. Create a fresh Supervisor task with the configured model and effort.
-2. Give it read-only filesystem and GitHub instructions plus the exact contract in `thread-prompts.md`.
-3. Require a structured result bound to the full candidate SHA.
-4. Independently verify that it read the required context and reviewed the named SHA.
-5. Publish a valid result to the pull request.
-6. Archive that Supervisor task.
+1. Start at attempt 1 or reconcile the last durably recorded attempt after recovery.
+2. Select the configured Supervisor attempt profile at that exact one-based position. Never reuse a previous position, skip ahead, or substitute a model or effort.
+3. Create a fresh Supervisor task with that exact profile, then give it read-only filesystem and GitHub instructions plus the exact contract in `thread-prompts.md`.
+4. Require a structured result bound to the attempt number, profile, review epoch/round/mode, and full candidate SHA.
+5. Independently verify that it read the required context, remained read-only, reviewed the named SHA, and returned a valid result for the configured attempt identity.
+6. If valid, publish the result to the pull request, archive the task, and follow the normal PASS or FINDINGS path. A valid result from any configured attempt profile has the same review authority.
+7. If invalid, archive the task, publish only the bounded availability event, and advance to the next configured profile.
 
 Rounds 1–3 are COMPLETE if reached. Any valid PASS ends review immediately; three rounds are not a minimum.
 
 Rounds 4–10 are CONVERGING. The Supervisor focuses on unresolved prior findings and changes since the previous reviewed candidate, while still reporting a new blocking regression, scope violation, or missing evidence.
 
-A failed, cancelled, inaccessible, malformed, mutating, or wrong-SHA Supervisor attempt does not consume a round. Retry with a fresh Supervisor at most `max_supervisor_attempts_per_round`. After the limit, enter `NEEDS_OWNER_INPUT` without selecting another issue.
+`INVALID_CONTEXT`, a failed, cancelled, inaccessible, or restricted task, a missing or malformed result, mutation, incomplete required context, wrong attempt/profile identity, or wrong SHA is invalid and does not consume the round. Reconcile and correct any context mismatch before the next attempt, but preserve the candidate SHA and review round. The invalid attempt consumes only its position in the configured attempt budget; it is never converted into a finding, PASS, or Worker repair request. Route failover from the absence of a valid result, not from a guessed failure category. After `max_supervisor_attempts_per_round` positions are exhausted, enter `NEEDS_OWNER_INPUT` without selecting another issue or merging.
 
 When a valid result has findings before round 10:
 
