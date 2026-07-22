@@ -20,6 +20,7 @@ This is the detailed operating contract for Roundlet. The Orchestrator must rere
 - [Ordered cleanup](#ordered-cleanup)
 - [Active issue closed, ignored, or withdrawn](#active-issue-closed-ignored-or-withdrawn)
 - [Pause, resume, and stop](#pause-resume-and-stop)
+- [Copyable owner commands](#copyable-owner-commands)
 - [Recovery](#recovery)
 
 ## Operating envelope
@@ -313,6 +314,88 @@ There is no preserve-old-work-while-selecting-next option. Never infer abandon-a
 - `pause`: finish the current atomic mutation or stop before the next one, record `PAUSED`, pause the heartbeat, and preserve all state/resources. Resume only in the same Orchestrator after reconciliation and an owner instruction.
 - `stop-after-current`: if active, finish the current issue including cleanup; if idle, stop immediately. Then stop the heartbeat, record `STOPPED`, remove advisory state after final reconciliation, and archive the Orchestrator.
 - An immediate destructive stop is not defined. Use the explicit abort choices for active work.
+
+## Copyable owner commands
+
+Send routine commands to the existing long-lived Orchestrator task. Do not open a new Launcher, Orchestrator, or heartbeat for status, pause, resume, or stop. Replace every placeholder and keep the target repository and authoritative checkout explicit.
+
+### Inspect status without advancing
+
+```text
+Use $roundlet to inspect the existing run without advancing it.
+
+Target repository: <OWNER/REPOSITORY>
+Authoritative checkout: <ABSOLUTE_PATH>
+
+Address the existing Orchestrator task. Reconcile the live GitHub trace, exact Git state,
+Codex task and heartbeat state, `.roundlet/lease.json`, and `.roundlet/current.md`.
+Do not create, replace, resume, pause, stop, or archive a task or heartbeat. Do not make a
+GitHub or Git mutation and do not perform a Roundlet tick.
+
+Report the run ID, Orchestrator and heartbeat identities, current phase, active leaf and
+pull request, Worker and current Supervisor when present, exact candidate SHA, review
+epoch/round/attempt/profile, blocking condition, last durable event, and next safe action.
+Stop on contradictory evidence instead of repairing it.
+```
+
+### Pause at a safe checkpoint
+
+```text
+Use $roundlet to pause the existing run for <OWNER/REPOSITORY> in the same long-lived
+Orchestrator task.
+
+Reconcile live state first. Finish only an already-started atomic mutation, then stop
+before the next externally meaningful transition. Record PAUSED, pause the one bound
+heartbeat, and preserve the lease, current state, active task identities, branch,
+worktree, pull request, and all unique work. Report the exact checkpoint and retained
+resources. Do not archive the Orchestrator or select another issue.
+```
+
+### Resume the paused run
+
+```text
+Use $roundlet to resume the existing paused run for <OWNER/REPOSITORY> in the same
+long-lived Orchestrator task.
+
+Reconcile GitHub, Git, task, heartbeat, lease, and current-state evidence before changing
+anything. Stop for owner input if identities or state conflict. If reconciliation is
+clean, resume the one bound heartbeat, leave PAUSED, and perform at most one idempotent
+Roundlet tick. Report the before/after phase, transition, active leaf, candidate SHA,
+blocking condition, and next safe action. Do not create a replacement task or heartbeat.
+```
+
+### Stop after the current issue
+
+```text
+Use $roundlet to set stop-after-current for the existing run for <OWNER/REPOSITORY>.
+
+Reconcile first and record STOP_AFTER_CURRENT. If an issue is active, finish only that
+issue through its normal review, merge gates, leaf closure, and ordered cleanup; select
+no next issue. If the run is idle, stop immediately. At the terminal safe state, stop the
+one heartbeat, record STOPPED, remove the advisory lease/current files after final
+reconciliation, and archive the Orchestrator. Never discard unique work to accelerate
+the stop.
+```
+
+### Resolve an active issue that was closed, ignored, or withdrawn
+
+Choose exactly one of `resume`, `preserve-and-stop`, or `abandon-and-cleanup`. The last option is destructive and must name the exact resources the owner authorizes Roundlet to remove.
+
+```text
+Use $roundlet in the existing Orchestrator task for <OWNER/REPOSITORY>.
+
+The active leaf is <ISSUE_NUMBER_AND_URL>. After reconciling all live evidence, apply this
+owner decision: <resume|preserve-and-stop|abandon-and-cleanup>.
+
+For resume, continue the same work only after the blocking condition is removed. For
+preserve-and-stop, retain every task, branch, worktree, pull request, and evidence item,
+pause the heartbeat, and stop scheduling. For abandon-and-cleanup, remove only these
+explicitly authorized resources: <EXACT_RESOURCE_LIST>. Preserve anything not listed,
+append the required trace, and stop on ambiguous or unique work. Report every retained,
+removed, and unresolved resource.
+```
+
+If the original Orchestrator or heartbeat is inaccessible, do not use a routine command. Use the explicit recovery Launcher in [`launcher.md`](launcher.md#explicit-recovery).
 
 ## Recovery
 

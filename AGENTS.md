@@ -9,10 +9,12 @@
 ## Source layout
 
 - Keep `skills/roundlet` as the canonical skill source root.
+- Keep exactly one human-facing `README.md` at the repository root for discovery, architecture, installation, and operating guidance. Do not treat it as part of the installed skill.
 - Keep Roundlet prompt-native. Do not add an executable orchestration runtime, database, package, runtime migration, runtime metrics, runtime compatibility layer, or platform matrix.
 - Keep fundamental safety and orchestration principles explicit in `skills/roundlet/SKILL.md`.
 - Keep detailed operator and role documentation one level below `skills/roundlet/references/`.
-- Do not add a README, changelog, installation guide, quick reference, transcript archive, duplicate operator guide, unnecessary icon, empty optional directory, CI workflow, release artifact, or automated test suite.
+- Whenever any file under `skills/roundlet` changes, review and synchronize every affected file under `skills/roundlet/references/` and the root `README.md` in the same pull request. Update affected documentation, or record in the pull request why a reviewed document needs no textual change.
+- Do not add another README, a changelog, a separate installation guide, a quick reference, a transcript archive, a duplicate operator guide, an unnecessary icon, an empty optional directory, a CI workflow, a release artifact, or an automated test suite.
 - Do not commit credentials, `.env` files, target-repository runtime state, caches, or generated artifacts.
 
 ## Verification
