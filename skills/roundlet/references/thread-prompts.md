@@ -5,6 +5,7 @@ These are prompt contracts, not hidden role knowledge. The Launcher and Orchestr
 ## Contents
 
 - [Shared context envelope](#shared-context-envelope)
+- [GitHub access recovery](#github-access-recovery)
 - [Long-lived Orchestrator bootstrap](#long-lived-orchestrator-bootstrap)
 - [Heartbeat tick](#heartbeat-tick)
 - [Worker contract](#worker-contract)
@@ -39,6 +40,10 @@ prior_trace_urls: <ordered-urls-or-none>
 
 The Orchestrator must validate this envelope against live evidence before sending it. A role must stop and report `CONTEXT_MISMATCH` if the envelope contradicts live GitHub, Git, repository instructions, or filesystem state.
 
+## GitHub access recovery
+
+Every role must treat a GitHub CLI result produced before GitHub is reachable as connectivity evidence, not credential rejection. When `gh` is required, request scoped network escalation for the same command automatically and apply the operator guide's bounded recovery contract. Never open browser authentication, substitute browser automation, or expose token material. A Worker or Supervisor reports exact denial, transport, or reachable-authentication evidence to the Orchestrator; only the Orchestrator may classify the resulting Roundlet blocking state.
+
 ## Long-lived Orchestrator bootstrap
 
 The Launcher creates the Orchestrator with this contract:
@@ -51,6 +56,11 @@ resolved configuration, root origin/main authority switches, advisory file paths
 authenticated identity, and Launcher preflight evidence>
 
 Read the complete Roundlet SKILL.md and all required references before acting.
+
+If Launcher preflight relied on GitHub CLI, repeat its representative read-only request
+inside this Orchestrator task. Apply automatic scoped escalation and bounded connectivity
+recovery; do not acknowledge readiness until the request succeeds or exact blocking
+evidence requires ACTIVATION_BLOCKED.
 
 You are the sole GitHub mutator for this run. Maintain one active leaf issue at most,
 one persistent Worker for that issue, and a fresh read-only Supervisor per review attempt.
@@ -88,6 +98,9 @@ Perform one idempotent Roundlet tick for the bound run. Reread the installed ski
 configuration, live target-repository evidence, authoritative origin/main authority,
 Codex task/heartbeat state, and advisory files needed for the current phase. Reconcile
 first and make at most one externally meaningful state transition.
+
+Treat GitHub CLI escalation and bounded connectivity recovery as supporting checks, not
+the tick's externally meaningful transition. Continue automatically when recovery succeeds.
 
 If IDLE, rescan all open target-repository issues and apply the complete classification,
 dependency, and ranking contract. If blocked, inspect only the defined release signal
