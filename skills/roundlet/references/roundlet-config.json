@@ -29,7 +29,19 @@
     }
   },
   "heartbeat": {
-    "minutes": 5
+    "active_minutes": 5,
+    "idle_noop_backoff_minutes": [
+      5,
+      15,
+      30,
+      60
+    ],
+    "owner_input_noop_backoff_minutes": [
+      5,
+      15,
+      30
+    ],
+    "max_lightweight_ticks_before_full_reconciliation": 12
   },
   "review": {
     "complete_rounds": 3,

@@ -1,6 +1,6 @@
 # Roundlet
 
-Roundlet is a prompt-native Codex skill that works through one GitHub repository's issue backlog, one actionable leaf at a time. It keeps one long-lived Orchestrator, one recurring heartbeat, one persistent Worker for the active issue, and a fresh read-only Supervisor for every review attempt. It merges only when the target repository explicitly permits the required mutations, then cleans up before selecting another issue.
+Roundlet is a prompt-native Codex skill that works through one GitHub repository's issue backlog, one actionable leaf at a time. It keeps one long-lived Orchestrator, one phase-aware recurring heartbeat, one persistent Worker for the active issue, and a fresh read-only Supervisor for every review attempt. It merges only when the target repository explicitly permits the required mutations, then cleans up before selecting another issue.
 
 This README is the human-facing entry point for the source repository. It is **not** part of the installed skill. The installable source is [`skills/roundlet`](skills/roundlet), and its operating contract remains self-contained there.
 
@@ -36,7 +36,11 @@ The **outer loop** schedules and completes one leaf issue before considering ano
 
 ```mermaid
 flowchart TD
-    Tick["Activation or heartbeat tick"] --> Reconcile["Reconcile GitHub, Git, tasks, heartbeat, and advisory state"]
+    Tick["Activation or heartbeat tick"] --> Observe["Read bounded pointers and compute live metadata fingerprints"]
+    Observe --> Same{"Complete exact match and lightweight wait allowed?"}
+    Same -- Yes --> Noop["No full read or repository mutation; apply heartbeat backoff"]
+    Noop --> Tick
+    Same -- No --> Reconcile["Full same-tick reconciliation of required semantic sources"]
     Reconcile --> Blocked{"Paused, stopped, blocked, or already active?"}
     Blocked -- Yes --> Follow["Follow only the current state or release signal"]
     Blocked -- No --> Scan["Scan every open issue"]
@@ -48,7 +52,8 @@ flowchart TD
     Gates --> Merge["Mark ready and merge with the configured method"]
     Merge --> Close["Verify or close the active leaf"]
     Close --> Cleanup["Preflight and perform ordered cleanup"]
-    Cleanup --> Idle["Return to IDLE or stop"]
+    Cleanup --> Idle["Return to IDLE and continue, or stop only when requested"]
+    Idle --> Tick
 ```
 
 The **inner loop** keeps the Worker but replaces the Supervisor on every attempt:
@@ -107,6 +112,7 @@ You need:
 - Codex with skills, task creation/coordination, and recurring heartbeat support;
 - Git and one clean authoritative checkout of the target repository;
 - authenticated GitHub access that can inspect issues, pull requests, reviews, checks, mergeability, branches, and repository rules;
+- GitHub Connector for semantic reads and writes, plus authenticated GitHub CLI when raw paginated metadata or formal relationship endpoints are required; `gh --jq` is sufficient and a standalone `jq` install is not required;
 - the exact configured models and reasoning efforts;
 - permission to add the Roundlet authority block to the target repository's root `AGENTS.md`.
 
@@ -139,8 +145,8 @@ skills/roundlet/references/roundlet-config.json only for values I explicitly con
 Set owner_allowlist to the exact allowed GitHub login or logins. Inspect whether every
 configured model, reasoning effort, and ordered Supervisor attempt profile is selectable
 on this Codex host; do not substitute an unsupported value. Keep the review limits,
-merge method, and heartbeat unchanged unless I explicitly approve a different exact
-value. Validate the skill, JSON, YAML, links, source layout, and git diff. Do not install,
+merge method, and heartbeat active/backoff/full-audit values unchanged unless I explicitly
+approve different exact values. Validate the skill, JSON, YAML, links, source layout, and git diff. Do not install,
 push, merge, publish, tag, or release anything in this task.
 ```
 
@@ -169,7 +175,7 @@ SKILL.md and every required reference, and report:
 - the configured owner allowlist;
 - every Orchestrator and Worker model/effort;
 - the ordered Supervisor attempt profiles;
-- heartbeat interval, review limits, and merge method;
+- heartbeat active interval, IDLE and owner-input backoff arrays, periodic full-audit bound, review limits, and merge method;
 - any missing, malformed, or unsupported value.
 
 Do not launch or recover a run. Do not mutate GitHub, Git, Codex tasks, heartbeats, or a
@@ -218,7 +224,7 @@ authorize those actions.
 Roundlet creates only:
 
 - `.roundlet/lease.json`, containing stable run and task identities without an expiry; and
-- `.roundlet/current.md`, containing concise reconciliation pointers for the current state.
+- `.roundlet/current.md`, containing concise reconciliation pointers plus bounded observation fingerprints, cursors, counters, and intervals for the current state.
 
 Add this one line to the authoritative checkout's local `.git/info/exclude`:
 
@@ -243,7 +249,7 @@ The Launcher repeats and verifies this local step during activation.
 
 ## Prepare the GitHub backlog
 
-Roundlet rescans all open issues whenever it is idle. It distinguishes:
+Roundlet fully rescans all open issues on activation, whenever the complete IDLE graph fingerprint changes, and when the periodic full-audit bound is due. A quiet IDLE heartbeat can compare one fingerprint without rereading every body and comment. It distinguishes:
 
 - **Umbrella:** has formal GitHub sub-issues and a clearly identified `Canonical scheduling note`; it supplies scheduling context and is never implemented or closed by Roundlet.
 - **Scheduling-blocked parent:** has formal sub-issues but no canonical scheduling note; Roundlet stops for owner input.
@@ -280,7 +286,7 @@ The canonical full prompt is visible at [`launcher.md`](skills/roundlet/referenc
 1. verifies configuration, models, GitHub, Git, rules, authority, local state, task/heartbeat capabilities, and any required GitHub CLI path in both the Launcher and long-lived Orchestrator tasks;
 2. creates the two advisory files;
 3. creates exactly one long-lived Orchestrator and waits for `ACTIVATION_READY`;
-4. attaches exactly one heartbeat to that Orchestrator and waits for `HEARTBEAT_BOUND`;
+4. attaches exactly one heartbeat at the configured active interval, verifies that the same heartbeat can adopt every configured backoff interval, and waits for `HEARTBEAT_BOUND`;
 5. sends one initial tick; and
 6. reports the run identities and archives itself.
 
@@ -303,8 +309,10 @@ Important distinctions:
 
 - **Status** is read-only and performs no tick.
 - **Pause** preserves tasks, heartbeat identity, branch, worktree, pull request, lease, and current state.
+- A paused heartbeat performs no polling. A direct owner instruction resumes the same Orchestrator and resets the same heartbeat to the active interval after full reconciliation.
 - **Resume** happens in the same Orchestrator after reconciliation.
 - **Stop-after-current** completes the active issue and ordered cleanup, then stops. If idle, it stops immediately.
+- Without stop-after-current, cleanup returns to IDLE at the active interval and Roundlet continues selecting later issues automatically. Quiet IDLE ticks back off through 5/15/30/60 minutes; owner-input waits back off through 5/15/30 minutes.
 - There is no immediate destructive stop. Active work requires `resume`, `preserve-and-stop`, or an explicitly scoped `abandon-and-cleanup` owner decision.
 - **Recovery** is only for an inaccessible Orchestrator or heartbeat. A stale-looking local file never authorizes takeover.
 - **GitHub CLI recovery** automatically escalates sandbox-blocked network access and retries bounded transient transport failures without changing Roundlet phase; it never launches browser authentication as an implicit workaround.
@@ -314,6 +322,7 @@ Important distinctions:
 - The local lease is advisory; it cannot prevent split-brain across machines, clones, or tasks.
 - GitHub issues, pull requests, reviews, checks, and append-only Roundlet comments are the durable backlog and audit trail.
 - Only the Orchestrator mutates GitHub. Workers and Supervisors return proposals for verification.
+- Lightweight metadata is only an unchanged proof. Any changed, incomplete, overflowed, action-ready, or periodically due observation triggers full reconciliation in the same heartbeat before reasoning or mutation.
 - A GitHub CLI failure inside a network-restricted sandbox is not proof that its credential is invalid. Roundlet must reach GitHub before making that classification.
 - Every Worker and Supervisor turn is bound to exact live context and full commit SHAs.
 - Roundlet never rebases, force-pushes, bypasses protection, destroys unique work, or closes an umbrella.
