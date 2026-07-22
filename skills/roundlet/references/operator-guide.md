@@ -7,6 +7,7 @@ This is the detailed operating contract for Roundlet. The Orchestrator must rere
 - [Operating envelope](#operating-envelope)
 - [Configuration and capability preflight](#configuration-and-capability-preflight)
 - [Advisory local state](#advisory-local-state)
+- [Lightweight observation and heartbeat cadence](#lightweight-observation-and-heartbeat-cadence)
 - [Backlog classification](#backlog-classification)
 - [Dependencies and ranking](#dependencies-and-ranking)
 - [State machine and one-transition ticks](#state-machine-and-one-transition-ticks)
@@ -30,7 +31,7 @@ Roundlet is safe only inside this deliberately narrow envelope:
 - one GitHub target repository;
 - one authoritative local checkout on one authoritative machine;
 - one long-lived Orchestrator Codex task;
-- one recurring heartbeat attached to that Orchestrator;
+- one recurring, phase-aware heartbeat attached to that Orchestrator;
 - zero or one active leaf issue;
 - one persistent Worker task for that issue;
 - one fresh Supervisor task for each review attempt;
@@ -49,6 +50,7 @@ Before activation, prove all of the following:
 - Supervisor attempt-profile names are unique, the ordered profile count equals `max_supervisor_attempts_per_round`, and every position has an exact model and reasoning effort;
 - tasks can be created, addressed, waited on, resumed, and archived;
 - one recurring heartbeat can be created, inspected, paused/resumed, and stopped;
+- that same heartbeat can be updated through every configured active, IDLE, and owner-input interval without creating a replacement;
 - Git and the authoritative checkout are usable;
 - GitHub identity, repository identity, issues, comments, branches, pull requests, reviews, checks, mergeability, and merge operations can be inspected;
 - authorized GitHub mutations are available to the Orchestrator;
@@ -94,13 +96,81 @@ The lease contains no expiry and authorizes no automatic takeover. A representat
 }
 ```
 
-`current.md` records only pointers and reconciliation facts: phase, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, current Supervisor task when one exists, branch, worktree, base and candidate full SHAs, review epoch/round/mode, Supervisor attempt number/profile, last durable GitHub event, blocking condition, and last reconciliation time. Do not treat it as durable history or append a transcript.
+`current.md` records only pointers and reconciliation facts: phase, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, current Supervisor task when one exists, branch, worktree, base and candidate full SHAs, review epoch/round/mode, Supervisor attempt number/profile, last durable GitHub event, blocking condition, last full reconciliation time, and the bounded semantic baseline plus cadence state defined below. Do not treat it as durable history or append a transcript.
 
 Before every tick or mutation, reconcile both files against GitHub, Git, Codex tasks, and the heartbeat. Prefer live authoritative evidence. When evidence conflicts, stop with `STATE_RECONCILIATION_REQUIRES_OWNER`; never guess or overwrite the conflict.
 
+## Lightweight observation and heartbeat cadence
+
+Use two tiers. The observation tier asks only whether the last full reconciliation is still current. The full tier reads and reasons over the live semantic sources. Never use observation metadata to select, claim, review, mark ready, merge, close, clean up, change scope, or make another mutation.
+
+### Bounded semantic baseline and cadence state
+
+After every successful full reconciliation, replace the prior semantic baseline in `current.md` with these bounded facts:
+
+- composite fingerprints for the exact installed `SKILL.md`, every required reference, `roundlet-config.json`, and the stable lease;
+- authoritative `origin/main` full OID, phase, and last-full-reconciliation time;
+- a repository-wide open-issue graph fingerprint and its open-issue count while IDLE;
+- active leaf, umbrella, dependency, branch, worktree, candidate-SHA, pull-request, check/review, and role-task fingerprints/cursors required by an active phase;
+- watched issue-comment ID/author/time and direct Orchestrator input cursor while waiting for owner input or repository authority;
+- explicit `complete` and `overflow` flags for every paginated source.
+
+Maintain a separate cadence state beside that baseline: heartbeat identity and expected current interval, lightweight-tick count since full reconciliation, IDLE and owner-input no-op streaks, last lightweight-observation time, and last successfully matched semantic fingerprint. A successful lightweight no-op updates only this cadence state after the heartbeat schedule update is verified; it does not claim a new full semantic baseline. The next tick compares live heartbeat state with the latest cadence state, so an intentional 5-to-15, 15-to-30, or 30-to-60 update is expected rather than a semantic mismatch.
+
+Keep only digests, counts, IDs, cursors, full SHAs, timestamps, paths, and the last accepted event URL. Do not store issue bodies, comments, diffs, check logs, task transcripts, or tool output in `current.md`.
+
+### Exact IDLE change detector
+
+GitHub Connector remains the primary surface for semantic full reads and all GitHub mutations. Its normalized issue reads do not expose every raw relationship, pagination, or conditional-metadata field needed for an unchanged proof. For this observation only, use authenticated `gh api graphql` with `--paginate` and built-in `--jq`; do not require a separately installed `jq`. Apply the GitHub CLI connectivity-recovery contract before classifying a failure.
+
+Fingerprint all open issues, not only the first page or the previously ready set. For each issue include:
+
+- `id`, `number`, `title`, `state`, and `updatedAt`;
+- the complete label-name set;
+- comment `totalCount` plus the latest comment's `id`, `updatedAt`, and `author.login`;
+- parent `id`, `number`, `state`, and `updatedAt`, or `none`;
+- exact sub-issue, blocked-by, and blocking issue `id`, `number`, `state`, and `updatedAt` sets, their summary counts, and each connection's `pageInfo`.
+
+Paginate the root open-issue connection to exhaustion. Canonically order compact records by issue number and relationship ID, keep the raw records inside the command pipeline, and emit only the record count, overflow flags, and one composite `git hash-object` fingerprint into model context. Git is already a Roundlet prerequisite. Require pipeline failure propagation, successful `gh` status, a parseable response, and the expected record count before accepting the digest; hashing empty output after an upstream failure is inconclusive, never an unchanged proof. If a nested relationship or label connection cannot be exhausted in the bounded query, set `overflow`; do not truncate and call the result unchanged.
+
+This vector detects new, closed, edited, relabeled, reparented, newly commented, or dependency-changed issues. A changed umbrella body changes its `updatedAt`; exact relationship sets independently detect parent/sub-issue or dependency changes. The scheduled full-audit bound below protects against an upstream timestamp or fingerprint defect.
+
+### Phase-specific active observations
+
+Add only the live fields needed to detect progress in the current phase:
+
+- For the local issue worktree: exact path, branch, `HEAD`, upstream/remote-head OIDs, and a fingerprint of porcelain status including untracked paths.
+- For Worker or Supervisor waits: exact task identity, terminal/running state, and the last consumed task cursor. An unchanged running task may no-op; a new cursor or terminal state requires full reconciliation in the same tick.
+- For a pull request: number, state, `updatedAt`, draft state, base/head OIDs, mergeability/merge-state, review decision, exact closing-issue references, latest issue-comment and review watermarks, unresolved review-thread identities, and the latest head commit's status/check rollup. Exhaust or mark overflow for review, thread, and check connections. Check status can change without the pull-request `updatedAt`, so never omit the rollup.
+- For `NEEDS_OWNER_INPUT` or `REPOSITORY_AUTHORITY_REQUIRED`: contract/lease/origin fingerprints, the watched issue's latest comment ID/author/time, and the direct Orchestrator input cursor. A direct task instruction wakes its own turn; it does not wait for the next heartbeat. A new issue comment is detected by the lightweight watermark.
+- For `PAUSED`: perform no recurring observation because the heartbeat is paused. Resume only on a direct owner instruction followed by full reconciliation.
+
+An action-ready phase always uses full reconciliation. Lightweight no-ops are allowed only for unchanged IDLE, unchanged running-role/check waits, and unchanged owner/authority waits.
+
+### Escalation to full reconciliation
+
+Perform the full tier in the same tick when any fingerprint, count, OID, status, cursor, watermark, or heartbeat identity differs; any required field is missing or malformed; any connection reports overflow; the observation command is inconclusive; the phase is action-ready; or `max_lightweight_ticks_before_full_reconciliation` is reached. Do not wait for another heartbeat to fetch the issue body, comments, canonical note, dependencies, pull-request details, task output, diff, checks, authority, or other full sources.
+
+When the IDLE graph fingerprint changes, fully rescan and classify every open issue because a single composite digest intentionally does not guess which semantic record changed. When a watched owner-comment watermark changes, reread the complete blocked issue, its comments, scheduling context, dependencies, authority, and active resources before accepting the instruction. When an active-resource vector changes, reread the complete phase contract and exact changed resources. Use server-side field selection and bounded summaries for routine metadata; fetch raw check logs or large tool outputs only when diagnosing a specific failure. This reduces context volume without hiding evidence required for a decision.
+
+After a successful full reconciliation, refresh the semantic baseline and reset the applicable cadence counters before any mutation. After a successful lightweight no-op, retain the semantic baseline and update only the verified cadence state. A failed or contradictory full read or cadence update fails closed under the normal state rules.
+
+### One heartbeat, adaptive intervals
+
+Create the one heartbeat initially at `heartbeat.active_minutes`. Update that same heartbeat; never create a replacement merely to change cadence.
+
+- Active work, a changed/incomplete observation, a direct owner instruction, or a resumed run uses `active_minutes`.
+- Starting from the active interval, each consecutive unchanged IDLE observation advances to the next value in `idle_noop_backoff_minutes`; remain at the last value after the list is exhausted.
+- Each consecutive unchanged owner-input or repository-authority wait advances through `owner_input_noop_backoff_minutes`; remain at its last value.
+- Any change, error, overflow, action-ready phase, or accepted owner input resets the relevant no-op streak and interval to `active_minutes` before further work.
+- A periodic full reconciliation caused only by the configured lightweight-tick limit resets the lightweight-tick count but may retain the current backoff interval when it proves no change.
+- Heartbeat schedule maintenance is bounded control-plane bookkeeping. It does not consume the tick's one externally meaningful repository transition, but its result and exact interval must reconcile before the tick finishes.
+
+With the checked-in configuration, a quiet IDLE run progresses from 5 to 15 to 30 to 60 minutes; an owner-input wait progresses from 5 to 15 to 30 minutes. Pausing stops heartbeat polling. Completing and cleaning a leaf resets the existing heartbeat to the active interval, records `IDLE`, and leaves continuous scheduling enabled. Only an explicit stop-after-current instruction stops the run.
+
 ## Backlog classification
 
-Scan all open issues in the target repository on activation and every idle heartbeat, including issues created after activation.
+Scan all open issues in the target repository on activation, after an IDLE observation change, and at every due full reconciliation. An exact unchanged IDLE graph fingerprint may finish as a lightweight no-op without rereading issue bodies. Include issues created after activation in every full scan.
 
 Classify from live GitHub parent/sub-issue relationships, labels, body, comments, and canonical notes:
 
@@ -153,7 +223,7 @@ Use these logical phases:
 - `CLEANUP_BLOCKED`
 - `STOPPED`
 
-Every heartbeat tick must first reconcile live evidence, then make at most one externally meaningful state transition. Commands sent directly to the Orchestrator may continue through immediately related read-only checks, but must retain the same idempotence rules. GitHub CLI escalation and bounded connectivity recovery are supporting checks: they do not change the phase, consume a review attempt or round, or use the tick's transition allowance.
+Every heartbeat tick must first prove the observation baseline unchanged or perform full live reconciliation, then make at most one externally meaningful state transition. Commands sent directly to the Orchestrator may continue through immediately related read-only checks, but must retain the same idempotence rules. GitHub CLI escalation, bounded connectivity recovery, and heartbeat schedule maintenance are supporting checks: they do not change the phase, consume a review attempt or round, or use the tick's transition allowance.
 
 Do not start another issue while any phase other than `IDLE` or `STOPPED` retains an active issue, branch, worktree, Worker, pull request, unresolved cleanup, or blocking owner decision.
 
@@ -246,7 +316,7 @@ When any round returns PASS, record terminal state `SUPERVISOR_PASS` and proceed
 
 ## Owner input
 
-`NEEDS_OWNER_INPUT` is a global logical stop, not permission to pick another issue. Retain the lease, Orchestrator, Worker when present, branch, worktree, and pull request. The five-minute heartbeat remains active and only:
+`NEEDS_OWNER_INPUT` is a global logical stop, not permission to pick another issue. Retain the lease, Orchestrator, Worker when present, branch, worktree, and pull request. The one heartbeat remains active under `owner_input_noop_backoff_minutes` and only:
 
 - reconciles the current blocking issue and resources;
 - looks for a new comment by an identity in `owner_allowlist`; or
@@ -309,7 +379,7 @@ Cleanup remains part of the active issue and must be automatic when authorized.
 4. When `allow_delete_local_branch` is true, delete the local issue branch only after proving its unique work is merged or explicitly authorized for abandonment.
 5. When `allow_delete_remote_branch` is true, delete the exact remote issue branch only after proving its identity and merge/abandon state.
 6. Fetch origin, fast-forward local `main`, and verify the authoritative checkout is clean and `HEAD == main == origin/main`.
-7. Append the cleanup trace, clear the active pointers, and remove the two advisory files only when stopping; while continuing, retain the lease and set `current.md` to `IDLE`.
+7. Append the cleanup trace, clear the active pointers, reset the same heartbeat to `active_minutes`, and remove the two advisory files only when stopping; while continuing, retain the lease and set `current.md` to `IDLE` with new observation counters. Do not stop after a completed issue unless stop-after-current is already recorded.
 
 If any cleanup step fails, enter `CLEANUP_BLOCKED`, keep the leaf closed, retain the lease/current evidence, and select no next issue. Never reopen the leaf solely because cleanup failed.
 
@@ -325,7 +395,7 @@ There is no preserve-old-work-while-selecting-next option. Never infer abandon-a
 
 ## Pause, resume, and stop
 
-- `pause`: finish the current atomic mutation or stop before the next one, record `PAUSED`, pause the heartbeat, and preserve all state/resources. Resume only in the same Orchestrator after reconciliation and an owner instruction.
+- `pause`: finish the current atomic mutation or stop before the next one, record `PAUSED`, pause the heartbeat so it performs no observations, and preserve all state/resources. Resume only in the same Orchestrator after reconciliation and an owner instruction.
 - `stop-after-current`: if active, finish the current issue including cleanup; if idle, stop immediately. Then stop the heartbeat, record `STOPPED`, remove advisory state after final reconciliation, and archive the Orchestrator.
 - An immediate destructive stop is not defined. Use the explicit abort choices for active work.
 
@@ -349,6 +419,8 @@ GitHub or Git mutation and do not perform a Roundlet tick.
 Report the run ID, Orchestrator and heartbeat identities, current phase, active leaf and
 pull request, Worker and current Supervisor when present, exact candidate SHA, review
 epoch/round/attempt/profile, blocking condition, last durable event, and next safe action.
+Also report the current heartbeat interval, observation-baseline time, lightweight-tick
+count, relevant no-op streak, and whether the last tick used observation or full reconciliation.
 Stop on contradictory evidence instead of repairing it.
 ```
 
@@ -373,7 +445,7 @@ long-lived Orchestrator task.
 
 Reconcile GitHub, Git, task, heartbeat, lease, and current-state evidence before changing
 anything. Stop for owner input if identities or state conflict. If reconciliation is
-clean, resume the one bound heartbeat, leave PAUSED, and perform at most one idempotent
+clean, reset and resume the one bound heartbeat at `active_minutes`, leave PAUSED, and perform at most one idempotent
 Roundlet tick. Report the before/after phase, transition, active leaf, candidate SHA,
 blocking condition, and next safe action. Do not create a replacement task or heartbeat.
 ```

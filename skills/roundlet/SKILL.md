@@ -9,7 +9,7 @@ Operate a single-target-repository outer loop through Codex tasks, GitHub, Git w
 
 ## Preserve these invariants
 
-- Use exactly one long-lived Orchestrator task, one heartbeat, one authoritative machine, and at most one active leaf issue for a target repository.
+- Use exactly one long-lived Orchestrator task, one phase-aware heartbeat, one authoritative machine, and at most one active leaf issue for a target repository.
 - Refuse activation when another live or unreconciled Roundlet run may own that target. The file lease is advisory and never prevents split-brain across machines, clones, or Codex tasks.
 - Treat GitHub issues and pull requests as the durable backlog and audit history. Let only the Orchestrator mutate GitHub.
 - Keep the same Worker task for initial implementation, repairs, the optional final repair, and cleanup preflight. Create a fresh read-only Supervisor task for every review attempt.
@@ -19,6 +19,7 @@ Operate a single-target-repository outer loop through Codex tasks, GitHub, Git w
 - Read repository authority only from the root `AGENTS.md` on authoritative `origin/main`. Boolean authority may narrow Roundlet, never override stricter repository or platform policy.
 - Fail closed when configured models, reasoning efforts, Supervisor attempt profiles, tools, GitHub permissions, merge method, repository authority, or required state cannot be verified. Never substitute a model, effort, or attempt profile silently.
 - Treat GitHub CLI failures observed before GitHub is reachable as connectivity evidence, not credential rejection. When `gh` is required, require the model to request the narrowest scoped network escalation automatically; the skill cannot grant or assume network access. Never replace the request with browser authentication or browser automation. Keep bounded connectivity recovery out of Roundlet state transitions and owner input, and fail closed only when approval is explicitly denied, approval capability is unavailable, reachable GitHub rejects authentication, or bounded recovery proves the required connectivity unavailable.
+- Use phase-aware lightweight observations only to prove that the last fully reconciled baseline is unchanged. Fingerprint the complete paginated scheduling graph and the exact active resources required by the phase; any change, omission, overflow, malformed value, due full audit, or action-ready state requires full live reconciliation in the same tick before reasoning or mutation. A fingerprint never authorizes a mutation.
 - Never auto-expire, steal, or replace a lease. Recovery requires explicit owner direction after reconciliation.
 - Couple a GitHub closing keyword only to the one active leaf that the pull request is intended to close. A negated phrase does not neutralize GitHub's keyword parser.
 - Never rebase, force-push, bypass protection, destroy unique work, close an umbrella issue, or claim Supervisor PASS after the review limit.
@@ -43,7 +44,7 @@ Use the Launcher prompt verbatim except for its explicit placeholders. The short
 2. Perform the capability, repository, GitHub, local-state, model, and authority preflight.
 3. Reconcile any existing `.roundlet/lease.json` or `.roundlet/current.md`; never take over automatically.
 4. Create the configured long-lived Orchestrator task and wait for its exact `ACTIVATION_READY` response.
-5. Attach one five-minute heartbeat to that Orchestrator, send it the heartbeat identity, and archive the Launcher.
+5. Attach one heartbeat at configured `heartbeat.active_minutes` to that Orchestrator, send it the heartbeat identity, and archive the Launcher.
 
 Do not attach the heartbeat to the Launcher. Do not proceed after a partial or ambiguous preflight.
 
@@ -51,9 +52,9 @@ Do not attach the heartbeat to the Launcher. Do not proceed after a partial or a
 
 On activation and each heartbeat:
 
-1. Reconcile GitHub, Git, Codex task, lease, and current-state evidence before acting.
+1. Read the bounded advisory state and compute the phase-aware observation vector defined in the operator guide. When it is not a complete exact match for the last fully reconciled baseline, perform full GitHub, Git, Codex task, heartbeat, lease, contract, authority, and current-state reconciliation in the same tick before acting.
 2. If paused, stopped, awaiting owner input, blocked on repository authority, or already processing an issue, follow that state instead of scheduling.
-3. Scan every open issue in the target repository, including issues created after activation.
+3. If IDLE observation is unchanged, make no scheduling mutation and apply the configured no-op heartbeat backoff. Otherwise scan every open issue in the target repository, including issues created after activation.
 4. Exclude umbrella, scheduling-blocked, ignored, non-actionable, dependency-blocked, and already-owned issues.
 5. Rank all ready leaf candidates across umbrellas using the contract in the operator guide.
 6. Claim exactly one issue, record selection on GitHub, create one `codex/` branch and isolated worktree, then keep the same Worker task through its lifecycle.
@@ -61,6 +62,8 @@ On activation and each heartbeat:
 8. Run bounded Supervisor/Worker review cycles and append every completed handoff to the pull request.
 9. At a valid terminal review state, satisfy live merge gates, mark ready when authorized, merge with the configured merge method, verify or close the leaf issue, and perform ordered cleanup.
 10. Select no new issue until cleanup proves the authoritative checkout, `main`, and `origin/main` are aligned and all issue-specific resources are removed.
+
+Keep the heartbeat at `active_minutes` while work is active or an observation is incomplete. After consecutive unchanged IDLE observations, advance through `idle_noop_backoff_minutes`; while waiting for owner input, advance through `owner_input_noop_backoff_minutes`. Reset to the active interval on any change or direct owner instruction. A paused run has no heartbeat polling. Finishing an issue returns to IDLE and continues scheduling unless the owner explicitly requested stop-after-current.
 
 ## Bound the inner loop
 

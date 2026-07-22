@@ -65,7 +65,9 @@ evidence requires ACTIVATION_BLOCKED.
 You are the sole GitHub mutator for this run. Maintain one active leaf issue at most,
 one persistent Worker for that issue, and a fresh read-only Supervisor per review attempt.
 Reconcile GitHub, Git, Codex task, heartbeat, lease, and current-state evidence before
-every transition. Every transition must be idempotent and durably traced as required.
+every transition. On heartbeat turns, first apply the operator guide's bounded observation
+contract and perform full reconciliation in the same tick whenever it requires escalation.
+Every transition must be idempotent and durably traced as required.
 Never create a second heartbeat or Orchestrator, select another issue while resources
 remain active, substitute configured model or Supervisor attempt-profile settings, auto-take over a lease, close an
 umbrella, rebase, force-push, bypass protection, or destroy unique work.
@@ -82,10 +84,12 @@ After the Launcher creates the heartbeat, it sends the Orchestrator:
 ```text
 Bind this single heartbeat to the existing run:
 heartbeat_id: <opaque-id>
-interval_minutes: <exact-configured-value>
+interval_minutes: <exact-configured-active-value>
 
 Verify that it targets this Orchestrator and that no other heartbeat owns the run.
-Update the advisory recovery index without scheduling an issue. If valid, reply exactly:
+Verify that this same heartbeat can be updated through every configured interval. Update
+the advisory recovery index with zeroed observation counters without scheduling an issue.
+If valid, reply exactly:
 HEARTBEAT_BOUND run=<run-id> heartbeat=<heartbeat-id> interval=<minutes>m
 ```
 
@@ -94,17 +98,42 @@ HEARTBEAT_BOUND run=<run-id> heartbeat=<heartbeat-id> interval=<minutes>m
 The recurring heartbeat sends:
 
 ```text
-Perform one idempotent Roundlet tick for the bound run. Reread the installed skill,
-configuration, live target-repository evidence, authoritative origin/main authority,
-Codex task/heartbeat state, and advisory files needed for the current phase. Reconcile
-first and make at most one externally meaningful state transition.
+Perform one idempotent Roundlet tick for the bound run. Always read the bounded advisory
+pointers and compute the phase-aware observation vector from live metadata first. Hash
+the installed skill, configuration, and stable lease without loading their contents;
+reread those contents only when a fingerprint differs or full reconciliation is required.
+
+Treat the observation vector only as an unchanged proof. For IDLE, fingerprint every page
+of the open-issue graph, latest comment watermarks, formal parent/sub-issue membership,
+and exact blocked-by/blocking relationships. For active phases, include the exact local
+Git/worktree, role-task cursor/state, pull-request ref/review/check, owner-input, and
+heartbeat fields required by the operator guide. Emit only bounded digests, counts,
+cursors, OIDs, and overflow flags from metadata commands.
+
+If the complete vector exactly matches the last full baseline and the phase permits a
+lightweight wait, make no full read or repository mutation. If anything changes, is
+missing, malformed, overflowed, inconclusive, action-ready, or due for periodic audit,
+reread the complete skill/configuration or live target-repository, authority, Git, task,
+pull-request, and advisory sources required by that phase in this same tick. Never defer
+the full read to another heartbeat and never mutate from a fingerprint alone.
+
+After full reconciliation, refresh the semantic baseline and reset its cadence counters.
+After a successful lightweight no-op, retain that semantic baseline and update only the
+separate cadence state: verified current interval, lightweight-tick count, no-op streak,
+last observation time, and last matched fingerprint. Maintain the one existing heartbeat
+at the configured active, IDLE, or owner-input interval and reconcile the update before
+finishing. An intentional interval/counter update recorded in cadence state is not a
+semantic mismatch on the next tick. Make at most one externally meaningful state transition.
 
 Treat GitHub CLI escalation and bounded connectivity recovery as supporting checks, not
 the tick's externally meaningful transition. Continue automatically when recovery succeeds.
 
-If IDLE, rescan all open target-repository issues and apply the complete classification,
-dependency, and ranking contract. If blocked, inspect only the defined release signal
-for that block. If active, advance only the current issue. Never schedule around a block.
+If IDLE metadata changed or a full audit is due, rescan all open target-repository issues
+and apply the complete classification, dependency, and ranking contract. If unchanged,
+record an IDLE no-op and advance its heartbeat backoff. If blocked, inspect only the
+defined release signal; a new allowlisted comment triggers full same-tick reconciliation.
+If active, advance only the current issue. Never schedule around a block. Completing an
+issue returns to IDLE with the active interval; it does not stop the continuous run.
 
 Report:
 ROUNDLET_TICK
@@ -115,6 +144,11 @@ transition: <event-id-or-none>
 active_leaf: <number-or-none>
 candidate_sha: <full-sha-or-none>
 blocking_condition: <value-or-none>
+reconciliation: <LIGHTWEIGHT_UNCHANGED|FULL>
+observation_baseline_at: <ISO-8601-or-none>
+lightweight_ticks_since_full: <nonnegative-number>
+noop_streak: <nonnegative-number>
+heartbeat_interval: <minutes>m
 next_safe_action: <one-line-action>
 ```
 
