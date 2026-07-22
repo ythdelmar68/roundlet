@@ -112,6 +112,8 @@ You need:
 
 Roundlet fails closed if any configured capability or mutation cannot be verified. It does not silently substitute another model, effort, Supervisor attempt profile, or merge method.
 
+Roundlet does not require a custom Codex permission profile or project `config.toml`. When required GitHub CLI access is blocked by the network sandbox, it requires the model to request scoped escalation automatically, including through **Approve for me** when available, and distinguishes connectivity failure from a credential rejection returned by reachable GitHub. The skill cannot grant or assume network access; the host permission policy remains authoritative. Only an explicit approval denial, unavailable approval mechanism, confirmed authentication rejection, or connectivity that remains unavailable after bounded recovery blocks activation for owner input.
+
 ### 2. Choose the source you will install
 
 The checked-in [`roundlet-config.json`](skills/roundlet/references/roundlet-config.json) contains an owner allowlist and exact model settings. Install the upstream source unchanged only when those values are correct for you.
@@ -275,7 +277,7 @@ unreconciled run, unsupported capability, or ambiguous authority.
 
 The canonical full prompt is visible at [`launcher.md`](skills/roundlet/references/launcher.md#new-activation). A successful Launcher:
 
-1. verifies configuration, models, GitHub, Git, rules, authority, local state, and task/heartbeat capabilities;
+1. verifies configuration, models, GitHub, Git, rules, authority, local state, task/heartbeat capabilities, and any required GitHub CLI path in both the Launcher and long-lived Orchestrator tasks;
 2. creates the two advisory files;
 3. creates exactly one long-lived Orchestrator and waits for `ACTIVATION_READY`;
 4. attaches exactly one heartbeat to that Orchestrator and waits for `HEARTBEAT_BOUND`;
@@ -305,12 +307,14 @@ Important distinctions:
 - **Stop-after-current** completes the active issue and ordered cleanup, then stops. If idle, it stops immediately.
 - There is no immediate destructive stop. Active work requires `resume`, `preserve-and-stop`, or an explicitly scoped `abandon-and-cleanup` owner decision.
 - **Recovery** is only for an inaccessible Orchestrator or heartbeat. A stale-looking local file never authorizes takeover.
+- **GitHub CLI recovery** automatically escalates sandbox-blocked network access and retries bounded transient transport failures without changing Roundlet phase; it never launches browser authentication as an implicit workaround.
 
 ## Understand safety boundaries
 
 - The local lease is advisory; it cannot prevent split-brain across machines, clones, or tasks.
 - GitHub issues, pull requests, reviews, checks, and append-only Roundlet comments are the durable backlog and audit trail.
 - Only the Orchestrator mutates GitHub. Workers and Supervisors return proposals for verification.
+- A GitHub CLI failure inside a network-restricted sandbox is not proof that its credential is invalid. Roundlet must reach GitHub before making that classification.
 - Every Worker and Supervisor turn is bound to exact live context and full commit SHAs.
 - Roundlet never rebases, force-pushes, bypasses protection, destroys unique work, or closes an umbrella.
 - A pull request may use a closing keyword only for its one active leaf. Use plain links for umbrellas and every other issue.

@@ -58,6 +58,18 @@ Before activation, prove all of the following:
 - the authoritative checkout is clean and no other Roundlet evidence is active or unreconciled;
 - the target's rules and required checks can be determined well enough to fail closed at merge time.
 
+When a role uses `gh`, distinguish connectivity from credentials before classifying capability:
+
+1. Treat a result produced before GitHub is reachable, including a misleading invalid-token result inside a network-restricted sandbox, as inconclusive.
+2. Request scoped network escalation for the same command automatically. Prefer a read-only request while proving identity or reachability, and never expose token material.
+3. For an escalated DNS, timeout, or transport failure, retry once in the same turn and once at the next automatic opportunity: the next heartbeat when one is bound, or once more in the active Launcher or role turn when no heartbeat exists yet. These attempts are supporting checks, not externally meaningful state transitions, review attempts, or review rounds.
+4. Continue automatically after any successful request. Only classify authentication as invalid when reachable GitHub rejects it.
+5. Never open browser authentication or substitute browser automation for required GitHub CLI capability. Browser authentication requires explicit owner direction after confirmed credential rejection.
+
+This contract requires the role to request escalation; it does not grant or let the role assume network access. The host permission policy remains authoritative.
+
+Enter `NEEDS_OWNER_INPUT` only when approval is explicitly denied, the approval mechanism is unavailable, reachable GitHub rejects authentication, or the bounded attempts prove that required GitHub connectivity remains unavailable. Preserve the exact command, escalation outcome, transport or HTTP evidence, and attempt count.
+
 If any capability cannot be proven, report the exact unsupported value or missing capability and stop. Capability preflight is performed through Codex/tool inspection; it is not an executable validator or cross-platform test matrix.
 
 ## Advisory local state
@@ -141,7 +153,7 @@ Use these logical phases:
 - `CLEANUP_BLOCKED`
 - `STOPPED`
 
-Every heartbeat tick must first reconcile live evidence, then make at most one externally meaningful state transition. Commands sent directly to the Orchestrator may continue through immediately related read-only checks, but must retain the same idempotence rules.
+Every heartbeat tick must first reconcile live evidence, then make at most one externally meaningful state transition. Commands sent directly to the Orchestrator may continue through immediately related read-only checks, but must retain the same idempotence rules. GitHub CLI escalation and bounded connectivity recovery are supporting checks: they do not change the phase, consume a review attempt or round, or use the tick's transition allowance.
 
 Do not start another issue while any phase other than `IDLE` or `STOPPED` retains an active issue, branch, worktree, Worker, pull request, unresolved cleanup, or blocking owner decision.
 
@@ -239,6 +251,8 @@ When any round returns PASS, record terminal state `SUPERVISOR_PASS` and proceed
 - reconciles the current blocking issue and resources;
 - looks for a new comment by an identity in `owner_allowlist`; or
 - observes a direct instruction in the Orchestrator task.
+
+Do not enter this state for an initial sandbox denial or a transient GitHub CLI transport failure. First exhaust the automatic scoped-escalation and bounded recovery contract. A resulting explicit approval denial, unavailable approval mechanism, confirmed authentication rejection from reachable GitHub, or proven unavailable required connectivity is a valid blocking condition.
 
 An issue-body edit alone never resolves the block. A non-owner comment, reaction, label change, Worker/Supervisor message, or unrelated owner comment never resolves it.
 
