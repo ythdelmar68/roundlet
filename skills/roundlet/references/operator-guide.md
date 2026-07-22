@@ -96,7 +96,7 @@ The lease contains no expiry and authorizes no automatic takeover. A representat
 }
 ```
 
-`current.md` records only pointers and reconciliation facts: phase, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, current Supervisor task when one exists, branch, worktree, base and candidate full SHAs, review epoch/round/mode, Supervisor attempt number/profile, last durable GitHub event, blocking condition, last full reconciliation time, and the bounded observation baseline defined below. Do not treat it as durable history or append a transcript.
+`current.md` records only pointers and reconciliation facts: phase, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, current Supervisor task when one exists, branch, worktree, base and candidate full SHAs, review epoch/round/mode, Supervisor attempt number/profile, last durable GitHub event, blocking condition, last full reconciliation time, and the bounded semantic baseline plus cadence state defined below. Do not treat it as durable history or append a transcript.
 
 Before every tick or mutation, reconcile both files against GitHub, Git, Codex tasks, and the heartbeat. Prefer live authoritative evidence. When evidence conflicts, stop with `STATE_RECONCILIATION_REQUIRES_OWNER`; never guess or overwrite the conflict.
 
@@ -104,16 +104,18 @@ Before every tick or mutation, reconcile both files against GitHub, Git, Codex t
 
 Use two tiers. The observation tier asks only whether the last full reconciliation is still current. The full tier reads and reasons over the live semantic sources. Never use observation metadata to select, claim, review, mark ready, merge, close, clean up, change scope, or make another mutation.
 
-### Bounded observation baseline
+### Bounded semantic baseline and cadence state
 
-After every successful full reconciliation, replace the prior observation baseline in `current.md` with these bounded facts:
+After every successful full reconciliation, replace the prior semantic baseline in `current.md` with these bounded facts:
 
 - composite fingerprints for the exact installed `SKILL.md`, every required reference, `roundlet-config.json`, and the stable lease;
-- authoritative `origin/main` full OID, heartbeat identity/current interval, phase, last-full-reconciliation time, lightweight-tick count since that reconciliation, and the relevant no-op streak;
+- authoritative `origin/main` full OID, phase, and last-full-reconciliation time;
 - a repository-wide open-issue graph fingerprint and its open-issue count while IDLE;
 - active leaf, umbrella, dependency, branch, worktree, candidate-SHA, pull-request, check/review, and role-task fingerprints/cursors required by an active phase;
 - watched issue-comment ID/author/time and direct Orchestrator input cursor while waiting for owner input or repository authority;
 - explicit `complete` and `overflow` flags for every paginated source.
+
+Maintain a separate cadence state beside that baseline: heartbeat identity and expected current interval, lightweight-tick count since full reconciliation, IDLE and owner-input no-op streaks, last lightweight-observation time, and last successfully matched semantic fingerprint. A successful lightweight no-op updates only this cadence state after the heartbeat schedule update is verified; it does not claim a new full semantic baseline. The next tick compares live heartbeat state with the latest cadence state, so an intentional 5-to-15, 15-to-30, or 30-to-60 update is expected rather than a semantic mismatch.
 
 Keep only digests, counts, IDs, cursors, full SHAs, timestamps, paths, and the last accepted event URL. Do not store issue bodies, comments, diffs, check logs, task transcripts, or tool output in `current.md`.
 
@@ -151,7 +153,7 @@ Perform the full tier in the same tick when any fingerprint, count, OID, status,
 
 When the IDLE graph fingerprint changes, fully rescan and classify every open issue because a single composite digest intentionally does not guess which semantic record changed. When a watched owner-comment watermark changes, reread the complete blocked issue, its comments, scheduling context, dependencies, authority, and active resources before accepting the instruction. When an active-resource vector changes, reread the complete phase contract and exact changed resources. Use server-side field selection and bounded summaries for routine metadata; fetch raw check logs or large tool outputs only when diagnosing a specific failure. This reduces context volume without hiding evidence required for a decision.
 
-After a successful full reconciliation, refresh the baseline before any mutation. A failed or contradictory full read fails closed under the normal state rules.
+After a successful full reconciliation, refresh the semantic baseline and reset the applicable cadence counters before any mutation. After a successful lightweight no-op, retain the semantic baseline and update only the verified cadence state. A failed or contradictory full read or cadence update fails closed under the normal state rules.
 
 ### One heartbeat, adaptive intervals
 

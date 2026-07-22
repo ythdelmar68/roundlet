@@ -117,9 +117,13 @@ reread the complete skill/configuration or live target-repository, authority, Gi
 pull-request, and advisory sources required by that phase in this same tick. Never defer
 the full read to another heartbeat and never mutate from a fingerprint alone.
 
-After full reconciliation, refresh the observation baseline. Make at most one externally
-meaningful state transition. Maintain the one existing heartbeat at the configured
-active, IDLE, or owner-input interval and reconcile the update before finishing.
+After full reconciliation, refresh the semantic baseline and reset its cadence counters.
+After a successful lightweight no-op, retain that semantic baseline and update only the
+separate cadence state: verified current interval, lightweight-tick count, no-op streak,
+last observation time, and last matched fingerprint. Maintain the one existing heartbeat
+at the configured active, IDLE, or owner-input interval and reconcile the update before
+finishing. An intentional interval/counter update recorded in cadence state is not a
+semantic mismatch on the next tick. Make at most one externally meaningful state transition.
 
 Treat GitHub CLI escalation and bounded connectivity recovery as supporting checks, not
 the tick's externally meaningful transition. Continue automatically when recovery succeeds.
