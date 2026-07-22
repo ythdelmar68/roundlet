@@ -20,8 +20,8 @@ Target:
 Read the complete Roundlet SKILL.md and every reference it requires before acting. Do not implement an issue in this Launcher task.
 
 Perform a fail-closed activation preflight:
-1. Resolve the exact installed skill source and configuration. Validate that every required configuration value is present and internally consistent.
-2. Verify that this Codex host can create, address, wait for, archive, and resume tasks; create and manage one recurring five-minute heartbeat; select each configured model and reasoning effort exactly; and access Git, the target checkout, and GitHub with the required read/write capabilities. Do not substitute an unsupported model or effort.
+1. Resolve the exact installed skill source and configuration. Validate that every required configuration value is present and internally consistent. Require unique Supervisor attempt-profile names and an ordered profile count exactly equal to `max_supervisor_attempts_per_round`.
+2. Verify that this Codex host can create, address, wait for, archive, and resume tasks; create and manage one recurring five-minute heartbeat; select every configured model and reasoning effort in every Supervisor attempt profile exactly; and access Git, the target checkout, and GitHub with the required read/write capabilities. Do not substitute an unsupported model, effort, or attempt profile.
 3. Verify the target identity, clean authoritative checkout, main branch, origin URL, GitHub default branch, HEAD == local main == origin/main, merge-commit support, issue and pull-request access, and authenticated GitHub identity. Record whether the primary branch is protected. Inspect and obey every existing required check and branch rule; fail closed if existing rules cannot be inspected or conflict with the configured workflow. Absence of branch protection is not itself an activation blocker.
 4. Read the root AGENTS.md from authoritative origin/main and parse only the exact Roundlet authority switches defined by the skill. Fail closed on missing, malformed, duplicate, or conflicting values. Require `roundlet.enabled: true`; record every other `false` switch as a later mutation boundary rather than silently changing it or rejecting activation.
 5. Add `.roundlet/` to this checkout's local `.git/info/exclude` if it is not already excluded. Never commit that exclusion or any `.roundlet` file.
@@ -64,7 +64,7 @@ Read the complete Roundlet SKILL.md and every required reference before acting. 
 3. If the old Orchestrator or heartbeat is still live or its ownership is ambiguous, stop with RECOVERY_OWNER_DECISION_REQUIRED and present exact evidence. Do not create a replacement.
 4. If the old Orchestrator and heartbeat are conclusively unavailable, reconstruct the current phase from durable GitHub and Git evidence. Preserve the same run ID when identity is certain; otherwise stop for owner input.
 5. If an active Worker task is unavailable, stop with WORKER_REPLACEMENT_REQUIRES_OWNER. Do not silently replace it.
-6. Create exactly one replacement Orchestrator using the configured model and effort. Give it the reconstructed state, evidence, task identities, branch/worktree, candidate SHA, review epoch/round, and explicit instruction to acknowledge RECOVERY_READY without advancing work.
+6. Create exactly one replacement Orchestrator using the configured model and effort. Give it the reconstructed state, evidence, task identities, branch/worktree, candidate SHA, review epoch/round, current Supervisor attempt/profile when applicable, and explicit instruction to acknowledge RECOVERY_READY without advancing work.
 7. After that acknowledgement, disable or remove any conclusively stale heartbeat if possible, create one replacement five-minute heartbeat, bind it to the replacement Orchestrator, update the advisory files, and send one recovery tick.
 8. Report every retained, replaced, or unresolved resource to the owner and archive this recovery Launcher.
 

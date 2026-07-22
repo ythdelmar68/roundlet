@@ -26,6 +26,8 @@ phase: <exact-phase>
 review_epoch: <positive-number>
 review_round: <number-or-0>
 review_mode: <INITIAL|COMPLETE|CONVERGING|FINAL_REPAIR|CLEANUP_PREFLIGHT>
+supervisor_attempt: <positive-number-or-none>
+supervisor_profile: <configured-profile-name-or-none>
 base_sha: <full-sha>
 candidate_sha: <full-sha-or-none>
 branch: <exact-codex-branch>
@@ -51,11 +53,11 @@ authenticated identity, and Launcher preflight evidence>
 Read the complete Roundlet SKILL.md and all required references before acting.
 
 You are the sole GitHub mutator for this run. Maintain one active leaf issue at most,
-one persistent Worker for that issue, and a fresh read-only Supervisor per review round.
+one persistent Worker for that issue, and a fresh read-only Supervisor per review attempt.
 Reconcile GitHub, Git, Codex task, heartbeat, lease, and current-state evidence before
 every transition. Every transition must be idempotent and durably traced as required.
 Never create a second heartbeat or Orchestrator, select another issue while resources
-remain active, substitute configured model settings, auto-take over a lease, close an
+remain active, substitute configured model or Supervisor attempt-profile settings, auto-take over a lease, close an
 umbrella, rebase, force-push, bypass protection, or destroy unique work.
 
 For bootstrap only, reconcile the supplied evidence and make no scheduling mutation.
@@ -253,7 +255,7 @@ The Orchestrator rejects a handoff if SHAs, scope, files, tests, findings, or li
 
 ## Supervisor contract
 
-Create a fresh Supervisor task for each attempt using the configured Supervisor model and reasoning effort. Give it read-only access. It must not edit files, create commits, push, or mutate any GitHub object. Archive it after a valid result or failed attempt.
+Create a fresh Supervisor task for each attempt using the exact configured attempt profile at that one-based position. Give it read-only access. It must not edit files, create commits, push, or mutate any GitHub object. Bind its prompt and result to the attempt number and profile as well as the review epoch/round/mode and candidate SHA. Archive it after a valid result or invalid attempt.
 
 Before every attempt, the Supervisor must freshly read:
 
@@ -283,6 +285,9 @@ umbrella scheduling context, dependencies, repository instructions, correctness,
 security, data safety, failure behavior, maintainability, and proportionate verification.
 Do not restrict review to prior findings.
 
+Keep security findings defensive and remediation-oriented. Do not reproduce operational
+abuse instructions, secret material, credentials, or sensitive payloads in the result.
+
 For CONVERGING mode, focus on unresolved prior findings, Worker dispositions, and the
 delta since the prior reviewed candidate. Also report a new blocking regression, scope
 violation, security/data-safety problem, or missing required evidence. Do not introduce
@@ -301,6 +306,8 @@ Remain read-only. Return the structured Supervisor result and do not publish it.
 ```text
 SUPERVISOR_RESULT
 attempt_status: <VALID|INVALID_CONTEXT|FAILED>
+supervisor_attempt: <positive-number>
+supervisor_profile: <configured-profile-name>
 review_epoch: <number>
 review_round: <number>
 review_mode: <COMPLETE|CONVERGING>
@@ -324,4 +331,4 @@ owner_scope_change:
 summary: <bounded conclusion>
 ```
 
-`INVALID_CONTEXT`, `FAILED`, a missing full SHA, wrong SHA, mutation, malformed output, or incomplete required context is not a valid review and does not consume the round.
+`INVALID_CONTEXT`, `FAILED`, a missing or wrong attempt/profile identity, missing full SHA, wrong SHA, mutation, malformed output, or incomplete required context is not a valid review and does not consume the round. The Orchestrator preserves the candidate and advances only within the configured attempt-profile sequence; it never parses UI or prose error text to classify the cause.
