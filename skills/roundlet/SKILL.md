@@ -29,7 +29,7 @@ Before activation or recovery, read all of:
 - [`references/roundlet-config.json`](references/roundlet-config.json) for role, heartbeat, review, merge, and owner settings.
 - [`references/launcher.md`](references/launcher.md) for the copyable Launcher and recovery prompts.
 - [`references/repository-authority.md`](references/repository-authority.md) for the copyable target-repository authority block.
-- [`references/operator-guide.md`](references/operator-guide.md) for issue classification, scheduling, lifecycle, trace, blocking, recovery, pause, stop, and cleanup rules.
+- [`references/operator-guide.md`](references/operator-guide.md) for issue classification, scheduling, lifecycle, trace, blocking, recovery, cleanup rules, and copyable owner command prompts.
 - [`references/thread-prompts.md`](references/thread-prompts.md) for Orchestrator, Worker, and Supervisor prompt contracts.
 
 Treat those references as required parts of this skill, not optional background.
