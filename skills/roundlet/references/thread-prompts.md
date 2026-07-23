@@ -78,7 +78,7 @@ repository_transition: none
 
 `ESCALATION_DENIED` requires an explicit denial. `ESCALATION_UNAVAILABLE` requires proof that no supported approval path exists. `ESCALATED_EXECUTION_FAILED` requires an approved, launched operation that failed. Any failed/missing surface or cleanup produces `FILESYSTEM_CAPABILITY_UNAVAILABLE` while preserving the more specific cause. A malformed result, stale task/route fingerprint, unverified cleanup, or repository transition is invalid.
 
-The Orchestrator must hash and aggregate the exact result bytes into the operator guide's canonical `roundlet-filesystem-canary-set/v1` manifest, verify the transition-specific required entry set, and read back its digest before relying on it. A single role result or digest can never stand in for the required aggregate.
+The Orchestrator must hash and aggregate the exact result bytes into the operator guide's canonical `roundlet-filesystem-canary-set/v1` manifest, decode and compare every projected field, verify same run/phase plus the transition-specific required entry set, and read back its digest before relying on it. A single role result or digest can never stand in for the required aggregate. Explicit recovery binds the replacement Orchestrator's complete recovery-set digest in `RECOVERY_READY` before heartbeat or advisory transition.
 
 ## Long-lived Orchestrator bootstrap
 
@@ -220,7 +220,7 @@ legacy_record: <absolute-path-and-sha256>
 filesystem_canary_evidence_set: <verified-aggregate-sha256>
 orchestrator_model: <task-metadata-readback-model>
 reasoning_effort: <task-metadata-readback-effort>
-resources_retained: <heartbeat-worker-branch-worktree-pr-issue-and-sha>
+resources_retained: <heartbeat-and-every-reconciled-worker-branch-worktree-pr-issue-sha-or-none>
 repository_transition: none
 ```
 
@@ -242,7 +242,7 @@ reasoning_effort: <task-metadata-readback-effort>
 model_readback_source: <task-metadata-source>
 filesystem_canary_evidence_set: <verified-aggregate-sha256>
 phase: <retained-phase>
-resources_retained: <orchestrator-heartbeat-worker-branch-worktree-pr-issue-and-sha>
+resources_retained: <orchestrator-heartbeat-and-every-reconciled-worker-branch-worktree-pr-issue-sha-or-none>
 repository_transition: none
 ```
 

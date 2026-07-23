@@ -66,12 +66,12 @@ Read only `.roundlet/lease.json` and the minimal contract commit records needed 
 
 1. Perform the normal capability, repository, configuration, authority, and identity preflight.
 2. Reconcile `.roundlet/lease.json`, `.roundlet/current.md`, the named active contract bundle and manifest, all Roundlet GitHub trace comments, active pull requests, exact branch SHAs, local and remote branches, worktrees, checks, and all identifiable old Orchestrator/Worker/Supervisor tasks and heartbeats. Treat the installed skill/configuration only as a migration candidate.
-3. Before any advisory, Git, or GitHub transition, run recovery canaries. The recovery Launcher proves the exact ignored advisory-state surface. When the existing Worker is accessible, that same Worker uses unique paths in its retained linked worktree to prove file create/edit/read-back/cleanup and exact-path stage/index-read-back/unstage/cleanup while restoring the complete initial HEAD/status/index identity. Never replace the Worker for a canary. If the old Orchestrator is accessible, it must prove its own advisory route; a replacement Orchestrator must do so before `RECOVERY_READY`. On any failed or stale evidence, retain every run resource, classify the exact typed outcome, and stop in `FILESYSTEM_CAPABILITY_BLOCKED` before transition.
+3. Before any advisory, Git, or GitHub transition, run recovery canaries. The recovery Launcher proves the exact ignored advisory-state surface. When an active leaf retains an accessible Worker, that same Worker uses unique paths in its retained linked worktree to prove file create/edit/read-back/cleanup and exact-path stage/index-read-back/unstage/cleanup while restoring the complete initial HEAD/status/index identity; a phase with no Worker does not invent one. Never replace a Worker for a canary. If the old Orchestrator is accessible, it must prove its own advisory route; a replacement Orchestrator must do so before `RECOVERY_READY`. Keep every exact same-phase result byte/hash as a provisional aggregate input. On any failed or stale evidence, retain every run resource, classify the exact typed outcome, and stop in `FILESYSTEM_CAPABILITY_BLOCKED` before transition.
 4. If the old Orchestrator or heartbeat is still live or its ownership is ambiguous, stop with RECOVERY_OWNER_DECISION_REQUIRED and present exact evidence. Do not create a replacement.
 5. If the old Orchestrator and heartbeat are conclusively unavailable, reconstruct the current phase from durable GitHub and Git evidence. Preserve the same run ID when identity is certain; otherwise stop for owner input.
 6. If an active Worker task is unavailable, stop with WORKER_REPLACEMENT_REQUIRES_OWNER. Do not silently replace it.
-7. Create exactly one replacement Orchestrator using the active pinned bundle's configured model and effort. Give it the reconstructed state, evidence, task identities, branch/worktree, candidate SHA, review epoch/round, current Supervisor attempt/profile when applicable, and explicit instruction to run its unique advisory-state canary, return a valid `FILESYSTEM_CANARY_RESULT`, then acknowledge `RECOVERY_READY` without advancing work.
-8. After that acknowledgement, disable or remove any conclusively stale heartbeat if possible, create one replacement heartbeat at configured `heartbeat.active_minutes`, bind it to the replacement Orchestrator, reconstruct the observation counters without treating stale fingerprints as proof, update the advisory files, and send one recovery tick.
+7. Create exactly one replacement Orchestrator using the active pinned bundle's configured model and effort. Give it the reconstructed state, evidence, task identities, branch/worktree, candidate SHA, review epoch/round, current Supervisor attempt/profile when applicable, and the verified recovery Launcher plus applicable retained-Worker result bytes/hashes. Require it to run its unique `RECOVERY` advisory canary, aggregate every applicable result into the canonical recovery evidence set, read back the manifest/digest, then answer exactly `RECOVERY_READY run=<run-id> state=<reconstructed-phase> canary_set=<sha256>` without advancing work.
+8. Only after that exact acknowledgement and independent aggregate read-back, disable or remove any conclusively stale heartbeat if possible, create one replacement heartbeat at configured `heartbeat.active_minutes`, bind it to the replacement Orchestrator, reconstruct the observation counters without treating stale fingerprints as proof, update the advisory files, and send one recovery tick.
 9. Report every retained, replaced, or unresolved resource to the owner and archive this recovery Launcher.
 
 Fail closed at every ambiguity. Never infer owner consent for cleanup, abort, merge, or task replacement.
@@ -93,10 +93,10 @@ Expected activation-time Orchestrator model/effort: <MODEL> / <EFFORT>
 
 Pause the heartbeat and make no GitHub, Git, issue, pull-request, branch, worktree, review,
 or cleanup transition. Before any contract write, this Orchestrator must prove a unique
-ignored `.roundlet/` create/edit/read-back/cleanup canary, and the same retained Worker must
-prove unique file mutation plus exact-path stage/index-read-back/unstage/cleanup in its
-linked worktree while restoring the complete initial HEAD/status/index identity. Use the
-configured one narrow approval retry and typed outcomes. Aggregate the Orchestrator and retained-Worker results as the exact LEGACY_BOOTSTRAP evidence set and read back its manifest/digest. On any denial, unavailable approval,
+ignored `.roundlet/` create/edit/read-back/cleanup canary. When an active leaf retains a Worker,
+that same retained Worker must prove unique file mutation plus exact-path stage/index-read-back/unstage/cleanup in its
+linked worktree while restoring the complete initial HEAD/status/index identity; a phase with no Worker does not invent one. Use the
+configured one narrow approval retry and typed outcomes. Aggregate the Orchestrator and every applicable retained-Worker result as the exact LEGACY_BOOTSTRAP evidence set and read back its manifest/digest. On any denial, unavailable approval,
 launched non-zero execution, read-back mismatch, cleanup mismatch, or invalid aggregate, retain every resource,
 create no contract record, and report FILESYSTEM_CAPABILITY_BLOCKED with the exact type.
 Prove this run predates contract state and has no activation ID,
@@ -186,9 +186,9 @@ Expected candidate Orchestrator model/effort: <MODEL> / <EFFORT>
 Retain the same run ID, Orchestrator task, heartbeat, active Worker, branch, worktree,
 pull request, issue, candidate SHA, and review state. Pause the heartbeat before migration.
 Before contract work, this Orchestrator must pass a unique ignored advisory
-create/edit/read-back/cleanup canary, and the same retained Worker must pass unique linked-
+create/edit/read-back/cleanup canary. When an active leaf retains a Worker, that same retained Worker must pass unique linked-
 worktree file mutation plus exact-path stage/index-read-back/unstage/cleanup while restoring
-its complete initial HEAD/status/index identity. Aggregate both role results as the exact ACTIVE_IN_PLACE_MIGRATION evidence set and read back its manifest/digest. Classify typed outcomes and retain every
+its complete initial HEAD/status/index identity; a phase with no Worker does not invent one. Aggregate the Orchestrator and every applicable retained-Worker result as the exact ACTIVE_IN_PLACE_MIGRATION evidence set and read back its manifest/digest. Classify typed outcomes and retain every
 resource in FILESYSTEM_CAPABILITY_BLOCKED on any denial, unavailable approval, launched
 non-zero execution, identity/read-back mismatch, or cleanup mismatch.
 Read the old active bundle first. Reconcile GitHub, Git, every retained task, heartbeat,
