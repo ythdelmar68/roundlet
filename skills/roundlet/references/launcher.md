@@ -34,7 +34,7 @@ Classify every denial/escalation/execution/capability outcome with the operator 
 If and only if all preflight checks pass:
 1. Create `.roundlet/contracts/<contract-id>/` by copying the exact manifest inputs without transformation, include the canonical manifest, and read back every path, hash, and resolved role value. If an existing directory with that ID differs, stop with `CONTRACT_BUNDLE_CONFLICT`.
 2. Create `.roundlet/lease.json` and `.roundlet/current.md` as the advisory recovery index defined by the skill. Use an unguessable run ID, the exact target identity, this authoritative machine/checkout, the owner identity, activation time, and the Orchestrator task identity once known. Do not add an expiry.
-3. Record the same activation and active contract ID and bundle path in both advisory files. Create exactly one long-lived Orchestrator task using role `orchestrator` model and reasoning effort from the pinned bundle. Give it the exact target, checkout, run ID, owner allowlist, resolved authority, pinned configuration, contract ID and bundle path, lease/current paths, the verified activation-canary evidence, and the Orchestrator contract from that bundle. Require this Orchestrator task to repeat the unique advisory-state create/edit/read-back/cleanup canary on a new exact path and return a valid `FILESYSTEM_CANARY_RESULT` before readiness. When Launcher preflight relied on `gh`, require the Orchestrator to repeat the representative read-only request in its own task under the same automatic escalation and bounded recovery rules before it answers exactly:
+3. Record the same activation and active contract ID and bundle path in both advisory files. Create exactly one long-lived Orchestrator task using role `orchestrator` model and reasoning effort from the pinned bundle. Give it the exact target, checkout, run ID, owner allowlist, resolved authority, pinned configuration, contract ID and bundle path, lease/current paths, the verified activation canary evidence-set manifest and digest, and the Orchestrator contract from that bundle. Require this Orchestrator task to repeat the unique advisory-state create/edit/read-back/cleanup canary on a new exact path and return a valid `FILESYSTEM_CANARY_RESULT` before readiness. When Launcher preflight relied on `gh`, require the Orchestrator to repeat the representative read-only request in its own task under the same automatic escalation and bounded recovery rules before it answers exactly:
    ACTIVATION_READY run=<run-id> target=<owner/repository> state=IDLE
    without selecting an issue yet.
 4. Wait for that exact response. If creation, preflight, or acknowledgement is incomplete or ambiguous, stop and preserve evidence; do not attach a heartbeat.
@@ -96,8 +96,8 @@ or cleanup transition. Before any contract write, this Orchestrator must prove a
 ignored `.roundlet/` create/edit/read-back/cleanup canary, and the same retained Worker must
 prove unique file mutation plus exact-path stage/index-read-back/unstage/cleanup in its
 linked worktree while restoring the complete initial HEAD/status/index identity. Use the
-configured one narrow approval retry and typed outcomes. On any denial, unavailable approval,
-launched non-zero execution, read-back mismatch, or cleanup mismatch, retain every resource,
+configured one narrow approval retry and typed outcomes. Aggregate the Orchestrator and retained-Worker results as the exact LEGACY_BOOTSTRAP evidence set and read back its manifest/digest. On any denial, unavailable approval,
+launched non-zero execution, read-back mismatch, cleanup mismatch, or invalid aggregate, retain every resource,
 create no contract record, and report FILESYSTEM_CAPABILITY_BLOCKED with the exact type.
 Prove this run predates contract state and has no activation ID,
 legacy-activation record, contract bundle, prepared record, or committed record. Reconcile
@@ -125,7 +125,7 @@ Build and read back that deterministic roundlet-contract/v1 bundle from the prov
 Create exactly one canonical `.roundlet/legacy-activation.json` using schema
 roundlet-legacy-activation/v1 with run ID, lease SHA-256, activation time, owner authorization
 event, source/ref, old contract ID, bundle-manifest hash, same task ID, task-metadata
-model/effort read-back, filesystem-canary evidence digest, other evidence digests, and timestamp. The record is valid only when every
+model/effort read-back, filesystem-canary evidence-set digest, other evidence digests, and timestamp. The record is valid only when every
 field and referenced byte reads back. A partial record has no effect; multiple valid records
 or contradictory evidence fail closed.
 
@@ -158,9 +158,9 @@ and prove the run is cleanly IDLE with no leaf resources. Before contract work, 
 Orchestrator must pass a unique ignored advisory create/edit/read-back/cleanup canary; create
 a temporary linked worktree plus short-lived candidate-configured Worker to pass the unique
 worktree file and exact Git-index stage/read-back/unstage canaries, then archive/remove them
-with exact cleanup proof. Classify typed outcomes and stop before contract work on any failure. Verify task metadata shows this
+with exact cleanup proof. Aggregate both role results as the exact BETWEEN_ISSUES_ADOPTION evidence set and read back its manifest/digest. Classify typed outcomes and stop before contract work on any failure. Verify task metadata shows this
 same task and the exact candidate model/effort for this turn. Build and read back the new
-bundle and prepared migration record that binds the verified filesystem-canary evidence digest. Make no GitHub or repository transition.
+bundle and prepared migration record that binds the verified filesystem-canary evidence-set digest. Make no GitHub or repository transition.
 
 After all gates and a truthful checkpoint pass, reply exactly with CONTRACT_MIGRATION_READY
 using mode: BETWEEN_ISSUES. Do not create committed.json, refresh mirrors, resume the
@@ -188,7 +188,7 @@ pull request, issue, candidate SHA, and review state. Pause the heartbeat before
 Before contract work, this Orchestrator must pass a unique ignored advisory
 create/edit/read-back/cleanup canary, and the same retained Worker must pass unique linked-
 worktree file mutation plus exact-path stage/index-read-back/unstage/cleanup while restoring
-its complete initial HEAD/status/index identity. Classify typed outcomes and retain every
+its complete initial HEAD/status/index identity. Aggregate both role results as the exact ACTIVE_IN_PLACE_MIGRATION evidence set and read back its manifest/digest. Classify typed outcomes and retain every
 resource in FILESYSTEM_CAPABILITY_BLOCKED on any denial, unavailable approval, launched
 non-zero execution, identity/read-back mismatch, or cleanup mismatch.
 Read the old active bundle first. Reconcile GitHub, Git, every retained task, heartbeat,
@@ -198,7 +198,7 @@ Stop on any contradiction or uncommitted atomic mutation.
 Verify task metadata proves this exact Orchestrator task is executing this turn under the
 candidate model and reasoning effort; self-reported model text is insufficient. Build and
 read back the new content-addressed bundle and a prepared migration record that binds the
-verified filesystem-canary evidence digest without changing the effective contract. Verify every manifest field/path/hash and every resolved role value.
+verified filesystem-canary evidence-set digest without changing the effective contract. Verify every manifest field/path/hash and every resolved role value.
 Write the truthful checkpoint, then reply exactly with the structured
 CONTRACT_MIGRATION_READY acknowledgement from thread-prompts.md. Do not create
 committed.json, refresh mirrors, resume the heartbeat, or make any repository transition
@@ -217,13 +217,13 @@ Expected run/mode: <RUN_ID> / <BETWEEN_ISSUES|ACTIVE_IN_PLACE>
 Expected old/new contract IDs: <OLD_ID> / <NEW_ID>
 Expected prepared.json SHA-256: <PREPARED_SHA256>
 Expected truthful checkpoint SHA-256: <CHECKPOINT_SHA256>
-Expected filesystem-canary evidence SHA-256: <CANARY_EVIDENCE_SHA256>
+Expected filesystem-canary evidence-set SHA-256: <CANARY_EVIDENCE_SET_SHA256>
 Expected candidate model/effort: <MODEL> / <EFFORT>
 Expected CONTRACT_MIGRATION_READY evidence: <EXACT_ACK_ID_OR_DIGEST>
 
 Verify task metadata, the effective old chain, paused heartbeat, retained resources, bundle,
 prepared record, owner authorization, exact READY bytes/digest, exact truthful checkpoint
-bytes/digest, and bound filesystem-canary evidence again. Require committed.json to bind both verified digests. If any
+bytes/digest, and bound filesystem-canary evidence-set manifest and digest again. Require committed.json to bind both verified digests. If any
 value differs, create no committed record and report CONTRACT_MIGRATION_COMMIT_BLOCKED.
 
 Create and read back exactly one valid committed.json as the commit point. Resolve the new

@@ -26,7 +26,7 @@ authoritative_checkout: <absolute-path>
 run_id: <stable-run-id>
 active_contract_id: <sha256-derived-id>
 contract_bundle: <absolute-bundle-path>
-filesystem_canary_evidence: <sha256-and-task-host-route-identity-or-none>
+filesystem_canary_evidence_set: <sha256-and-ordered-entry-identities-or-none>
 active_leaf: <number-and-url>
 umbrella: <number-and-url-or-none>
 pull_request: <number-and-url-or-none>
@@ -53,13 +53,14 @@ Every role must treat a GitHub CLI result produced before GitHub is reachable as
 
 ## Filesystem mutation canary result
 
-Activation and recovery use real role/tool calls, not a hypothetical decision. Follow the operator guide's exact unique-path create/edit/read-back/identity/cleanup sequence. A role requests at most the configured one narrow approval retry for an initial restriction. Never name a platform, shell, helper, or host-internal workaround in the normative result.
+Activation, issue claim, recovery, legacy bootstrap, contract adoption/migration, and benchmarks use real role/tool calls, not a hypothetical decision. Follow the operator guide's exact unique-path create/edit/read-back/identity/cleanup sequence. A role requests at most the configured one narrow approval retry for an initial restriction. Never name a platform, shell, helper, or host-internal workaround in the normative result.
 
 Return:
 
 ```text
 FILESYSTEM_CANARY_RESULT
-scope: <ACTIVATION_LAUNCHER|ACTIVATION_ORCHESTRATOR|ACTIVATION_WORKER|RECOVERY_ORCHESTRATOR|RECOVERY_WORKER>
+phase: <ACTIVATION|ISSUE_CLAIM|RECOVERY|LEGACY_BOOTSTRAP|BETWEEN_ISSUES_ADOPTION|ACTIVE_IN_PLACE_MIGRATION|BENCHMARK>
+role: <LAUNCHER|ORCHESTRATOR|WORKER>
 run_id: <run-id-or-preactivation-nonce>
 role_task: <exact-task-id>
 host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>
@@ -77,6 +78,8 @@ repository_transition: none
 
 `ESCALATION_DENIED` requires an explicit denial. `ESCALATION_UNAVAILABLE` requires proof that no supported approval path exists. `ESCALATED_EXECUTION_FAILED` requires an approved, launched operation that failed. Any failed/missing surface or cleanup produces `FILESYSTEM_CAPABILITY_UNAVAILABLE` while preserving the more specific cause. A malformed result, stale task/route fingerprint, unverified cleanup, or repository transition is invalid.
 
+The Orchestrator must hash and aggregate the exact result bytes into the operator guide's canonical `roundlet-filesystem-canary-set/v1` manifest, verify the transition-specific required entry set, and read back its digest before relying on it. A single role result or digest can never stand in for the required aggregate.
+
 ## Long-lived Orchestrator bootstrap
 
 The Launcher creates the Orchestrator with this contract:
@@ -91,8 +94,8 @@ switches, advisory file paths, authenticated identity, and Launcher preflight ev
 Read the complete Roundlet SKILL.md and all required references only from the supplied active contract bundle before acting. Do not adopt installed skill or configuration files as live instructions.
 
 First repeat the advisory-state filesystem canary on a new exact ignored path in this
-Orchestrator task. Return a valid FILESYSTEM_CANARY_RESULT with scope
-ACTIVATION_ORCHESTRATOR and cleanup VERIFIED. Do not acknowledge readiness if it fails.
+Orchestrator task. Return a valid FILESYSTEM_CANARY_RESULT with phase ACTIVATION, role ORCHESTRATOR,
+and cleanup VERIFIED. Do not acknowledge readiness if it fails.
 
 If Launcher preflight relied on GitHub CLI, repeat its representative read-only request
 inside this Orchestrator task. Apply automatic scoped escalation and bounded connectivity
@@ -136,7 +139,7 @@ The recurring heartbeat sends:
 
 ```text
 Perform one idempotent Roundlet tick for the bound run. Verify the last filesystem-canary
-evidence still names this task/host/checkout/worktree/permission route/tool class. Any changed
+evidence set still contains every required entry and each names the current task/host/checkout/worktree/permission route/tool class. Any changed
 identity, missing evidence, or cleanup ambiguity requires full reconciliation and a fresh
 role-specific canary before any repository transition; failure enters
 FILESYSTEM_CAPABILITY_BLOCKED with the exact typed cause.
@@ -212,7 +215,7 @@ orchestrator_task: <verified-same-task-id>
 activation_source_ref: <exact-immutable-source-and-ref>
 activation_contract_id: <verified-old-id>
 legacy_record: <absolute-path-and-sha256>
-filesystem_canary_evidence: <verified-sha256>
+filesystem_canary_evidence_set: <verified-aggregate-sha256>
 orchestrator_model: <task-metadata-readback-model>
 reasoning_effort: <task-metadata-readback-effort>
 resources_retained: <heartbeat-worker-branch-worktree-pr-issue-and-sha>
@@ -235,7 +238,7 @@ new_contract_id: <verified-new-id>
 orchestrator_model: <task-metadata-readback-model>
 reasoning_effort: <task-metadata-readback-effort>
 model_readback_source: <task-metadata-source>
-filesystem_canary_evidence: <verified-sha256>
+filesystem_canary_evidence_set: <verified-aggregate-sha256>
 phase: <retained-phase>
 resources_retained: <orchestrator-heartbeat-worker-branch-worktree-pr-issue-and-sha>
 repository_transition: none
@@ -257,7 +260,7 @@ new_contract_id: <verified-new-id>
 committed_record: <absolute-path-and-sha256>
 ready_evidence_sha256: <verified-digest>
 truthful_checkpoint_sha256: <verified-digest>
-filesystem_canary_evidence: <verified-sha256>
+filesystem_canary_evidence_set: <verified-aggregate-sha256>
 effective_chain: <ordered-contract-ids>
 derived_mirrors: <VERIFIED|REPAIR_REQUIRED>
 heartbeat: <same-id-and-state>
@@ -285,14 +288,14 @@ Before **every** initial, repair, final-repair, integration, or cleanup-prefligh
 
 It must not rely on task memory in place of rereading those sources.
 
-### Activation or recovery canary prompt
+### Worker filesystem canary prompt
 
-The Launcher uses this with a short-lived configured Worker in a temporary linked worktree during activation. Recovery or active migration sends it to the same retained Worker and exact linked worktree. This turn never becomes issue implementation.
+The Launcher uses this with a short-lived configured Worker in a temporary linked worktree during activation or between-issue adoption. Immediately after issue claim, the Orchestrator sends it to the newly created persistent Worker in its exact linked worktree before initial implementation. Recovery, legacy bootstrap, or active migration sends it to the same retained Worker and exact linked worktree. This turn never becomes issue implementation.
 
 ```text
 Perform only the Roundlet filesystem canary for the supplied exact worktree.
 
-<insert target/run, exact task/worktree, scope, nonce, initial HEAD/status/index identities,
+<insert target/run, exact task/worktree, phase, role, nonce, initial HEAD/status/index identities,
 expected first/second content hashes, exact advisory/worktree/index applicability, and
 configured approval_retry_limit>
 

@@ -287,7 +287,7 @@ unreconciled run, unsupported capability, or ambiguous authority.
 The canonical full prompt is visible at [`launcher.md`](skills/roundlet/references/launcher.md#new-activation). A successful Launcher:
 
 1. verifies configuration, models, GitHub, Git, rules, authority, local state, task/heartbeat capabilities, and any required GitHub CLI path;
-2. proves and cleans the Launcher/Orchestrator advisory route plus configured-Worker linked-worktree file and Git-index routes with real canaries;
+2. proves and cleans the Launcher/Orchestrator advisory route plus configured-Worker linked-worktree file and Git-index routes with real canaries, then binds all required role results in one canonical evidence set;
 3. creates and reads back the content-addressed activation contract bundle, then creates the two advisory files with the same active contract identity;
 4. creates exactly one long-lived Orchestrator from that pinned bundle, requires its own advisory canary, and waits for `ACTIVATION_READY`;
 5. attaches exactly one heartbeat at the configured active interval, verifies that the same heartbeat can adopt every configured backoff interval, and waits for `HEARTBEAT_BOUND`;
@@ -323,7 +323,7 @@ Important distinctions:
 - There is no immediate destructive stop. Active work requires `resume`, `preserve-and-stop`, or an explicitly scoped `abandon-and-cleanup` owner decision.
 - **Legacy bootstrap** first pins the exact activation-time source/ref for a pre-contract run; it fails closed if the old identity cannot be proven and never treats the current installed copy as evidence. **Between-issue adoption** handles an owner-approved candidate only when fully reconciled `IDLE` has no leaf resources. **In-place migration** handles every other phase and retains all active resources. Both use a same-task model/effort override verified from task metadata and make no repository transition.
 - **Recovery** is only for an inaccessible Orchestrator or heartbeat. It reads the pinned active bundle; a stale-looking local file never authorizes takeover.
-- **Filesystem capability** is proven on the exact role/task/host/route. An initial restriction gets at most one narrow host-supported approval retry. Explicit denial, unavailable approval, approved execution failure, and final unproven capability remain distinct.
+- **Filesystem capability** is proven on the exact role/task/host/route. Every newly created persistent Worker repeats the worktree/index canary before implementation, and a canonical aggregate prevents one role or surface from overwriting another. An initial restriction gets at most one narrow host-supported approval retry. Explicit denial, unavailable approval, approved execution failure, and final unproven capability remain distinct.
 - **Recovery and contract migration** rerun canaries before any checkpoint, Git, or GitHub transition. Failure retains every active resource in `FILESYSTEM_CAPABILITY_BLOCKED`.
 - **GitHub CLI recovery** automatically escalates sandbox-blocked network access and retries bounded transient transport failures without changing Roundlet phase; it never launches browser authentication as an implicit workaround.
 
