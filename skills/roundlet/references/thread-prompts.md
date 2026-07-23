@@ -95,7 +95,9 @@ Read the complete Roundlet SKILL.md and all required references only from the su
 
 First repeat the advisory-state filesystem canary on a new exact ignored path in this
 Orchestrator task. Return a valid FILESYSTEM_CANARY_RESULT with phase ACTIVATION, role ORCHESTRATOR,
-and cleanup VERIFIED. Do not acknowledge readiness if it fails.
+and cleanup VERIFIED. Combine its exact bytes with the supplied verified Launcher and activation-Worker
+result bytes, build and read back the canonical activation evidence-set manifest/digest, and do not
+acknowledge readiness if any entry or aggregate check fails.
 
 If Launcher preflight relied on GitHub CLI, repeat its representative read-only request
 inside this Orchestrator task. Apply automatic scoped escalation and bounded connectivity
@@ -114,7 +116,7 @@ umbrella, rebase, force-push, bypass protection, or destroy unique work.
 
 For bootstrap only, reconcile the supplied evidence and make no scheduling mutation.
 If valid, reply exactly:
-ACTIVATION_READY run=<run-id> target=<owner/repository> state=IDLE
+ACTIVATION_READY run=<run-id> target=<owner/repository> state=IDLE canary_set=<sha256>
 Otherwise reply:
 ACTIVATION_BLOCKED run=<run-id> reason=<specific-fail-closed-reason>
 ```
