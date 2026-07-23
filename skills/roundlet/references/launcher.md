@@ -16,8 +16,9 @@ Target:
 - Authoritative local checkout: <ABSOLUTE_PATH>
 - Expected primary branch: main
 - Roundlet configuration: use references/roundlet-config.json within the installed $roundlet skill without changing or defaulting any value
+- Expected Launcher task/model/effort: <LAUNCHER_TASK_ID> / <MODEL> / <EFFORT>
 
-Read the complete Roundlet SKILL.md and every reference it requires before acting. Do not implement an issue in this Launcher task.
+Read the complete Roundlet SKILL.md and every reference it requires before acting. Read task metadata and require this exact Launcher task/model/effort to equal the owner-bound expected values above; self-reported profile text is insufficient. Bind that verified profile into the Launcher canary result. Do not implement an issue in this Launcher task.
 
 Perform a fail-closed activation preflight:
 1. Resolve the exact installed skill source and configuration. Build the exact `roundlet-contract/v1` JSON object and `roundlet-tree/v1` digest defined in the operator guide—same field names, types, source/ref/version rules, POSIX relative paths, file set, byte framing, ordering, and canonical JSON encoding. Derive the lowercase-hex contract ID from the SHA-256 of canonical manifest bytes with `contract_id` omitted, then add that ID and reserialize under the same rules. Validate that every required configuration value is present and internally consistent. Require unique Supervisor attempt-profile names and an ordered profile count exactly equal to `max_supervisor_attempts_per_round`. Require both heartbeat backoff arrays to start at `active_minutes`, increase strictly, contain positive whole minutes, and support updating one existing heartbeat; require a positive full-reconciliation tick bound. Require `filesystem_canary.required: true` and `approval_retry_limit: 1`; do not default or broaden either value.
@@ -61,8 +62,9 @@ Target:
 - Authoritative local checkout: <ABSOLUTE_PATH>
 - Existing Roundlet run ID, if known: <RUN_ID_OR_UNKNOWN>
 - Owner recovery instruction: reconcile the old run and, only if replacement is safe, create one replacement Orchestrator and heartbeat
+- Expected recovery Launcher task/model/effort: <LAUNCHER_TASK_ID> / <MODEL> / <EFFORT>
 
-Read only `.roundlet/lease.json` and the minimal contract commit records needed to resolve the effective active bundle, verify that bundle completely, then read its `SKILL.md` and every required reference before acting. Treat installed skill/configuration files only as a separately fingerprinted candidate. This prompt is explicit owner authorization to investigate and propose recovery; it is not authorization to discard, overwrite, merge, close, delete, or otherwise destroy old work.
+Read task metadata first and require this exact recovery Launcher task/model/effort to equal the owner-bound expected values above; self-reported profile text is insufficient, and the verified profile is bound into its canary result. Read only `.roundlet/lease.json` and the minimal contract commit records needed to resolve the effective active bundle, verify that bundle completely, then read its `SKILL.md` and every required reference before acting. Treat installed skill/configuration files only as a separately fingerprinted candidate. This prompt is explicit owner authorization to investigate and propose recovery; it is not authorization to discard, overwrite, merge, close, delete, or otherwise destroy old work.
 
 1. Perform the normal capability, repository, configuration, authority, and identity preflight.
 2. Reconcile `.roundlet/lease.json`, `.roundlet/current.md`, the named active contract bundle and manifest, all Roundlet GitHub trace comments, active pull requests, exact branch SHAs, local and remote branches, worktrees, checks, and all identifiable old Orchestrator/Worker/Supervisor tasks and heartbeats. Treat the installed skill/configuration only as a migration candidate.
