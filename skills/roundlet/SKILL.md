@@ -44,8 +44,8 @@ Use the Launcher prompt verbatim except for its explicit placeholders. The short
 
 1. Resolve the exact target repository, authoritative checkout, owner identity, and configuration.
 2. Perform the capability, repository, GitHub, local-state, model, and authority preflight.
-3. Create and read back the content-addressed activation contract bundle and manifest.
-4. Reconcile any existing `.roundlet/lease.json`, `.roundlet/current.md`, or `.roundlet/contracts/` evidence; never take over automatically.
+3. Reconcile any existing `.roundlet/lease.json`, `.roundlet/current.md`, or `.roundlet/contracts/` evidence; never take over automatically.
+4. Create and read back the content-addressed activation contract bundle and manifest.
 5. Create the configured long-lived Orchestrator task from the pinned bundle and wait for its exact `ACTIVATION_READY` response.
 6. Attach one heartbeat at configured `heartbeat.active_minutes` to that Orchestrator, send it the heartbeat identity, and archive the Launcher.
 

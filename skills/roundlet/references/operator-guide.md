@@ -125,7 +125,7 @@ Use two tiers. The observation tier asks only whether the last full reconciliati
 
 After every successful full reconciliation, replace the prior semantic baseline in `current.md` with these bounded facts:
 
-- composite fingerprints for the exact installed `SKILL.md`, every required reference, `roundlet-config.json`, and the stable lease;
+- the verified active contract manifest, a complete bundled-file fingerprint, and the stable lease;
 - authoritative `origin/main` full OID, phase, active contract ID and verified bundle fingerprint, separately fingerprinted installed candidate, and last-full-reconciliation time;
 - a repository-wide open-issue graph fingerprint and its open-issue count while IDLE;
 - active leaf, umbrella, dependency, branch, worktree, candidate-SHA, pull-request, check/review, and role-task fingerprints/cursors required by an active phase;
