@@ -6,6 +6,7 @@ These are prompt contracts, not hidden role knowledge. The Launcher and Orchestr
 
 - [Shared context envelope](#shared-context-envelope)
 - [GitHub access recovery](#github-access-recovery)
+- [Filesystem mutation canary result](#filesystem-mutation-canary-result)
 - [Long-lived Orchestrator bootstrap](#long-lived-orchestrator-bootstrap)
 - [Heartbeat tick](#heartbeat-tick)
 - [Legacy activation pin result](#legacy-activation-pin-result)
@@ -25,6 +26,7 @@ authoritative_checkout: <absolute-path>
 run_id: <stable-run-id>
 active_contract_id: <sha256-derived-id>
 contract_bundle: <absolute-bundle-path>
+filesystem_canary_evidence: <sha256-and-task-host-route-identity-or-none>
 active_leaf: <number-and-url>
 umbrella: <number-and-url-or-none>
 pull_request: <number-and-url-or-none>
@@ -49,6 +51,32 @@ The Orchestrator must validate this envelope against live evidence before sendin
 
 Every role must treat a GitHub CLI result produced before GitHub is reachable as connectivity evidence, not credential rejection. When `gh` is required, request scoped network escalation for the same command automatically and apply the operator guide's bounded recovery contract. Never open browser authentication, substitute browser automation, or expose token material. A Worker or Supervisor reports exact denial, transport, or reachable-authentication evidence to the Orchestrator; only the Orchestrator may classify the resulting Roundlet blocking state.
 
+## Filesystem mutation canary result
+
+Activation and recovery use real role/tool calls, not a hypothetical decision. Follow the operator guide's exact unique-path create/edit/read-back/identity/cleanup sequence. A role requests at most the configured one narrow approval retry for an initial restriction. Never name a platform, shell, helper, or host-internal workaround in the normative result.
+
+Return:
+
+```text
+FILESYSTEM_CANARY_RESULT
+scope: <ACTIVATION_LAUNCHER|ACTIVATION_ORCHESTRATOR|ACTIVATION_WORKER|RECOVERY_ORCHESTRATOR|RECOVERY_WORKER>
+run_id: <run-id-or-preactivation-nonce>
+role_task: <exact-task-id>
+host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>
+target_paths: <exact-local-canary-paths-or-none>
+advisory_surface: <PASS|NOT_APPLICABLE|FAIL> <evidence-digest-or-none>
+worktree_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-identity-digest-or-none>
+index_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-index-and-entry-digest-or-none>
+approval_retry_count: <0|1>
+approval_outcome: <NOT_REQUIRED|APPROVED|ESCALATION_DENIED|ESCALATION_UNAVAILABLE>
+execution_outcome: <SUCCEEDED|NOT_LAUNCHED|ESCALATED_EXECUTION_FAILED>
+capability_outcome: <PASS|FILESYSTEM_CAPABILITY_UNAVAILABLE>
+cleanup: <VERIFIED|FAILED> <evidence-digest>
+repository_transition: none
+```
+
+`ESCALATION_DENIED` requires an explicit denial. `ESCALATION_UNAVAILABLE` requires proof that no supported approval path exists. `ESCALATED_EXECUTION_FAILED` requires an approved, launched operation that failed. Any failed/missing surface or cleanup produces `FILESYSTEM_CAPABILITY_UNAVAILABLE` while preserving the more specific cause. A malformed result, stale task/route fingerprint, unverified cleanup, or repository transition is invalid.
+
 ## Long-lived Orchestrator bootstrap
 
 The Launcher creates the Orchestrator with this contract:
@@ -61,6 +89,10 @@ resolved configuration, active contract ID and bundle path, root origin/main aut
 switches, advisory file paths, authenticated identity, and Launcher preflight evidence>
 
 Read the complete Roundlet SKILL.md and all required references only from the supplied active contract bundle before acting. Do not adopt installed skill or configuration files as live instructions.
+
+First repeat the advisory-state filesystem canary on a new exact ignored path in this
+Orchestrator task. Return a valid FILESYSTEM_CANARY_RESULT with scope
+ACTIVATION_ORCHESTRATOR and cleanup VERIFIED. Do not acknowledge readiness if it fails.
 
 If Launcher preflight relied on GitHub CLI, repeat its representative read-only request
 inside this Orchestrator task. Apply automatic scoped escalation and bounded connectivity
@@ -103,7 +135,13 @@ HEARTBEAT_BOUND run=<run-id> heartbeat=<heartbeat-id> interval=<minutes>m
 The recurring heartbeat sends:
 
 ```text
-Perform one idempotent Roundlet tick for the bound run. Resolve the effective contract from
+Perform one idempotent Roundlet tick for the bound run. Verify the last filesystem-canary
+evidence still names this task/host/checkout/worktree/permission route/tool class. Any changed
+identity, missing evidence, or cleanup ambiguity requires full reconciliation and a fresh
+role-specific canary before any repository transition; failure enters
+FILESYSTEM_CAPABILITY_BLOCKED with the exact typed cause.
+
+Resolve the effective contract from
 the immutable activation ID or valid legacy activation record plus the unique fully valid
 committed chain. Treat lease/current active values only as derived mirrors: if they disagree,
 pause and reconstruct them from the chain before any other transition. Verify and read only
@@ -174,6 +212,7 @@ orchestrator_task: <verified-same-task-id>
 activation_source_ref: <exact-immutable-source-and-ref>
 activation_contract_id: <verified-old-id>
 legacy_record: <absolute-path-and-sha256>
+filesystem_canary_evidence: <verified-sha256>
 orchestrator_model: <task-metadata-readback-model>
 reasoning_effort: <task-metadata-readback-effort>
 resources_retained: <heartbeat-worker-branch-worktree-pr-issue-and-sha>
@@ -196,6 +235,7 @@ new_contract_id: <verified-new-id>
 orchestrator_model: <task-metadata-readback-model>
 reasoning_effort: <task-metadata-readback-effort>
 model_readback_source: <task-metadata-source>
+filesystem_canary_evidence: <verified-sha256>
 phase: <retained-phase>
 resources_retained: <orchestrator-heartbeat-worker-branch-worktree-pr-issue-and-sha>
 repository_transition: none
@@ -217,6 +257,7 @@ new_contract_id: <verified-new-id>
 committed_record: <absolute-path-and-sha256>
 ready_evidence_sha256: <verified-digest>
 truthful_checkpoint_sha256: <verified-digest>
+filesystem_canary_evidence: <verified-sha256>
 effective_chain: <ordered-contract-ids>
 derived_mirrors: <VERIFIED|REPAIR_REQUIRED>
 heartbeat: <same-id-and-state>
@@ -243,6 +284,28 @@ Before **every** initial, repair, final-repair, integration, or cleanup-prefligh
 - all prior Roundlet trace events relevant to the requested phase.
 
 It must not rely on task memory in place of rereading those sources.
+
+### Activation or recovery canary prompt
+
+The Launcher uses this with a short-lived configured Worker in a temporary linked worktree during activation. Recovery or active migration sends it to the same retained Worker and exact linked worktree. This turn never becomes issue implementation.
+
+```text
+Perform only the Roundlet filesystem canary for the supplied exact worktree.
+
+<insert target/run, exact task/worktree, scope, nonce, initial HEAD/status/index identities,
+expected first/second content hashes, exact advisory/worktree/index applicability, and
+configured approval_retry_limit>
+
+Prove each target path absent. Create and change the unique worktree artifact, read back
+exact identity/content, then remove it. For the separate unique unignored index artifact,
+stage only that path, verify its exact index mode/blob/content, unstage only it, and remove
+it. Prove final HEAD/status/index and all pre-existing path identities equal the initial
+values. Make no commit, branch, GitHub, source, user-work, or unrelated-index mutation.
+Use at most the one narrow approval retry and preserve typed outcomes exactly.
+
+Return the exact FILESYSTEM_CANARY_RESULT structure. If cleanup is not verified, report
+FILESYSTEM_CAPABILITY_UNAVAILABLE and the remaining exact canary path; do not broaden cleanup.
+```
 
 ### Initial implementation prompt
 

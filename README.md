@@ -18,7 +18,7 @@ This README is the human-facing entry point for the source repository. It is **n
 
 ## Understand the architecture
 
-Roundlet uses Codex tasks, GitHub, Git branches/worktrees, two advisory local files, and activation-time content-addressed contract snapshots. It does not ship an executable orchestration runtime, database, package, distributed lock, or CI service.
+Roundlet uses Codex tasks, GitHub, Git branches/worktrees, two advisory local files, activation-time content-addressed contract snapshots, and bounded filesystem mutation canaries. It does not ship an executable orchestration runtime, database, package, distributed lock, or CI service.
 
 ```mermaid
 flowchart LR
@@ -116,7 +116,7 @@ You need:
 - the exact configured models and reasoning efforts;
 - permission to add the Roundlet authority block to the target repository's root `AGENTS.md`.
 
-Roundlet fails closed if any configured capability or mutation cannot be verified. It does not silently substitute another model, effort, Supervisor attempt profile, or merge method.
+Roundlet fails closed if any configured capability or mutation cannot be verified. It proves advisory-state, linked-worktree, and linked-worktree-index mutations with real role/tool canaries; tool visibility and zero-tool decisions are not proof. It does not silently substitute another model, effort, Supervisor attempt profile, or merge method.
 
 The checked-in configuration uses `gpt-5.6-sol` with high reasoning for the long-lived Orchestrator and retains the configured Worker and Supervisor profiles. Roundlet does not require a custom Codex permission profile or project `config.toml`. When required GitHub CLI access is blocked by the network sandbox, it requires the model to request scoped escalation automatically, including through **Approve for me** when available, and distinguishes connectivity failure from a credential rejection returned by reachable GitHub. The skill cannot grant or assume network access; the host permission policy remains authoritative. Only an explicit approval denial, unavailable approval mechanism, confirmed authentication rejection, or connectivity that remains unavailable after bounded recovery blocks activation for owner input.
 
@@ -175,7 +175,7 @@ SKILL.md and every required reference, and report:
 - the configured owner allowlist;
 - every Orchestrator and Worker model/effort;
 - the ordered Supervisor attempt profiles;
-- heartbeat active interval, IDLE and owner-input backoff arrays, periodic full-audit bound, review limits, and merge method;
+- heartbeat active interval, IDLE and owner-input backoff arrays, periodic full-audit bound, filesystem-canary required flag and approval retry limit, review limits, and merge method;
 - any missing, malformed, or unsupported value.
 
 Do not launch or recover a run. Do not mutate GitHub, Git, Codex tasks, heartbeats, or a
@@ -248,7 +248,7 @@ tracked file. Verify with git check-ignore that .roundlet/lease.json resolves to
 checkout's .git/info/exclude. Report the exact evidence and make no other mutation.
 ```
 
-The Launcher repeats and verifies this local step during activation.
+The Launcher repeats and verifies this local step during activation. Canary artifacts are transient, uniquely named, bounded, and must be removed with exact read-back proof; they are never durable Roundlet state or committed source.
 
 ## Prepare the GitHub backlog
 
@@ -286,12 +286,13 @@ unreconciled run, unsupported capability, or ambiguous authority.
 
 The canonical full prompt is visible at [`launcher.md`](skills/roundlet/references/launcher.md#new-activation). A successful Launcher:
 
-1. verifies configuration, models, GitHub, Git, rules, authority, local state, task/heartbeat capabilities, and any required GitHub CLI path in both the Launcher and long-lived Orchestrator tasks;
-2. creates and reads back the content-addressed activation contract bundle, then creates the two advisory files with the same active contract identity;
-3. creates exactly one long-lived Orchestrator from that pinned bundle and waits for `ACTIVATION_READY`;
-4. attaches exactly one heartbeat at the configured active interval, verifies that the same heartbeat can adopt every configured backoff interval, and waits for `HEARTBEAT_BOUND`;
-5. sends one initial tick; and
-6. reports the run identities and archives itself.
+1. verifies configuration, models, GitHub, Git, rules, authority, local state, task/heartbeat capabilities, and any required GitHub CLI path;
+2. proves and cleans the Launcher/Orchestrator advisory route plus configured-Worker linked-worktree file and Git-index routes with real canaries;
+3. creates and reads back the content-addressed activation contract bundle, then creates the two advisory files with the same active contract identity;
+4. creates exactly one long-lived Orchestrator from that pinned bundle, requires its own advisory canary, and waits for `ACTIVATION_READY`;
+5. attaches exactly one heartbeat at the configured active interval, verifies that the same heartbeat can adopt every configured backoff interval, and waits for `HEARTBEAT_BOUND`;
+6. sends one initial tick; and
+7. reports the run identities and archives itself.
 
 Keep the Orchestrator task. Routine owner commands go there.
 
@@ -322,6 +323,8 @@ Important distinctions:
 - There is no immediate destructive stop. Active work requires `resume`, `preserve-and-stop`, or an explicitly scoped `abandon-and-cleanup` owner decision.
 - **Legacy bootstrap** first pins the exact activation-time source/ref for a pre-contract run; it fails closed if the old identity cannot be proven and never treats the current installed copy as evidence. **Between-issue adoption** handles an owner-approved candidate only when fully reconciled `IDLE` has no leaf resources. **In-place migration** handles every other phase and retains all active resources. Both use a same-task model/effort override verified from task metadata and make no repository transition.
 - **Recovery** is only for an inaccessible Orchestrator or heartbeat. It reads the pinned active bundle; a stale-looking local file never authorizes takeover.
+- **Filesystem capability** is proven on the exact role/task/host/route. An initial restriction gets at most one narrow host-supported approval retry. Explicit denial, unavailable approval, approved execution failure, and final unproven capability remain distinct.
+- **Recovery and contract migration** rerun canaries before any checkpoint, Git, or GitHub transition. Failure retains every active resource in `FILESYSTEM_CAPABILITY_BLOCKED`.
 - **GitHub CLI recovery** automatically escalates sandbox-blocked network access and retries bounded transient transport failures without changing Roundlet phase; it never launches browser authentication as an implicit workaround.
 
 ## Understand safety boundaries
@@ -332,6 +335,7 @@ Important distinctions:
 - GitHub issues, pull requests, reviews, checks, and append-only Roundlet comments are the durable backlog and audit trail.
 - Only the Orchestrator mutates GitHub. Workers and Supervisors return proposals for verification.
 - Lightweight metadata is only an unchanged proof. Any changed, incomplete, overflowed, action-ready, or periodically due observation triggers full reconciliation in the same heartbeat before reasoning or mutation.
+- A filesystem tool's presence is not proof that it can mutate the exact advisory/worktree/index surface. A launched non-zero result is `ESCALATED_EXECUTION_FAILED`, not an approval denial; any incomplete mutation/read-back/restoration/cleanup is `FILESYSTEM_CAPABILITY_UNAVAILABLE`.
 - A GitHub CLI failure inside a network-restricted sandbox is not proof that its credential is invalid. Roundlet must reach GitHub before making that classification.
 - Every Worker and Supervisor turn is bound to exact live context and full commit SHAs.
 - Roundlet never rebases, force-pushes, bypasses protection, destroys unique work, or closes an umbrella.
@@ -351,5 +355,6 @@ Repository work follows [`AGENTS.md`](AGENTS.md):
 5. When anything under `skills/roundlet` changes, review and synchronize every affected reference and this README in the same pull request. If a reviewed document needs no textual change, record that verification in the pull request.
 6. Run the current system skill validator, JSON and YAML validation, reference-link and source-layout checks, prohibited-artifact checks, and `git diff --check`.
 7. Keep forward testing in its dedicated issue and never mutate a target repository without explicit owner authorization.
+8. Any model, effort, permission, or contract change that can affect mutation behavior requires a bounded live task/tool benchmark on all three canary surfaces; a zero-tool synthetic comparison is insufficient.
 
 Do not add a second README, separate installation or quick-reference document, executable runtime, generated documentation, CI workflow, release artifact, or automated test suite.

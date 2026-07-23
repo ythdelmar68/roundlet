@@ -6,6 +6,7 @@ This is the detailed operating contract for Roundlet. The Orchestrator must rere
 
 - [Operating envelope](#operating-envelope)
 - [Configuration and capability preflight](#configuration-and-capability-preflight)
+- [Filesystem mutation canaries and typed outcomes](#filesystem-mutation-canaries-and-typed-outcomes)
 - [Advisory local state](#advisory-local-state)
 - [Pinned run contract and migration](#pinned-run-contract-and-migration)
 - [Lightweight observation and heartbeat cadence](#lightweight-observation-and-heartbeat-cadence)
@@ -58,6 +59,7 @@ Before activation, prove all of the following:
 - GitHub identity, repository identity, issues, comments, branches, pull requests, reviews, checks, mergeability, and merge operations can be inspected;
 - authorized GitHub mutations are available to the Orchestrator;
 - the exact installed candidate contract can be copied to a local content-addressed bundle and every copied path/hash can be read back;
+- `filesystem_canary.required` is exactly `true`, `approval_retry_limit` is exactly `1`, and the role-specific advisory, linked-worktree, and Git-index canaries below pass with cleanup proof;
 - the root authority block on `origin/main` is valid;
 - the repository supports the configured merge method;
 - `HEAD`, local `main`, and `origin/main` initially name the same full commit;
@@ -77,6 +79,39 @@ This contract requires the role to request escalation; it does not grant or let 
 Enter `NEEDS_OWNER_INPUT` only when approval is explicitly denied, the approval mechanism is unavailable, reachable GitHub rejects authentication, or the bounded attempts prove that required GitHub connectivity remains unavailable. Preserve the exact command, escalation outcome, transport or HTTP evidence, and attempt count.
 
 If any capability cannot be proven, report the exact unsupported value or missing capability and stop. Capability preflight is performed through Codex/tool inspection; it is not an executable validator or cross-platform test matrix.
+
+## Filesystem mutation canaries and typed outcomes
+
+Tool presence, a permission declaration, or a zero-tool decision never proves filesystem mutation capability. Activation and recovery must exercise the exact task, host, checkout/worktree, permission route, and mutation surface that the run will use. Use an unguessable nonce and a bounded artifact whose path is first proven absent. Record the exact target and initial identity before mutation.
+
+Every file-surface canary performs this sequence:
+
+1. Create one unique artifact containing the nonce, run/canary identity, surface, and first expected content; read it back and verify exact path, identity, bytes, and SHA-256.
+2. Change that same artifact through the mutation route the role will use for real work; read it back and verify the distinct second expected bytes and hash.
+3. Remove only the canary artifact and any canary-created empty parent, then prove the exact path absent and the surrounding state equal to its captured initial identity.
+
+Required surfaces are:
+
+- **Advisory state:** the Launcher and then the long-lived Orchestrator each use a new ignored path below the authoritative checkout's `.roundlet/`. The Orchestrator result, not the Launcher result, proves the live advisory route.
+- **Linked Worker worktree:** at activation, a short-lived task with the configured Worker model/effort uses a temporary isolated linked worktree created from exact `origin/main`. During recovery or active migration, the same retained Worker uses its existing linked worktree. Capture and restore exact `HEAD`, worktree status, index tree, and pre-existing staged/unstaged/untracked identities.
+- **Linked-worktree Git index:** use a second unique, initially absent, unignored canary path. Stage only that path, inspect and verify its exact index path/mode/blob/content, unstage only that path, remove it, and prove the complete index/worktree identities equal their initial values. Never commit the canary.
+
+A canary must not touch an existing path, user work, an issue branch during activation, a GitHub object, or another task's artifact. A short-lived activation Worker is not the persistent issue Worker. Archive it and normally remove its temporary linked worktree only after read-back and cleanup proof. Recovery never replaces an inaccessible retained Worker merely to run a canary.
+
+Classify the control path exactly:
+
+- `ESCALATION_DENIED`: the host explicitly reports that the requested approval was denied.
+- `ESCALATION_UNAVAILABLE`: the host exposes no supported approval path for the required operation.
+- `ESCALATED_EXECUTION_FAILED`: approval succeeded and the requested operation launched, but execution returned non-zero or an equivalent launched-failure result.
+- `FILESYSTEM_CAPABILITY_UNAVAILABLE`: the exact required create/edit/read-back/identity/restore/cleanup surface is not fully proven. Preserve the more specific approval or execution cause alongside this final capability result.
+
+An initial restricted or sandboxed attempt is evidence only. Request the narrowest host-supported approval for the same exact target and operation, at most `approval_retry_limit` times. Never convert a launched failure into an approval denial, switch to an unproven helper or broader target, prescribe host internals, or retry indefinitely. The contract is independent of operating system, shell, command syntax, and helper executable.
+
+Any read-back mismatch, index mismatch, stale task/host/route identity, or cleanup/restoration failure yields `FILESYSTEM_CAPABILITY_UNAVAILABLE`. A Launcher/Worker canary failure stops activation before contract creation or persistent run resources. A failure in the required live Orchestrator repeat leaves activation incomplete, attaches no heartbeat, selects no issue, retains truthful bounded evidence and any unclean resource, and removes only artifacts whose cleanup can be proven. Recovery and migration retain all existing tasks, heartbeat, branch, worktree, pull request, issue, SHA, contract, and unique work; pause and enter `FILESYSTEM_CAPABILITY_BLOCKED` before any advisory, Git, or GitHub transition. Do not claim cleanup when an artifact remains.
+
+Store only bounded evidence: scope, nonce digest, role/task ID, host/checkout/worktree identity, exact target paths in local recovery state (public traces use only path digests), initial/final state digests, expected/observed content hashes, index entry hash, approval request count, typed approval/execution/capability outcomes, cleanup status, and time. Raw tool output and private permission traces remain local. A changed task, host, checkout/worktree, permission route, mutation tool class, or candidate role model/effort invalidates prior evidence and requires a fresh canary.
+
+Any future model, effort, permission, or contract change that can affect Orchestrator/Worker mutations requires a bounded live benchmark on a disposable authorized target. It must use real task/tool calls on all three surfaces, cover each typed outcome and successful cleanup, and read back no-transition behavior. A zero-tool synthetic benchmark can supplement but never replace this gate.
 
 ## Advisory local state
 
@@ -106,7 +141,7 @@ The lease contains no expiry and authorizes no automatic takeover. A representat
 }
 ```
 
-`current.md` records only pointers and reconciliation facts: phase, immutable activation ID, derived effective-contract ID and bundle path, installed-candidate fingerprint, pending adoption/migration identity when present, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, current Supervisor task when one exists, branch, worktree, base and candidate full SHAs, review epoch/round/mode, Supervisor attempt number/profile, last durable GitHub event, blocking condition, last full reconciliation time, and the bounded semantic baseline plus cadence state defined below. Do not treat it as durable history or append a transcript.
+`current.md` records only pointers and reconciliation facts: phase, immutable activation ID, derived effective-contract ID and bundle path, installed-candidate fingerprint, pending adoption/migration identity when present, last verified filesystem-canary evidence digest and task/host/route identity, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, current Supervisor task when one exists, branch, worktree, base and candidate full SHAs, review epoch/round/mode, Supervisor attempt number/profile, last durable GitHub event, blocking condition, last full reconciliation time, and the bounded semantic baseline plus cadence state defined below. Do not treat it as durable history or append a transcript.
 
 Before every tick or mutation, verify the active bundle and reconcile both files against GitHub, Git, Codex tasks, and the heartbeat. Prefer live authoritative evidence. When evidence conflicts, stop with `STATE_RECONCILIATION_REQUIRES_OWNER`; never guess or overwrite the conflict.
 
@@ -133,7 +168,7 @@ The hash-input manifest has exactly this JSON shape and no extra fields:
 
 Canonical JSON follows RFC 8785 JSON Canonicalization Scheme exactly and has no BOM or trailing newline. Floating-point values are forbidden; arrays retain source order except `files`, which uses the UTF-8-byte path order above. Compute the lowercase contract ID as SHA-256 of these bytes. Add top-level `"contract_id":"<64-lowercase-hex>"`, reserialize under the same rules, copy the exact files and stored manifest into `.roundlet/contracts/<contract-id>/`, and read back the complete bundle. An existing directory with that ID but different bytes is `CONTRACT_BUNDLE_CONFLICT`.
 
-Each `prepared.json` records schema, sequence, migration ID, run ID, mode, old/new contract IDs, candidate source/ref, allowlisted-owner authorization event, same Orchestrator task ID, task-metadata model/effort read-back, bundle-manifest hash, and timestamp. Its sibling `committed.json` contains exactly schema, migration ID, SHA-256 of the exact prepared bytes, SHA-256 of the externally verified `CONTRACT_MIGRATION_READY` bytes, SHA-256 of the truthful checkpoint bytes, old/new IDs, and commit timestamp. Both use the manifest's canonical JSON rules and are immutable after read-back.
+Each `prepared.json` records schema, sequence, migration ID, run ID, mode, old/new contract IDs, candidate source/ref, allowlisted-owner authorization event, same Orchestrator task ID, task-metadata model/effort read-back, verified filesystem-canary evidence digest, bundle-manifest hash, and timestamp. Its sibling `committed.json` contains exactly schema, migration ID, SHA-256 of the exact prepared bytes, SHA-256 of the externally verified `CONTRACT_MIGRATION_READY` bytes, SHA-256 of the truthful checkpoint bytes, old/new IDs, and commit timestamp. Both use the manifest's canonical JSON rules and are immutable after read-back.
 
 For a legacy lease without an activation ID, accept exactly one fully verified `roundlet-legacy-activation/v1` record created from an owner-named immutable activation source/ref whose complete bytes agree with the original task/bootstrap metadata, activation time, installation provenance, durable trace, and role configuration. Current installed bytes alone are never evidence. A partial or conflicting record has no effect; multiple valid records fail closed. Once valid, its old contract ID is the immutable activation ID.
 
@@ -153,7 +188,7 @@ Use two tiers. The observation tier asks only whether the last full reconciliati
 
 After every successful full reconciliation, replace the prior semantic baseline in `current.md` with these bounded facts:
 
-- the verified active contract manifest, a complete bundled-file fingerprint, and the stable lease;
+- the verified active contract manifest, a complete bundled-file fingerprint, the stable lease, and the last valid filesystem-canary evidence/task/host/route fingerprint;
 - authoritative `origin/main` full OID, phase, active contract ID and verified bundle fingerprint, separately fingerprinted installed candidate, and last-full-reconciliation time;
 - a repository-wide open-issue graph fingerprint and its open-issue count while IDLE;
 - active leaf, umbrella, dependency, branch, worktree, candidate-SHA, pull-request, check/review, and role-task fingerprints/cursors required by an active phase;
@@ -249,6 +284,7 @@ Explain the selected issue and its dependency/priority basis in the selection tr
 Use these logical phases:
 
 - `IDLE`
+- `FILESYSTEM_CAPABILITY_BLOCKED`
 - `LEGACY_CONTRACT_BOOTSTRAP_REQUIRED`
 - `LEGACY_CONTRACT_BOOTSTRAPPING`
 - `CONTRACT_ADOPTION_REQUIRED`
@@ -373,7 +409,7 @@ When any round returns PASS, record terminal state `SUPERVISOR_PASS` and proceed
 - looks for a new comment by an identity in `owner_allowlist`; or
 - observes a direct instruction in the Orchestrator task.
 
-Do not enter this state for an initial sandbox denial or a transient GitHub CLI transport failure. First exhaust the automatic scoped-escalation and bounded recovery contract. A resulting explicit approval denial, unavailable approval mechanism, confirmed authentication rejection from reachable GitHub, or proven unavailable required connectivity is a valid blocking condition.
+Do not enter this state for an initial sandbox denial or a transient GitHub CLI transport failure. First apply the bounded GitHub recovery contract or filesystem-canary approval retry, as applicable. For filesystem capability, preserve the exact `ESCALATION_DENIED`, `ESCALATION_UNAVAILABLE`, or `ESCALATED_EXECUTION_FAILED` cause and use `FILESYSTEM_CAPABILITY_UNAVAILABLE` only as the final unproven-surface result. A resulting explicit approval denial, unavailable approval mechanism, confirmed authentication rejection from reachable GitHub, or proven unavailable required connectivity is a valid blocking condition.
 
 An issue-body edit alone never resolves the block. A non-owner comment, reaction, label change, Worker/Supervisor message, or unrelated owner comment never resolves it.
 
@@ -538,7 +574,8 @@ If the original Orchestrator or heartbeat is inaccessible, do not use a routine 
 
 ## Recovery
 
-- If an ordinary Orchestrator turn fails but its task and heartbeat remain accessible, the next heartbeat reads the active bundle, reconciles, and resumes idempotently.
+- If an ordinary Orchestrator turn fails but its task and heartbeat remain accessible, the next heartbeat reads the active bundle, reconciles, and resumes idempotently only after current role-specific filesystem canaries remain valid or pass again.
+- Recovery runs the advisory canary through the recovering Orchestrator and the worktree/index canaries through the same retained Worker before any checkpoint, Git, or GitHub transition. A failure retains every resource in `FILESYSTEM_CAPABILITY_BLOCKED`.
 - If the Orchestrator or heartbeat is inaccessible, use the explicit recovery Launcher prompt. A stale-looking file is never enough to replace it.
 - If the persistent Worker is inaccessible, require owner direction before creating a replacement because same-thread context is part of the contract.
 - A failed Supervisor is disposable and may be retried under the bounded attempt rule.

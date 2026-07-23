@@ -20,18 +20,21 @@ Target:
 Read the complete Roundlet SKILL.md and every reference it requires before acting. Do not implement an issue in this Launcher task.
 
 Perform a fail-closed activation preflight:
-1. Resolve the exact installed skill source and configuration. Build the exact `roundlet-contract/v1` JSON object and `roundlet-tree/v1` digest defined in the operator guide—same field names, types, source/ref/version rules, POSIX relative paths, file set, byte framing, ordering, and canonical JSON encoding. Derive the lowercase-hex contract ID from the SHA-256 of canonical manifest bytes with `contract_id` omitted, then add that ID and reserialize under the same rules. Validate that every required configuration value is present and internally consistent. Require unique Supervisor attempt-profile names and an ordered profile count exactly equal to `max_supervisor_attempts_per_round`. Require both heartbeat backoff arrays to start at `active_minutes`, increase strictly, contain positive whole minutes, and support updating one existing heartbeat; require a positive full-reconciliation tick bound.
+1. Resolve the exact installed skill source and configuration. Build the exact `roundlet-contract/v1` JSON object and `roundlet-tree/v1` digest defined in the operator guide—same field names, types, source/ref/version rules, POSIX relative paths, file set, byte framing, ordering, and canonical JSON encoding. Derive the lowercase-hex contract ID from the SHA-256 of canonical manifest bytes with `contract_id` omitted, then add that ID and reserialize under the same rules. Validate that every required configuration value is present and internally consistent. Require unique Supervisor attempt-profile names and an ordered profile count exactly equal to `max_supervisor_attempts_per_round`. Require both heartbeat backoff arrays to start at `active_minutes`, increase strictly, contain positive whole minutes, and support updating one existing heartbeat; require a positive full-reconciliation tick bound. Require `filesystem_canary.required: true` and `approval_retry_limit: 1`; do not default or broaden either value.
 2. Verify that this Codex host can create, address, wait for, archive, and resume tasks; create, inspect, update, pause/resume, and stop one recurring heartbeat at every configured interval; select every configured model and reasoning effort in every Supervisor attempt profile exactly; and access Git, the target checkout, and GitHub with the required read/write capabilities. Do not substitute an unsupported model, effort, attempt profile, or interval.
 3. Verify the target identity, clean authoritative checkout, main branch, origin URL, GitHub default branch, HEAD == local main == origin/main, merge-commit support, issue and pull-request access, and authenticated GitHub identity. Record whether the primary branch is protected. Inspect and obey every existing required check and branch rule; fail closed if existing rules cannot be inspected or conflict with the configured workflow. Absence of branch protection is not itself an activation blocker.
 4. When `gh` is installed or a required capability relies on it, run a representative read-only GitHub CLI request in this Launcher task. A failure observed before GitHub is reachable is inconclusive: request scoped network escalation for the same command automatically and follow the bounded connectivity recovery contract. Do not open browser authentication, substitute browser automation, or declare the credential invalid unless reachable GitHub rejects authentication. Record the exact successful path or blocking evidence.
 5. Read the root AGENTS.md from authoritative origin/main and parse only the exact Roundlet authority switches defined by the skill. Fail closed on missing, malformed, duplicate, or conflicting values. Require `roundlet.enabled: true`; record every other `false` switch as a later mutation boundary rather than silently changing it or rejecting activation.
 6. Add `.roundlet/` to this checkout's local `.git/info/exclude` if it is not already excluded. Never commit that exclusion or any `.roundlet` file.
 7. Inspect `.roundlet/lease.json`, `.roundlet/current.md`, `.roundlet/contracts/`, GitHub traces, active codex/* branches and pull requests, local worktrees, and relevant Codex tasks/heartbeats. If any evidence suggests another live or unreconciled run, stop with STALE_OR_ACTIVE_RUN_REQUIRES_OWNER; never expire, steal, replace, or overwrite it.
+8. Run activation filesystem canaries before creating the contract bundle or run. In this Launcher task, choose an unguessable nonce and exact absent path below ignored `.roundlet/`; create a bounded artifact, change it through the mutation route intended for advisory checkpoints, read back exact identity/content, remove it and any empty canary parent, and prove the path absent. Then create a temporary isolated linked worktree at an exact unique path from authoritative `origin/main` and a short-lived canary Worker task using the configured Worker model/effort. That task must capture exact initial HEAD/status/index identity, create and change one unique bounded worktree artifact, read back identity/content, stage only one separate unique unignored canary path, verify its exact index entry/blob/content, unstage only that path, remove both artifacts, and prove HEAD/status/index match the initial values. Archive the canary Worker and normally remove the temporary linked worktree only after exact cleanup proof. Use no user path, existing file, unique work, issue branch, commit, or GitHub mutation.
+
+Classify every denial/escalation/execution/capability outcome with the operator guide's exact typed taxonomy. An initial sandbox denial gets at most the configured one narrow host-supported approval retry. A launched non-zero result is not an approval denial. Any failed read-back, identity check, restoration, task cleanup, or worktree cleanup is `FILESYSTEM_CAPABILITY_UNAVAILABLE`; activation stops before issue selection, retains exact bounded evidence, reports any remaining exact canary/task/worktree path, and never claims cleanup that was not proven.
 
 If and only if all preflight checks pass:
 1. Create `.roundlet/contracts/<contract-id>/` by copying the exact manifest inputs without transformation, include the canonical manifest, and read back every path, hash, and resolved role value. If an existing directory with that ID differs, stop with `CONTRACT_BUNDLE_CONFLICT`.
 2. Create `.roundlet/lease.json` and `.roundlet/current.md` as the advisory recovery index defined by the skill. Use an unguessable run ID, the exact target identity, this authoritative machine/checkout, the owner identity, activation time, and the Orchestrator task identity once known. Do not add an expiry.
-3. Record the same activation and active contract ID and bundle path in both advisory files. Create exactly one long-lived Orchestrator task using role `orchestrator` model and reasoning effort from the pinned bundle. Give it the exact target, checkout, run ID, owner allowlist, resolved authority, pinned configuration, contract ID and bundle path, lease/current paths, and the Orchestrator contract from that bundle. When Launcher preflight relied on `gh`, require the Orchestrator to repeat the representative read-only request in its own task under the same automatic escalation and bounded recovery rules before it answers exactly:
+3. Record the same activation and active contract ID and bundle path in both advisory files. Create exactly one long-lived Orchestrator task using role `orchestrator` model and reasoning effort from the pinned bundle. Give it the exact target, checkout, run ID, owner allowlist, resolved authority, pinned configuration, contract ID and bundle path, lease/current paths, the verified activation-canary evidence, and the Orchestrator contract from that bundle. Require this Orchestrator task to repeat the unique advisory-state create/edit/read-back/cleanup canary on a new exact path and return a valid `FILESYSTEM_CANARY_RESULT` before readiness. When Launcher preflight relied on `gh`, require the Orchestrator to repeat the representative read-only request in its own task under the same automatic escalation and bounded recovery rules before it answers exactly:
    ACTIVATION_READY run=<run-id> target=<owner/repository> state=IDLE
    without selecting an issue yet.
 4. Wait for that exact response. If creation, preflight, or acknowledgement is incomplete or ambiguous, stop and preserve evidence; do not attach a heartbeat.
@@ -63,12 +66,13 @@ Read only `.roundlet/lease.json` and the minimal contract commit records needed 
 
 1. Perform the normal capability, repository, configuration, authority, and identity preflight.
 2. Reconcile `.roundlet/lease.json`, `.roundlet/current.md`, the named active contract bundle and manifest, all Roundlet GitHub trace comments, active pull requests, exact branch SHAs, local and remote branches, worktrees, checks, and all identifiable old Orchestrator/Worker/Supervisor tasks and heartbeats. Treat the installed skill/configuration only as a migration candidate.
-3. If the old Orchestrator or heartbeat is still live or its ownership is ambiguous, stop with RECOVERY_OWNER_DECISION_REQUIRED and present exact evidence. Do not create a replacement.
-4. If the old Orchestrator and heartbeat are conclusively unavailable, reconstruct the current phase from durable GitHub and Git evidence. Preserve the same run ID when identity is certain; otherwise stop for owner input.
-5. If an active Worker task is unavailable, stop with WORKER_REPLACEMENT_REQUIRES_OWNER. Do not silently replace it.
-6. Create exactly one replacement Orchestrator using the active pinned bundle's configured model and effort. Give it the reconstructed state, evidence, task identities, branch/worktree, candidate SHA, review epoch/round, current Supervisor attempt/profile when applicable, and explicit instruction to acknowledge RECOVERY_READY without advancing work.
-7. After that acknowledgement, disable or remove any conclusively stale heartbeat if possible, create one replacement heartbeat at configured `heartbeat.active_minutes`, bind it to the replacement Orchestrator, reconstruct the observation counters without treating stale fingerprints as proof, update the advisory files, and send one recovery tick.
-8. Report every retained, replaced, or unresolved resource to the owner and archive this recovery Launcher.
+3. Before any advisory, Git, or GitHub transition, run recovery canaries. The recovery Launcher proves the exact ignored advisory-state surface. When the existing Worker is accessible, that same Worker uses unique paths in its retained linked worktree to prove file create/edit/read-back/cleanup and exact-path stage/index-read-back/unstage/cleanup while restoring the complete initial HEAD/status/index identity. Never replace the Worker for a canary. If the old Orchestrator is accessible, it must prove its own advisory route; a replacement Orchestrator must do so before `RECOVERY_READY`. On any failed or stale evidence, retain every run resource, classify the exact typed outcome, and stop in `FILESYSTEM_CAPABILITY_BLOCKED` before transition.
+4. If the old Orchestrator or heartbeat is still live or its ownership is ambiguous, stop with RECOVERY_OWNER_DECISION_REQUIRED and present exact evidence. Do not create a replacement.
+5. If the old Orchestrator and heartbeat are conclusively unavailable, reconstruct the current phase from durable GitHub and Git evidence. Preserve the same run ID when identity is certain; otherwise stop for owner input.
+6. If an active Worker task is unavailable, stop with WORKER_REPLACEMENT_REQUIRES_OWNER. Do not silently replace it.
+7. Create exactly one replacement Orchestrator using the active pinned bundle's configured model and effort. Give it the reconstructed state, evidence, task identities, branch/worktree, candidate SHA, review epoch/round, current Supervisor attempt/profile when applicable, and explicit instruction to run its unique advisory-state canary, return a valid `FILESYSTEM_CANARY_RESULT`, then acknowledge `RECOVERY_READY` without advancing work.
+8. After that acknowledgement, disable or remove any conclusively stale heartbeat if possible, create one replacement heartbeat at configured `heartbeat.active_minutes`, bind it to the replacement Orchestrator, reconstruct the observation counters without treating stale fingerprints as proof, update the advisory files, and send one recovery tick.
+9. Report every retained, replaced, or unresolved resource to the owner and archive this recovery Launcher.
 
 Fail closed at every ambiguity. Never infer owner consent for cleanup, abort, merge, or task replacement.
 ```
@@ -88,7 +92,14 @@ Owner-authorized activation source/ref: <EXACT_SOURCE_LOCATOR_AND_IMMUTABLE_REF>
 Expected activation-time Orchestrator model/effort: <MODEL> / <EFFORT>
 
 Pause the heartbeat and make no GitHub, Git, issue, pull-request, branch, worktree, review,
-or cleanup transition. Prove this run predates contract state and has no activation ID,
+or cleanup transition. Before any contract write, this Orchestrator must prove a unique
+ignored `.roundlet/` create/edit/read-back/cleanup canary, and the same retained Worker must
+prove unique file mutation plus exact-path stage/index-read-back/unstage/cleanup in its
+linked worktree while restoring the complete initial HEAD/status/index identity. Use the
+configured one narrow approval retry and typed outcomes. On any denial, unavailable approval,
+launched non-zero execution, read-back mismatch, or cleanup mismatch, retain every resource,
+create no contract record, and report FILESYSTEM_CAPABILITY_BLOCKED with the exact type.
+Prove this run predates contract state and has no activation ID,
 legacy-activation record, contract bundle, prepared record, or committed record. Reconcile
 the lease/current files, original Orchestrator bootstrap and task metadata, durable Roundlet
 trace, activation timestamp, installation provenance, and the named source/ref. Require the
@@ -114,7 +125,7 @@ Build and read back that deterministic roundlet-contract/v1 bundle from the prov
 Create exactly one canonical `.roundlet/legacy-activation.json` using schema
 roundlet-legacy-activation/v1 with run ID, lease SHA-256, activation time, owner authorization
 event, source/ref, old contract ID, bundle-manifest hash, same task ID, task-metadata
-model/effort read-back, evidence digests, and timestamp. The record is valid only when every
+model/effort read-back, filesystem-canary evidence digest, other evidence digests, and timestamp. The record is valid only when every
 field and referenced byte reads back. A partial record has no effect; multiple valid records
 or contradictory evidence fail closed.
 
@@ -143,9 +154,13 @@ Expected same Orchestrator task: <ORCHESTRATOR_TASK_ID>
 Expected candidate Orchestrator model/effort: <MODEL> / <EFFORT>
 
 Pause the heartbeat. Resolve and read the effective old bundle, reconcile every run resource,
-and prove the run is cleanly IDLE with no leaf resources. Verify task metadata shows this
+and prove the run is cleanly IDLE with no leaf resources. Before contract work, this
+Orchestrator must pass a unique ignored advisory create/edit/read-back/cleanup canary; create
+a temporary linked worktree plus short-lived candidate-configured Worker to pass the unique
+worktree file and exact Git-index stage/read-back/unstage canaries, then archive/remove them
+with exact cleanup proof. Classify typed outcomes and stop before contract work on any failure. Verify task metadata shows this
 same task and the exact candidate model/effort for this turn. Build and read back the new
-bundle and prepared migration record. Make no GitHub or repository transition.
+bundle and prepared migration record that binds the verified filesystem-canary evidence digest. Make no GitHub or repository transition.
 
 After all gates and a truthful checkpoint pass, reply exactly with CONTRACT_MIGRATION_READY
 using mode: BETWEEN_ISSUES. Do not create committed.json, refresh mirrors, resume the
@@ -170,14 +185,20 @@ Expected candidate Orchestrator model/effort: <MODEL> / <EFFORT>
 
 Retain the same run ID, Orchestrator task, heartbeat, active Worker, branch, worktree,
 pull request, issue, candidate SHA, and review state. Pause the heartbeat before migration.
+Before contract work, this Orchestrator must pass a unique ignored advisory
+create/edit/read-back/cleanup canary, and the same retained Worker must pass unique linked-
+worktree file mutation plus exact-path stage/index-read-back/unstage/cleanup while restoring
+its complete initial HEAD/status/index identity. Classify typed outcomes and retain every
+resource in FILESYSTEM_CAPABILITY_BLOCKED on any denial, unavailable approval, launched
+non-zero execution, identity/read-back mismatch, or cleanup mismatch.
 Read the old active bundle first. Reconcile GitHub, Git, every retained task, heartbeat,
 lease/current pointers, active bundle, installed candidate, authority, and current phase.
 Stop on any contradiction or uncommitted atomic mutation.
 
 Verify task metadata proves this exact Orchestrator task is executing this turn under the
 candidate model and reasoning effort; self-reported model text is insufficient. Build and
-read back the new content-addressed bundle and a prepared migration record without changing
-the effective contract. Verify every manifest field/path/hash and every resolved role value.
+read back the new content-addressed bundle and a prepared migration record that binds the
+verified filesystem-canary evidence digest without changing the effective contract. Verify every manifest field/path/hash and every resolved role value.
 Write the truthful checkpoint, then reply exactly with the structured
 CONTRACT_MIGRATION_READY acknowledgement from thread-prompts.md. Do not create
 committed.json, refresh mirrors, resume the heartbeat, or make any repository transition
@@ -196,12 +217,13 @@ Expected run/mode: <RUN_ID> / <BETWEEN_ISSUES|ACTIVE_IN_PLACE>
 Expected old/new contract IDs: <OLD_ID> / <NEW_ID>
 Expected prepared.json SHA-256: <PREPARED_SHA256>
 Expected truthful checkpoint SHA-256: <CHECKPOINT_SHA256>
+Expected filesystem-canary evidence SHA-256: <CANARY_EVIDENCE_SHA256>
 Expected candidate model/effort: <MODEL> / <EFFORT>
 Expected CONTRACT_MIGRATION_READY evidence: <EXACT_ACK_ID_OR_DIGEST>
 
 Verify task metadata, the effective old chain, paused heartbeat, retained resources, bundle,
-prepared record, owner authorization, exact READY bytes/digest, and exact truthful checkpoint
-bytes/digest again. Require committed.json to bind both verified digests. If any
+prepared record, owner authorization, exact READY bytes/digest, exact truthful checkpoint
+bytes/digest, and bound filesystem-canary evidence again. Require committed.json to bind both verified digests. If any
 value differs, create no committed record and report CONTRACT_MIGRATION_COMMIT_BLOCKED.
 
 Create and read back exactly one valid committed.json as the commit point. Resolve the new
