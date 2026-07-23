@@ -95,7 +95,22 @@ trace, activation timestamp, installation provenance, and the named source/ref. 
 complete source bytes and role configuration to agree with that evidence. Current installed
 bytes are not activation evidence.
 
-Build and read back the deterministic roundlet-contract/v1 bundle from the proven old ref.
+Use these literal owner-authorized bootstrap-format rules without consulting any other skill copy:
+- file set: exact old `SKILL.md` plus every reference it names, unique POSIX relative paths
+  without `..`, NUL, CR, or LF, sorted by unsigned UTF-8 bytes; SHA-256 exact bytes;
+- tree input: ASCII `roundlet-tree/v1\n`, then for each file UTF-8 path, byte 0x00,
+  64 lowercase hash hex bytes, byte 0x0a; tree value is `sha256:<lowercase-hex>`;
+- hash-input JSON is exactly `{"contract_schema":"roundlet-contract/v1",` plus
+  `"contract_version":"roundlet-contract/v1@<source-ref>","files":[{"path":`
+  `"<relative>","sha256":"<64-lowercase-hex>"}],"resolved_config":<complete-old-`
+  `config-object>,"source":{"kind":"<git|installed-tree>","locator":"<string>",`
+  `"ref":"<string>"},"tree_digest":"sha256:<64-lowercase-hex>"}` with no extra field;
+  for git use canonical `owner/repository` plus verified lowercase 40-character OID; for
+  installed-tree use resolved absolute old skill directory plus the exact tree_digest;
+- serialize with RFC 8785 JCS, no BOM/trailing newline/floats; hash those bytes for the
+  lowercase contract ID; add only top-level `contract_id`, reserialize, and read back.
+
+Build and read back that deterministic roundlet-contract/v1 bundle from the proven old ref.
 Create exactly one canonical `.roundlet/legacy-activation.json` using schema
 roundlet-legacy-activation/v1 with run ID, lease SHA-256, activation time, owner authorization
 event, source/ref, old contract ID, bundle-manifest hash, same task ID, task-metadata
@@ -180,11 +195,13 @@ Expected Orchestrator task: <ORCHESTRATOR_TASK_ID>
 Expected run/mode: <RUN_ID> / <BETWEEN_ISSUES|ACTIVE_IN_PLACE>
 Expected old/new contract IDs: <OLD_ID> / <NEW_ID>
 Expected prepared.json SHA-256: <PREPARED_SHA256>
+Expected truthful checkpoint SHA-256: <CHECKPOINT_SHA256>
 Expected candidate model/effort: <MODEL> / <EFFORT>
 Expected CONTRACT_MIGRATION_READY evidence: <EXACT_ACK_ID_OR_DIGEST>
 
 Verify task metadata, the effective old chain, paused heartbeat, retained resources, bundle,
-prepared record, owner authorization, READY evidence, and truthful checkpoint again. If any
+prepared record, owner authorization, exact READY bytes/digest, and exact truthful checkpoint
+bytes/digest again. Require committed.json to bind both verified digests. If any
 value differs, create no committed record and report CONTRACT_MIGRATION_COMMIT_BLOCKED.
 
 Create and read back exactly one valid committed.json as the commit point. Resolve the new

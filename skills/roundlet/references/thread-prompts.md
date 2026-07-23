@@ -215,13 +215,15 @@ orchestrator_task: <verified-same-task-id>
 old_contract_id: <verified-old-id>
 new_contract_id: <verified-new-id>
 committed_record: <absolute-path-and-sha256>
+ready_evidence_sha256: <verified-digest>
+truthful_checkpoint_sha256: <verified-digest>
 effective_chain: <ordered-contract-ids>
 derived_mirrors: <VERIFIED|REPAIR_REQUIRED>
 heartbeat: <same-id-and-state>
 repository_transition: none
 ```
 
-If the committed record was not created, return `CONTRACT_MIGRATION_COMMIT_BLOCKED` and keep the old contract effective. If it was validly created but a later mirror or heartbeat step failed, the new contract remains effective; return `REPAIR_REQUIRED`, pause, and repair only from the committed chain before any repository transition.
+A committed record missing or mismatching either the READY-evidence digest or truthful-checkpoint digest is invalid. If the committed record was not created, return `CONTRACT_MIGRATION_COMMIT_BLOCKED` and keep the old contract effective. If it was validly created but a later mirror or heartbeat step failed, the new contract remains effective; return `REPAIR_REQUIRED`, pause, and repair only from the committed chain before any repository transition.
 
 ## Worker contract
 
