@@ -140,10 +140,9 @@ HEARTBEAT_BOUND run=<run-id> heartbeat=<heartbeat-id> interval=<minutes>m
 The recurring heartbeat sends:
 
 ```text
-Perform one idempotent Roundlet tick for the bound run. Verify the last filesystem-canary
-evidence set still contains every required entry and each names the current task/host/checkout/worktree/permission route/tool class. Any changed
-identity, missing evidence, or cleanup ambiguity requires full reconciliation and a fresh
-role-specific canary before any repository transition; failure enters
+Perform one idempotent Roundlet tick for the bound run. Verify the last completed filesystem-canary
+evidence set and its exact result bytes remain immutable. Check current route identity only for entries whose roles/resources are still live and applicable; a verified completed-and-cleaned short-lived task/worktree is historical evidence, not stale evidence. Every new repository transition requires a fresh same-phase applicable set and can never reuse the historical set. Any changed live identity, missing evidence, or cleanup ambiguity requires full reconciliation and a fresh
+role-specific canary before that transition; failure enters
 FILESYSTEM_CAPABILITY_BLOCKED with the exact typed cause.
 
 Resolve the effective contract from
