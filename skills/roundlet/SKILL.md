@@ -5,11 +5,14 @@ description: Run a lightweight, prompt-native outer loop that selects one action
 
 # Roundlet
 
-Operate a single-target-repository outer loop through Codex tasks, GitHub, Git worktrees, and two advisory local files. Do not introduce or depend on a Python runtime, database, executable validator, package, migration layer, runtime metrics, or cross-platform compatibility matrix.
+Operate a single-target-repository outer loop through Codex tasks, GitHub, Git worktrees, two advisory local files, and a read-only content-addressed contract snapshot. Do not introduce or depend on a Python runtime, database, executable validator, package, migration layer, runtime metrics, or cross-platform compatibility matrix.
 
 ## Preserve these invariants
 
 - Use exactly one long-lived Orchestrator task, one phase-aware heartbeat, one authoritative machine, and at most one active leaf issue for a target repository.
+- Pin every run at activation to an immutable content-addressed bundle under `.roundlet/contracts/<contract-id>/` containing this file, every required reference, the resolved role configuration, and a manifest of ordered paths and SHA-256 values. Read active-run instructions only from that bundle.
+- A legacy run without an activation contract must first use the owner-authorized legacy bootstrap protocol to pin its exact activation-time source/ref and bytes. If that identity cannot be proven, stop; never seed the baseline from the current installed copy by assumption.
+- Treat a changed installed skill or configuration as a candidate, never as live instructions. At clean `IDLE` with no leaf resources, require explicit allowlisted-owner authorization and the between-issue adoption protocol. In every other phase, require explicit authorization and the in-place migration protocol.
 - Refuse activation when another live or unreconciled Roundlet run may own that target. The file lease is advisory and never prevents split-brain across machines, clones, or Codex tasks.
 - Treat GitHub issues and pull requests as the durable backlog and audit history. Let only the Orchestrator mutate GitHub.
 - Keep the same Worker task for initial implementation, repairs, the optional final repair, and cleanup preflight. Create a fresh read-only Supervisor task for every review attempt.
@@ -17,7 +20,7 @@ Operate a single-target-repository outer loop through Codex tasks, GitHub, Git w
 - Run only one issue through implementation and cleanup before selecting another issue.
 - Keep core orchestration and safety rules in this file. Do not move them into a target repository's `AGENTS.md`.
 - Read repository authority only from the root `AGENTS.md` on authoritative `origin/main`. Boolean authority may narrow Roundlet, never override stricter repository or platform policy.
-- Fail closed when configured models, reasoning efforts, Supervisor attempt profiles, tools, GitHub permissions, merge method, repository authority, or required state cannot be verified. Never substitute a model, effort, or attempt profile silently.
+- Fail closed when configured models, reasoning efforts, Supervisor attempt profiles, tools, GitHub permissions, merge method, repository authority, active contract identity, contract bundle, or required state cannot be verified. Never substitute a model, effort, attempt profile, or contract silently.
 - Treat GitHub CLI failures observed before GitHub is reachable as connectivity evidence, not credential rejection. When `gh` is required, require the model to request the narrowest scoped network escalation automatically; the skill cannot grant or assume network access. Never replace the request with browser authentication or browser automation. Keep bounded connectivity recovery out of Roundlet state transitions and owner input, and fail closed only when approval is explicitly denied, approval capability is unavailable, reachable GitHub rejects authentication, or bounded recovery proves the required connectivity unavailable.
 - Use phase-aware lightweight observations only to prove that the last fully reconciled baseline is unchanged. Fingerprint the complete paginated scheduling graph and the exact active resources required by the phase; any change, omission, overflow, malformed value, due full audit, or action-ready state requires full live reconciliation in the same tick before reasoning or mutation. A fingerprint never authorizes a mutation.
 - Never auto-expire, steal, or replace a lease. Recovery requires explicit owner direction after reconciliation.
@@ -26,7 +29,7 @@ Operate a single-target-repository outer loop through Codex tasks, GitHub, Git w
 
 ## Read the operating contract
 
-Before activation or recovery, read all of:
+For a new activation, read the installed copies of all of the following. For an active run or recovery, first resolve the effective active bundle from the immutable activation record and valid committed migration chain, then read the same paths only from that bundle; inspect installed copies only as a separately fingerprinted candidate. Routine owner and recovery prompts must not invoke the installed `$roundlet` skill:
 
 - [`references/roundlet-config.json`](references/roundlet-config.json) for role, heartbeat, review, merge, and owner settings.
 - [`references/launcher.md`](references/launcher.md) for the copyable Launcher and recovery prompts.
@@ -42,9 +45,10 @@ Use the Launcher prompt verbatim except for its explicit placeholders. The short
 
 1. Resolve the exact target repository, authoritative checkout, owner identity, and configuration.
 2. Perform the capability, repository, GitHub, local-state, model, and authority preflight.
-3. Reconcile any existing `.roundlet/lease.json` or `.roundlet/current.md`; never take over automatically.
-4. Create the configured long-lived Orchestrator task and wait for its exact `ACTIVATION_READY` response.
-5. Attach one heartbeat at configured `heartbeat.active_minutes` to that Orchestrator, send it the heartbeat identity, and archive the Launcher.
+3. Reconcile any existing `.roundlet/lease.json`, `.roundlet/current.md`, or `.roundlet/contracts/` evidence; never take over automatically.
+4. Create and read back the content-addressed activation contract bundle and manifest.
+5. Create the configured long-lived Orchestrator task from the pinned bundle and wait for its exact `ACTIVATION_READY` response.
+6. Attach one heartbeat at configured `heartbeat.active_minutes` to that Orchestrator, send it the heartbeat identity, and archive the Launcher.
 
 Do not attach the heartbeat to the Launcher. Do not proceed after a partial or ambiguous preflight.
 
@@ -52,8 +56,8 @@ Do not attach the heartbeat to the Launcher. Do not proceed after a partial or a
 
 On activation and each heartbeat:
 
-1. Read the bounded advisory state and compute the phase-aware observation vector defined in the operator guide. When it is not a complete exact match for the last fully reconciled baseline, perform full GitHub, Git, Codex task, heartbeat, lease, contract, authority, and current-state reconciliation in the same tick before acting.
-2. If paused, stopped, awaiting owner input, blocked on repository authority, or already processing an issue, follow that state instead of scheduling.
+1. Resolve the effective active bundle from the immutable activation ID or valid legacy activation record plus the unique valid committed chain; treat lease/current active values only as mirrors. Read that effective bundle and compute the phase-aware observation vector defined in the operator guide. Fingerprint the installed skill and configuration separately without adopting them. When the vector is not a complete exact match for the last fully reconciled baseline, perform full GitHub, Git, Codex task, heartbeat, lease, contract, authority, and current-state reconciliation in the same tick before acting.
+2. If a legacy run has no activation ID or valid legacy activation record, enter `LEGACY_CONTRACT_BOOTSTRAP_REQUIRED` and make no repository transition. Otherwise, if the installed fingerprint differs while cleanly `IDLE` with no active leaf, branch, worktree, Worker, pull request, or unresolved cleanup, enter `CONTRACT_ADOPTION_REQUIRED`. In every other phase enter `CONTRACT_MIGRATION_REQUIRED`. Make no repository transition until the allowlisted owner authorizes the exact candidate and the applicable protocol succeeds. If paused, stopped, awaiting owner input, blocked on repository authority, or already processing an issue, follow that state instead of scheduling.
 3. If IDLE observation is unchanged, make no scheduling mutation and apply the configured no-op heartbeat backoff. Otherwise scan every open issue in the target repository, including issues created after activation.
 4. Exclude umbrella, scheduling-blocked, ignored, non-actionable, dependency-blocked, and already-owned issues.
 5. Rank all ready leaf candidates across umbrellas using the contract in the operator guide.
@@ -77,6 +81,6 @@ Keep the heartbeat at `active_minutes` while work is active or an observation is
 ## Stop safely
 
 - `pause` takes effect at a safe checkpoint, pauses the heartbeat, and preserves the task, lease, branch, worktree, and current state for manual resume.
-- `stop-after-current` finishes the active issue and cleanup, then stops the heartbeat, releases the lease, and archives the Orchestrator. If idle, stop immediately.
+- `stop-after-current` finishes the active issue and cleanup, then stops the heartbeat, releases the lease, removes retained contract bundles, legacy bootstrap evidence, and migration records after final reconciliation, and archives the Orchestrator. If idle, stop immediately.
 - A closed, ignored, or withdrawn active issue requires an explicit owner abort decision. Never silently abandon work or continue to the next issue while preserving the old issue's resources.
 - Any unresolved ambiguity that could affect scope, dependency order, data safety, or an irreversible mutation enters `NEEDS_OWNER_INPUT` and stops global scheduling.

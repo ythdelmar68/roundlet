@@ -8,6 +8,9 @@ These are prompt contracts, not hidden role knowledge. The Launcher and Orchestr
 - [GitHub access recovery](#github-access-recovery)
 - [Long-lived Orchestrator bootstrap](#long-lived-orchestrator-bootstrap)
 - [Heartbeat tick](#heartbeat-tick)
+- [Legacy activation pin result](#legacy-activation-pin-result)
+- [Contract migration acknowledgement](#contract-migration-acknowledgement)
+- [Contract migration commit result](#contract-migration-commit-result)
 - [Worker contract](#worker-contract)
 - [Supervisor contract](#supervisor-contract)
 
@@ -20,6 +23,8 @@ ROUNDLET CONTEXT
 target_repository: <owner/repository>
 authoritative_checkout: <absolute-path>
 run_id: <stable-run-id>
+active_contract_id: <sha256-derived-id>
+contract_bundle: <absolute-bundle-path>
 active_leaf: <number-and-url>
 umbrella: <number-and-url-or-none>
 pull_request: <number-and-url-or-none>
@@ -49,13 +54,13 @@ Every role must treat a GitHub CLI result produced before GitHub is reachable as
 The Launcher creates the Orchestrator with this contract:
 
 ```text
-Use $roundlet as the only long-lived Orchestrator for the exact target and run below.
+Act as the only long-lived Roundlet Orchestrator for the exact target and run below. Do not invoke or load the installed `$roundlet` skill; read only the supplied pinned bundle.
 
 <include the exact target repository, authoritative checkout, run ID, owner allowlist,
-resolved configuration, root origin/main authority switches, advisory file paths,
-authenticated identity, and Launcher preflight evidence>
+resolved configuration, active contract ID and bundle path, root origin/main authority
+switches, advisory file paths, authenticated identity, and Launcher preflight evidence>
 
-Read the complete Roundlet SKILL.md and all required references before acting.
+Read the complete Roundlet SKILL.md and all required references only from the supplied active contract bundle before acting. Do not adopt installed skill or configuration files as live instructions.
 
 If Launcher preflight relied on GitHub CLI, repeat its representative read-only request
 inside this Orchestrator task. Apply automatic scoped escalation and bounded connectivity
@@ -98,10 +103,16 @@ HEARTBEAT_BOUND run=<run-id> heartbeat=<heartbeat-id> interval=<minutes>m
 The recurring heartbeat sends:
 
 ```text
-Perform one idempotent Roundlet tick for the bound run. Always read the bounded advisory
-pointers and compute the phase-aware observation vector from live metadata first. Hash
-the installed skill, configuration, and stable lease without loading their contents;
-reread those contents only when a fingerprint differs or full reconciliation is required.
+Perform one idempotent Roundlet tick for the bound run. Resolve the effective contract from
+the immutable activation ID or valid legacy activation record plus the unique fully valid
+committed chain. Treat lease/current active values only as derived mirrors: if they disagree,
+pause and reconstruct them from the chain before any other transition. Verify and read only
+the effective bundle, then compute the phase-aware observation vector from live metadata.
+Hash installed skill/configuration separately without adopting them. If drift exists after
+full resource reconciliation, enter CONTRACT_ADOPTION_REQUIRED only when cleanly IDLE with
+no leaf resources; otherwise enter CONTRACT_MIGRATION_REQUIRED. Make no repository
+transition. Hash the stable lease and reread other semantic sources only when a fingerprint
+differs or full reconciliation is required.
 
 Treat the observation vector only as an unchanged proof. For IDLE, fingerprint every page
 of the open-issue graph, latest comment watermarks, formal parent/sub-issue membership,
@@ -152,13 +163,75 @@ heartbeat_interval: <minutes>m
 next_safe_action: <one-line-action>
 ```
 
+## Legacy activation pin result
+
+A successful one-time bootstrap returns exactly:
+
+```text
+LEGACY_CONTRACT_PINNED
+run_id: <stable-run-id>
+orchestrator_task: <verified-same-task-id>
+activation_source_ref: <exact-immutable-source-and-ref>
+activation_contract_id: <verified-old-id>
+legacy_record: <absolute-path-and-sha256>
+orchestrator_model: <task-metadata-readback-model>
+reasoning_effort: <task-metadata-readback-effort>
+resources_retained: <heartbeat-worker-branch-worktree-pr-issue-and-sha>
+repository_transition: none
+```
+
+A self-reported setting, missing provenance, current-installed-copy assumption, partial/conflicting record, changed resource, or repository transition is invalid. Return `LEGACY_CONTRACT_IDENTITY_REQUIRES_OWNER`, create no valid legacy record, keep the heartbeat paused, and retain every resource.
+
+## Contract migration acknowledgement
+
+Only the same long-lived Orchestrator may acknowledge an owner-authorized between-issue adoption or in-place migration. After verifying the effective old bundle, candidate, new bundle, prepared record, retained resources, task-metadata model/effort read-back, and paused heartbeat—but before creating the committed record—reply exactly:
+
+```text
+CONTRACT_MIGRATION_READY
+mode: <BETWEEN_ISSUES|ACTIVE_IN_PLACE>
+run_id: <stable-run-id>
+orchestrator_task: <verified-same-task-id>
+old_contract_id: <verified-old-id>
+new_contract_id: <verified-new-id>
+orchestrator_model: <task-metadata-readback-model>
+reasoning_effort: <task-metadata-readback-effort>
+model_readback_source: <task-metadata-source>
+phase: <retained-phase>
+resources_retained: <orchestrator-heartbeat-worker-branch-worktree-pr-issue-and-sha>
+repository_transition: none
+```
+
+A missing field, wrong mode/task, self-reported rather than metadata-read model/effort, substituted setting, changed retained resource, unpaused heartbeat, unverifiable bundle or prepared record, or repository transition invalidates the acknowledgement. The preparation turn must not create the committed record, refresh mirrors, or resume the heartbeat. Keep the old contract effective and return to the applicable `CONTRACT_ADOPTION_REQUIRED` or `CONTRACT_MIGRATION_REQUIRED` phase.
+
+## Contract migration commit result
+
+Only the separately delivered commit turn may return:
+
+```text
+CONTRACT_MIGRATION_COMMITTED
+mode: <BETWEEN_ISSUES|ACTIVE_IN_PLACE>
+run_id: <stable-run-id>
+orchestrator_task: <verified-same-task-id>
+old_contract_id: <verified-old-id>
+new_contract_id: <verified-new-id>
+committed_record: <absolute-path-and-sha256>
+ready_evidence_sha256: <verified-digest>
+truthful_checkpoint_sha256: <verified-digest>
+effective_chain: <ordered-contract-ids>
+derived_mirrors: <VERIFIED|REPAIR_REQUIRED>
+heartbeat: <same-id-and-state>
+repository_transition: none
+```
+
+A committed record missing or mismatching either the READY-evidence digest or truthful-checkpoint digest is invalid. If the committed record was not created, return `CONTRACT_MIGRATION_COMMIT_BLOCKED` and keep the old contract effective. If it was validly created but a later mirror or heartbeat step failed, the new contract remains effective; return `REPAIR_REQUIRED`, pause, and repair only from the committed chain before any repository transition.
+
 ## Worker contract
 
 Create exactly one Worker task for the selected leaf using the configured Worker model and reasoning effort. Keep that same task for all prompts below.
 
 The Worker may inspect the target repository and GitHub. It may edit, test, and commit in the exact issue worktree. It must never push or mutate any GitHub object: no issue/PR comments, edits, labels, reviews, ready state, merge, close, reopen, branch creation, branch update, or deletion. The Orchestrator verifies the handoff and pushes the exact candidate SHA.
 
-Before **every** initial, repair, final-repair, integration, or cleanup-preflight turn, the Worker must freshly read:
+Before **every** initial, repair, final-repair, integration, or cleanup-preflight turn, the Worker must verify the context envelope, read the complete active pinned contract bundle, and freshly read:
 
 - the live leaf body, labels, parent relationship, and all comments;
 - the live umbrella body, Canonical scheduling note, comments, and complete formal sub-issue list, when present;
@@ -304,7 +377,7 @@ The Orchestrator rejects a handoff if SHAs, scope, files, tests, findings, or li
 
 Create a fresh Supervisor task for each attempt using the exact configured attempt profile at that one-based position. Give it read-only access. It must not edit files, create commits, push, or mutate any GitHub object. Bind its prompt and result to the attempt number and profile as well as the review epoch/round/mode and candidate SHA. Archive it after a valid result or invalid attempt.
 
-Before every attempt, the Supervisor must freshly read:
+Before every attempt, the Supervisor must verify the context envelope, read the complete active pinned contract bundle, and freshly read:
 
 - the complete live leaf body, labels, parent relationship, and comments;
 - the umbrella body, Canonical scheduling note, comments, and formal sub-issue list, when present;

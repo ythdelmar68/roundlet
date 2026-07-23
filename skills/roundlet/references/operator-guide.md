@@ -7,6 +7,7 @@ This is the detailed operating contract for Roundlet. The Orchestrator must rere
 - [Operating envelope](#operating-envelope)
 - [Configuration and capability preflight](#configuration-and-capability-preflight)
 - [Advisory local state](#advisory-local-state)
+- [Pinned run contract and migration](#pinned-run-contract-and-migration)
 - [Lightweight observation and heartbeat cadence](#lightweight-observation-and-heartbeat-cadence)
 - [Backlog classification](#backlog-classification)
 - [Dependencies and ranking](#dependencies-and-ranking)
@@ -36,7 +37,8 @@ Roundlet is safe only inside this deliberately narrow envelope:
 - one persistent Worker task for that issue;
 - one fresh Supervisor task for each review attempt;
 - one isolated worktree and one `codex/` branch for that issue;
-- one Orchestrator identity as the only GitHub mutator.
+- one Orchestrator identity as the only GitHub mutator;
+- one activation-time, content-addressed active contract bundle.
 
 Do not start a second Roundlet run for the same target from another Codex task, clone, or machine. A local file lease is advisory: two independent actors can both read an apparently free file or cannot see each other's file at all, then both believe they own the run. That is split-brain. The operating envelope, activation preflight, GitHub trace, and refusal to auto-take over reduce the risk; they do not create distributed locking.
 
@@ -49,11 +51,13 @@ Before activation, prove all of the following:
 - every configured model/reasoning-effort pair is selectable on the current Codex host;
 - Supervisor attempt-profile names are unique, the ordered profile count equals `max_supervisor_attempts_per_round`, and every position has an exact model and reasoning effort;
 - tasks can be created, addressed, waited on, resumed, and archived;
+- a follow-up can target the same task with an exact per-turn model and reasoning-effort override, and task metadata can read back the actual task identity, model, and effort rather than trusting self-report;
 - one recurring heartbeat can be created, inspected, paused/resumed, and stopped;
 - that same heartbeat can be updated through every configured active, IDLE, and owner-input interval without creating a replacement;
 - Git and the authoritative checkout are usable;
 - GitHub identity, repository identity, issues, comments, branches, pull requests, reviews, checks, mergeability, and merge operations can be inspected;
 - authorized GitHub mutations are available to the Orchestrator;
+- the exact installed candidate contract can be copied to a local content-addressed bundle and every copied path/hash can be read back;
 - the root authority block on `origin/main` is valid;
 - the repository supports the configured merge method;
 - `HEAD`, local `main`, and `origin/main` initially name the same full commit;
@@ -76,10 +80,13 @@ If any capability cannot be proven, report the exact unsupported value or missin
 
 ## Advisory local state
 
-Add `.roundlet/` to the authoritative checkout's local `.git/info/exclude`. Never commit the exclusion or state files. Keep only:
+Add `.roundlet/` to the authoritative checkout's local `.git/info/exclude`. Never commit the exclusion or local contract snapshots. Keep only:
 
-- `.roundlet/lease.json`: stable run ownership and task identities;
-- `.roundlet/current.md`: concise human-readable recovery index for the current state.
+- `.roundlet/lease.json`: stable run ownership, task identities, and immutable activation contract ID; any active-contract value is only a derived mirror;
+- `.roundlet/current.md`: concise human-readable recovery index for current state and a derived effective-contract mirror;
+- `.roundlet/contracts/<contract-id>/`: read-only activation or adoption/migration snapshots containing `SKILL.md`, every required reference, the resolved role configuration, and the canonical manifest;
+- `.roundlet/legacy-activation.json`: optional one-time immutable activation record for a provably pre-contract run;
+- `.roundlet/migrations/<sequence>-<migration-id>/prepared.json` and `committed.json`: immutable two-phase records from which the effective contract is resolved.
 
 The lease contains no expiry and authorizes no automatic takeover. A representative lease is:
 
@@ -91,14 +98,52 @@ The lease contains no expiry and authorizes no automatic takeover. A representat
   "authoritative_machine": "stable-machine-identity",
   "owner": "allowlisted-github-login",
   "activated_at": "ISO-8601 timestamp",
+  "activation_contract_id": "sha256-derived-id",
+  "active_contract_id_mirror": "sha256-derived-id",
+  "active_contract_bundle_mirror": "/absolute/path/.roundlet/contracts/<contract-id>",
   "orchestrator_task": "opaque-task-id",
   "heartbeat": "opaque-heartbeat-id"
 }
 ```
 
-`current.md` records only pointers and reconciliation facts: phase, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, current Supervisor task when one exists, branch, worktree, base and candidate full SHAs, review epoch/round/mode, Supervisor attempt number/profile, last durable GitHub event, blocking condition, last full reconciliation time, and the bounded semantic baseline plus cadence state defined below. Do not treat it as durable history or append a transcript.
+`current.md` records only pointers and reconciliation facts: phase, immutable activation ID, derived effective-contract ID and bundle path, installed-candidate fingerprint, pending adoption/migration identity when present, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, current Supervisor task when one exists, branch, worktree, base and candidate full SHAs, review epoch/round/mode, Supervisor attempt number/profile, last durable GitHub event, blocking condition, last full reconciliation time, and the bounded semantic baseline plus cadence state defined below. Do not treat it as durable history or append a transcript.
 
-Before every tick or mutation, reconcile both files against GitHub, Git, Codex tasks, and the heartbeat. Prefer live authoritative evidence. When evidence conflicts, stop with `STATE_RECONCILIATION_REQUIRES_OWNER`; never guess or overwrite the conflict.
+Before every tick or mutation, verify the active bundle and reconcile both files against GitHub, Git, Codex tasks, and the heartbeat. Prefer live authoritative evidence. When evidence conflicts, stop with `STATE_RECONCILIATION_REQUIRES_OWNER`; never guess or overwrite the conflict.
+
+## Pinned run contract and migration
+
+At activation, hash exactly `SKILL.md` and every required reference named by it, including `references/roundlet-config.json`; paths are unique POSIX-style relative paths with no `..`, NUL, CR, or LF and are sorted lexicographically by their unsigned UTF-8 byte sequences. For each path, hash its exact stored bytes without newline normalization. The `roundlet-tree/v1` digest input is ASCII `roundlet-tree/v1\n` followed, for each sorted file, by UTF-8 path bytes, one `0x00` byte, the 64 lowercase ASCII SHA-256 hex bytes, and one `0x0a` byte. `tree_digest` is `sha256:<lowercase-hex>` of that complete byte sequence.
+
+The hash-input manifest has exactly this JSON shape and no extra fields:
+
+```json
+{
+  "contract_schema": "roundlet-contract/v1",
+  "contract_version": "roundlet-contract/v1@<source-ref>",
+  "files": [
+    {"path": "<relative-path>", "sha256": "<64-lowercase-hex>"}
+  ],
+  "resolved_config": {},
+  "source": {"kind": "<git|installed-tree>", "locator": "<string>", "ref": "<string>"},
+  "tree_digest": "sha256:<64-lowercase-hex>"
+}
+```
+
+`resolved_config` is the complete parsed JSON value from `roundlet-config.json` without defaults or coercion. For `git`, `locator` is canonical `owner/repository` and `ref` is the verified 40-character lowercase commit OID whose files match every bundled byte. Otherwise `kind` is `installed-tree`, `locator` is the resolved absolute installed skill directory, and `ref` is the exact `tree_digest`. `contract_version` appends that exact `ref`.
+
+Canonical JSON follows RFC 8785 JSON Canonicalization Scheme exactly and has no BOM or trailing newline. Floating-point values are forbidden; arrays retain source order except `files`, which uses the UTF-8-byte path order above. Compute the lowercase contract ID as SHA-256 of these bytes. Add top-level `"contract_id":"<64-lowercase-hex>"`, reserialize under the same rules, copy the exact files and stored manifest into `.roundlet/contracts/<contract-id>/`, and read back the complete bundle. An existing directory with that ID but different bytes is `CONTRACT_BUNDLE_CONFLICT`.
+
+Each `prepared.json` records schema, sequence, migration ID, run ID, mode, old/new contract IDs, candidate source/ref, allowlisted-owner authorization event, same Orchestrator task ID, task-metadata model/effort read-back, bundle-manifest hash, and timestamp. Its sibling `committed.json` contains exactly schema, migration ID, SHA-256 of the exact prepared bytes, SHA-256 of the externally verified `CONTRACT_MIGRATION_READY` bytes, SHA-256 of the truthful checkpoint bytes, old/new IDs, and commit timestamp. Both use the manifest's canonical JSON rules and are immutable after read-back.
+
+For a legacy lease without an activation ID, accept exactly one fully verified `roundlet-legacy-activation/v1` record created from an owner-named immutable activation source/ref whose complete bytes agree with the original task/bootstrap metadata, activation time, installation provenance, durable trace, and role configuration. Current installed bytes alone are never evidence. A partial or conflicting record has no effect; multiple valid records fail closed. Once valid, its old contract ID is the immutable activation ID.
+
+The activation ID in a contract-aware lease is immutable. The effective active contract is the activation ID followed by the longest unique chain of fully valid `committed.json` records whose `old_contract_id` links exactly to the prior ID and whose prepared record, owner authorization, bundle, model/effort metadata, externally verified READY evidence, truthful checkpoint, and every recorded hash all verify. Ignore incomplete prepared records. Multiple valid successors, a gap, malformed record, or mirror disagreement fails closed. Lease/current active values are derived recovery mirrors and never choose the contract.
+
+Every active Orchestrator, Worker, Supervisor, heartbeat, routine owner, and recovery turn reads only the effective bundle; routine and recovery prompts do not invoke the installed `$roundlet` skill. The observation baseline fingerprints the verified effective bundle and installed candidate separately. Installed drift never authorizes a repository transition.
+
+At clean `IDLE` with no leaf resources, drift enters `CONTRACT_ADOPTION_REQUIRED`; after exact allowlisted-owner authorization it may enter `CONTRACT_ADOPTING`. In all other phases it enters `CONTRACT_MIGRATION_REQUIRED`, retains the run, Orchestrator, heartbeat, Worker, branch, worktree, pull request, issue, candidate SHA, and review state, and may enter `CONTRACT_MIGRATING` only after exact authorization. Both paths pause the heartbeat and require a same-task follow-up whose actual candidate model/effort and task identity are proven from task metadata.
+
+Stage and verify the new bundle and `prepared.json`, write a truthful checkpoint, and end the preparation turn with the structured acknowledgement without creating `committed.json`. After external verification, a second same-task follow-up under the same candidate model/effort revalidates every input; creating one fully valid `committed.json` is its single commit point. A failure before it leaves the old contract effective. After it, the new contract is effective even if a derived mirror update fails; pause and reconstruct mirrors from the committed chain before any other transition. Never roll back or guess. Preserve old bundles and migration records until the run stops.
 
 ## Lightweight observation and heartbeat cadence
 
@@ -108,8 +153,8 @@ Use two tiers. The observation tier asks only whether the last full reconciliati
 
 After every successful full reconciliation, replace the prior semantic baseline in `current.md` with these bounded facts:
 
-- composite fingerprints for the exact installed `SKILL.md`, every required reference, `roundlet-config.json`, and the stable lease;
-- authoritative `origin/main` full OID, phase, and last-full-reconciliation time;
+- the verified active contract manifest, a complete bundled-file fingerprint, and the stable lease;
+- authoritative `origin/main` full OID, phase, active contract ID and verified bundle fingerprint, separately fingerprinted installed candidate, and last-full-reconciliation time;
 - a repository-wide open-issue graph fingerprint and its open-issue count while IDLE;
 - active leaf, umbrella, dependency, branch, worktree, candidate-SHA, pull-request, check/review, and role-task fingerprints/cursors required by an active phase;
 - watched issue-comment ID/author/time and direct Orchestrator input cursor while waiting for owner input or repository authority;
@@ -149,7 +194,7 @@ An action-ready phase always uses full reconciliation. Lightweight no-ops are al
 
 ### Escalation to full reconciliation
 
-Perform the full tier in the same tick when any fingerprint, count, OID, status, cursor, watermark, or heartbeat identity differs; any required field is missing or malformed; any connection reports overflow; the observation command is inconclusive; the phase is action-ready; or `max_lightweight_ticks_before_full_reconciliation` is reached. Do not wait for another heartbeat to fetch the issue body, comments, canonical note, dependencies, pull-request details, task output, diff, checks, authority, or other full sources.
+Perform the full tier in the same tick when any fingerprint, count, OID, status, cursor, watermark, heartbeat identity, active contract identity, or installed-candidate fingerprint differs; any required field is missing or malformed; any connection reports overflow; the observation command is inconclusive; the phase is action-ready; or `max_lightweight_ticks_before_full_reconciliation` is reached. Do not wait for another heartbeat to fetch the issue body, comments, canonical note, dependencies, pull-request details, task output, diff, checks, authority, or other full sources.
 
 When the IDLE graph fingerprint changes, fully rescan and classify every open issue because a single composite digest intentionally does not guess which semantic record changed. When a watched owner-comment watermark changes, reread the complete blocked issue, its comments, scheduling context, dependencies, authority, and active resources before accepting the instruction. When an active-resource vector changes, reread the complete phase contract and exact changed resources. Use server-side field selection and bounded summaries for routine metadata; fetch raw check logs or large tool outputs only when diagnosing a specific failure. This reduces context volume without hiding evidence required for a decision.
 
@@ -204,6 +249,12 @@ Explain the selected issue and its dependency/priority basis in the selection tr
 Use these logical phases:
 
 - `IDLE`
+- `LEGACY_CONTRACT_BOOTSTRAP_REQUIRED`
+- `LEGACY_CONTRACT_BOOTSTRAPPING`
+- `CONTRACT_ADOPTION_REQUIRED`
+- `CONTRACT_ADOPTING`
+- `CONTRACT_MIGRATION_REQUIRED`
+- `CONTRACT_MIGRATING`
 - `SELECTING`
 - `WORKER_INITIAL`
 - `DRAFT_PR`
@@ -379,7 +430,7 @@ Cleanup remains part of the active issue and must be automatic when authorized.
 4. When `allow_delete_local_branch` is true, delete the local issue branch only after proving its unique work is merged or explicitly authorized for abandonment.
 5. When `allow_delete_remote_branch` is true, delete the exact remote issue branch only after proving its identity and merge/abandon state.
 6. Fetch origin, fast-forward local `main`, and verify the authoritative checkout is clean and `HEAD == main == origin/main`.
-7. Append the cleanup trace, clear the active pointers, reset the same heartbeat to `active_minutes`, and remove the two advisory files only when stopping; while continuing, retain the lease and set `current.md` to `IDLE` with new observation counters. Do not stop after a completed issue unless stop-after-current is already recorded.
+7. Append the cleanup trace, clear the issue-specific pointers, reset the same heartbeat to `active_minutes`, and remove the advisory files, retained contract bundles, legacy activation record, and migration records only when stopping; while continuing, retain the lease and set `current.md` to `IDLE` with new observation counters. Do not stop after a completed issue unless stop-after-current is already recorded.
 
 If any cleanup step fails, enter `CLEANUP_BLOCKED`, keep the leaf closed, retain the lease/current evidence, and select no next issue. Never reopen the leaf solely because cleanup failed.
 
@@ -396,17 +447,17 @@ There is no preserve-old-work-while-selecting-next option. Never infer abandon-a
 ## Pause, resume, and stop
 
 - `pause`: finish the current atomic mutation or stop before the next one, record `PAUSED`, pause the heartbeat so it performs no observations, and preserve all state/resources. Resume only in the same Orchestrator after reconciliation and an owner instruction.
-- `stop-after-current`: if active, finish the current issue including cleanup; if idle, stop immediately. Then stop the heartbeat, record `STOPPED`, remove advisory state after final reconciliation, and archive the Orchestrator.
+- `stop-after-current`: if active, finish the current issue including cleanup; if idle, stop immediately. Then stop the heartbeat, record `STOPPED`, remove advisory state, retained contract bundles, legacy activation record, and migration records after final reconciliation, and archive the Orchestrator.
 - An immediate destructive stop is not defined. Use the explicit abort choices for active work.
 
 ## Copyable owner commands
 
-Send routine commands to the existing long-lived Orchestrator task. Do not open a new Launcher, Orchestrator, or heartbeat for status, pause, resume, or stop. Replace every placeholder and keep the target repository and authoritative checkout explicit.
+Send routine commands to the existing long-lived Orchestrator task. Do not invoke the installed `$roundlet` skill: each prompt first resolves and reads the effective pinned bundle. Do not open a new Launcher, Orchestrator, or heartbeat for status, pause, resume, contract adoption/migration, or stop. Replace every placeholder and keep the target repository and authoritative checkout explicit.
 
 ### Inspect status without advancing
 
 ```text
-Use $roundlet to inspect the existing run without advancing it.
+In the existing Orchestrator task, inspect the active Roundlet run without advancing it. Resolve and read only the effective pinned contract bundle; do not invoke or load the installed `$roundlet` skill.
 
 Target repository: <OWNER/REPOSITORY>
 Authoritative checkout: <ABSOLUTE_PATH>
@@ -427,8 +478,7 @@ Stop on contradictory evidence instead of repairing it.
 ### Pause at a safe checkpoint
 
 ```text
-Use $roundlet to pause the existing run for <OWNER/REPOSITORY> in the same long-lived
-Orchestrator task.
+In the same long-lived Orchestrator task, pause the existing Roundlet run for <OWNER/REPOSITORY>. Resolve and read only the effective pinned contract bundle; do not invoke or load the installed `$roundlet` skill.
 
 Reconcile live state first. Finish only an already-started atomic mutation, then stop
 before the next externally meaningful transition. Record PAUSED, pause the one bound
@@ -440,8 +490,7 @@ resources. Do not archive the Orchestrator or select another issue.
 ### Resume the paused run
 
 ```text
-Use $roundlet to resume the existing paused run for <OWNER/REPOSITORY> in the same
-long-lived Orchestrator task.
+In the same long-lived Orchestrator task, resume the existing paused Roundlet run for <OWNER/REPOSITORY>. Resolve and read only the effective pinned contract bundle; do not invoke or load the installed `$roundlet` skill.
 
 Reconcile GitHub, Git, task, heartbeat, lease, and current-state evidence before changing
 anything. Stop for owner input if identities or state conflict. If reconciliation is
@@ -450,16 +499,20 @@ Roundlet tick. Report the before/after phase, transition, active leaf, candidate
 blocking condition, and next safe action. Do not create a replacement task or heartbeat.
 ```
 
+### Bootstrap, adopt, or migrate the pinned contract
+
+A pre-contract run must first use [`legacy run contract bootstrap`](launcher.md#owner-authorized-legacy-run-contract-bootstrap). After a pinned activation exists, when fully reconciled `IDLE` has no leaf resources, use [`between-issue contract adoption`](launcher.md#owner-authorized-between-issue-contract-adoption). Otherwise use [`in-place contract migration`](launcher.md#owner-authorized-in-place-contract-migration). Both keep the same Orchestrator task, require explicit owner authorization for the exact candidate plus task-metadata proof of the actual model/effort override, and make no repository transition.
+
 ### Stop after the current issue
 
 ```text
-Use $roundlet to set stop-after-current for the existing run for <OWNER/REPOSITORY>.
+In the existing Orchestrator task, set stop-after-current for the active Roundlet run for <OWNER/REPOSITORY>. Resolve and read only the effective pinned contract bundle; do not invoke or load the installed `$roundlet` skill.
 
 Reconcile first and record STOP_AFTER_CURRENT. If an issue is active, finish only that
 issue through its normal review, merge gates, leaf closure, and ordered cleanup; select
 no next issue. If the run is idle, stop immediately. At the terminal safe state, stop the
-one heartbeat, record STOPPED, remove the advisory lease/current files after final
-reconciliation, and archive the Orchestrator. Never discard unique work to accelerate
+one heartbeat, record STOPPED, remove the advisory lease/current files, contract bundles, legacy activation record,
+and migration records after final reconciliation and read-back, and archive the Orchestrator. Never discard unique work to accelerate
 the stop.
 ```
 
@@ -468,7 +521,7 @@ the stop.
 Choose exactly one of `resume`, `preserve-and-stop`, or `abandon-and-cleanup`. The last option is destructive and must name the exact resources the owner authorizes Roundlet to remove.
 
 ```text
-Use $roundlet in the existing Orchestrator task for <OWNER/REPOSITORY>.
+In the existing Orchestrator task for <OWNER/REPOSITORY>, resolve and read only the effective pinned contract bundle; do not invoke or load the installed `$roundlet` skill.
 
 The active leaf is <ISSUE_NUMBER_AND_URL>. After reconciling all live evidence, apply this
 owner decision: <resume|preserve-and-stop|abandon-and-cleanup>.
@@ -485,9 +538,9 @@ If the original Orchestrator or heartbeat is inaccessible, do not use a routine 
 
 ## Recovery
 
-- If an ordinary Orchestrator turn fails but its task and heartbeat remain accessible, the next heartbeat reconciles and resumes idempotently.
+- If an ordinary Orchestrator turn fails but its task and heartbeat remain accessible, the next heartbeat reads the active bundle, reconciles, and resumes idempotently.
 - If the Orchestrator or heartbeat is inaccessible, use the explicit recovery Launcher prompt. A stale-looking file is never enough to replace it.
 - If the persistent Worker is inaccessible, require owner direction before creating a replacement because same-thread context is part of the contract.
 - A failed Supervisor is disposable and may be retried under the bounded attempt rule.
 
-During recovery, reconstruct from GitHub trace first, then exact remote/local Git state, then Codex task evidence, then advisory files. Stop on contradictions. Never hide a recovery correction by editing old GitHub comments.
+During recovery, verify and read the active contract bundle first, then reconstruct from GitHub trace, exact remote/local Git state, Codex task evidence, and advisory files. Treat installed files only as a migration candidate. Stop on contradictions. Never hide a recovery correction by editing old GitHub comments.
