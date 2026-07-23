@@ -226,6 +226,7 @@ Roundlet creates only:
 - `.roundlet/lease.json`, containing stable run/task identity and immutable activation-contract identity without an expiry;
 - `.roundlet/current.md`, containing concise reconciliation pointers, a derived effective-contract mirror, pending adoption/migration identity, and bounded observation state;
 - `.roundlet/contracts/<contract-id>/`, containing read-only content-addressed snapshots of the exact skill, required references, resolved role configuration, source/ref/version, and canonical manifest;
+- `.roundlet/canary-evidence/accepted/<aggregate-sha256-hex>/` and `.roundlet/canary-evidence/failed/<run-id>/<attempt-id>/`, containing immutable bounded canary evidence;
 - optional `.roundlet/legacy-activation.json`, used once to pin a provable pre-contract run; and
 - `.roundlet/migrations/<sequence>-<migration-id>/`, containing immutable prepared and committed records that form the recoverable active-contract chain.
 
@@ -323,7 +324,7 @@ Important distinctions:
 - There is no immediate destructive stop. Active work requires `resume`, `preserve-and-stop`, or an explicitly scoped `abandon-and-cleanup` owner decision.
 - **Legacy bootstrap** first pins the exact activation-time source/ref for a pre-contract run; it fails closed if the old identity cannot be proven and never treats the current installed copy as evidence. **Between-issue adoption** handles an owner-approved candidate only when fully reconciled `IDLE` has no leaf resources. **In-place migration** handles every other phase and retains all active resources. Both use a same-task model/effort override verified from task metadata and make no repository transition.
 - **Recovery** is only for an inaccessible Orchestrator or heartbeat. It reads the pinned active bundle; a stale-looking local file never authorizes takeover.
-- **Filesystem capability** is proven on the exact role/task/host/route. Every newly created persistent Worker repeats the worktree/index canary before implementation, and a canonical aggregate prevents one role or surface from overwriting another. A completed transition keeps immutable historical evidence after its clean short-lived resources are removed, but every later transition requires a fresh applicable set. An initial restriction gets at most one narrow host-supported approval retry. Explicit denial, unavailable approval, approved execution failure, and final unproven capability remain distinct.
+- **Filesystem capability** is proven on the exact role/task/host/route. Every newly created persistent Worker repeats the worktree/index canary before implementation, and a canonical aggregate prevents one role or surface from overwriting another. A completed transition keeps immutable historical evidence after its clean short-lived resources are removed, but every later transition requires a fresh applicable set. An initial restriction gets at most one narrow host-supported approval retry. Direct execution failure, explicit denial, unavailable approval, approved execution failure, and final unproven capability remain distinct.
 - **Recovery and contract migration** rerun canaries before any checkpoint, Git, or GitHub transition. Failure retains every active resource in `FILESYSTEM_CAPABILITY_BLOCKED`.
 - **GitHub CLI recovery** automatically escalates sandbox-blocked network access and retries bounded transient transport failures without changing Roundlet phase; it never launches browser authentication as an implicit workaround.
 
@@ -335,7 +336,7 @@ Important distinctions:
 - GitHub issues, pull requests, reviews, checks, and append-only Roundlet comments are the durable backlog and audit trail.
 - Only the Orchestrator mutates GitHub. Workers and Supervisors return proposals for verification.
 - Lightweight metadata is only an unchanged proof. Any changed, incomplete, overflowed, action-ready, or periodically due observation triggers full reconciliation in the same heartbeat before reasoning or mutation.
-- A filesystem tool's presence is not proof that it can mutate the exact advisory/worktree/index surface. A launched non-zero result is `ESCALATED_EXECUTION_FAILED`, not an approval denial; any incomplete mutation/read-back/restoration/cleanup is `FILESYSTEM_CAPABILITY_UNAVAILABLE`.
+- A filesystem tool's presence is not proof that it can mutate the exact advisory/worktree/index surface. A normal launched non-zero result is `DIRECT_EXECUTION_FAILED`; only a launched failure after approved escalation is `ESCALATED_EXECUTION_FAILED`, and neither is an approval denial; any incomplete mutation/read-back/restoration/cleanup is `FILESYSTEM_CAPABILITY_UNAVAILABLE`.
 - A GitHub CLI failure inside a network-restricted sandbox is not proof that its credential is invalid. Roundlet must reach GitHub before making that classification.
 - Every Worker and Supervisor turn is bound to exact live context and full commit SHAs.
 - Roundlet never rebases, force-pushes, bypasses protection, destroys unique work, or closes an umbrella.

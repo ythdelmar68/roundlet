@@ -63,6 +63,7 @@ phase: <ACTIVATION|ISSUE_CLAIM|RECOVERY|LEGACY_BOOTSTRAP|BETWEEN_ISSUES_ADOPTION
 role: <LAUNCHER|ORCHESTRATOR|WORKER>
 run_id: <stable-run-id-or-benchmark-nonce>
 role_task: <exact-task-id>
+execution_profile: <task-metadata-verified-model-and-reasoning-effort>
 host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>
 target_paths: <exact-local-canary-paths-or-none>
 advisory_surface: <PASS|NOT_APPLICABLE|FAIL> <evidence-digest-or-none>
@@ -70,15 +71,15 @@ worktree_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-identity-digest-or-n
 index_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-index-and-entry-digest-or-none>
 approval_retry_count: <0|1>
 approval_outcome: <NOT_REQUIRED|APPROVED|ESCALATION_DENIED|ESCALATION_UNAVAILABLE>
-execution_outcome: <SUCCEEDED|NOT_LAUNCHED|ESCALATED_EXECUTION_FAILED>
+execution_outcome: <SUCCEEDED|NOT_LAUNCHED|DIRECT_EXECUTION_FAILED|ESCALATED_EXECUTION_FAILED>
 capability_outcome: <PASS|FILESYSTEM_CAPABILITY_UNAVAILABLE>
 cleanup: <VERIFIED|FAILED> <evidence-digest>
 repository_transition: none
 ```
 
-`ESCALATION_DENIED` requires an explicit denial. `ESCALATION_UNAVAILABLE` requires proof that no supported approval path exists. `ESCALATED_EXECUTION_FAILED` requires an approved, launched operation that failed. Any failed/missing surface or cleanup produces `FILESYSTEM_CAPABILITY_UNAVAILABLE` while preserving the more specific cause. A malformed result, stale task/route fingerprint, unverified cleanup, or repository transition is invalid.
+`approval_retry_count` counts actual approval retries. The only valid `(approval_retry_count, approval_outcome, execution_outcome)` tuples are `(0, NOT_REQUIRED, SUCCEEDED)`, `(0, NOT_REQUIRED, DIRECT_EXECUTION_FAILED)`, `(1, APPROVED, SUCCEEDED)`, `(1, APPROVED, ESCALATED_EXECUTION_FAILED)`, `(1, ESCALATION_DENIED, NOT_LAUNCHED)`, and `(0, ESCALATION_UNAVAILABLE, NOT_LAUNCHED)`. `DIRECT_EXECUTION_FAILED` is a launched normal operation that needed no approval; `ESCALATED_EXECUTION_FAILED` is a launched operation after approval. Any failed/missing surface or cleanup produces `FILESYSTEM_CAPABILITY_UNAVAILABLE` while preserving the more specific cause. A malformed result, stale task/route fingerprint, unverified cleanup, or repository transition is invalid.
 
-The Orchestrator must hash and aggregate the exact result bytes into the operator guide's canonical `roundlet-filesystem-canary-set/v1` manifest, decode and compare every projected field, verify same run/phase plus the transition-specific required entry set, and read back its digest before relying on it. A single role result or digest can never stand in for the required aggregate. Explicit recovery binds the replacement Orchestrator's complete recovery-set digest in `RECOVERY_READY` before heartbeat or advisory transition.
+The Orchestrator must hash and aggregate the exact result bytes into the operator guide's canonical `roundlet-filesystem-canary-set/v1` manifest, decode and compare every projected field including the task-metadata-verified execution profile, verify same run/phase plus the transition-specific required entry set, and read back its digest before relying on it. A single role result or digest can never stand in for the required aggregate. Explicit recovery binds the replacement Orchestrator's complete recovery-set digest in `RECOVERY_READY` before heartbeat or advisory transition.
 
 ## Long-lived Orchestrator bootstrap
 
