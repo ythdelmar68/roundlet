@@ -20,25 +20,26 @@ Target:
 Read the complete Roundlet SKILL.md and every reference it requires before acting. Do not implement an issue in this Launcher task.
 
 Perform a fail-closed activation preflight:
-1. Resolve the exact installed skill source and configuration. Validate that every required configuration value is present and internally consistent. Require unique Supervisor attempt-profile names and an ordered profile count exactly equal to `max_supervisor_attempts_per_round`. Require both heartbeat backoff arrays to start at `active_minutes`, increase strictly, contain positive whole minutes, and support updating one existing heartbeat; require a positive full-reconciliation tick bound.
+1. Resolve the exact installed skill source and configuration. Compute the ordered SHA-256 manifest for `SKILL.md`, every required reference, and the resolved role configuration; derive the candidate contract ID from that canonical manifest. Validate that every required configuration value is present and internally consistent. Require unique Supervisor attempt-profile names and an ordered profile count exactly equal to `max_supervisor_attempts_per_round`. Require both heartbeat backoff arrays to start at `active_minutes`, increase strictly, contain positive whole minutes, and support updating one existing heartbeat; require a positive full-reconciliation tick bound.
 2. Verify that this Codex host can create, address, wait for, archive, and resume tasks; create, inspect, update, pause/resume, and stop one recurring heartbeat at every configured interval; select every configured model and reasoning effort in every Supervisor attempt profile exactly; and access Git, the target checkout, and GitHub with the required read/write capabilities. Do not substitute an unsupported model, effort, attempt profile, or interval.
 3. Verify the target identity, clean authoritative checkout, main branch, origin URL, GitHub default branch, HEAD == local main == origin/main, merge-commit support, issue and pull-request access, and authenticated GitHub identity. Record whether the primary branch is protected. Inspect and obey every existing required check and branch rule; fail closed if existing rules cannot be inspected or conflict with the configured workflow. Absence of branch protection is not itself an activation blocker.
 4. When `gh` is installed or a required capability relies on it, run a representative read-only GitHub CLI request in this Launcher task. A failure observed before GitHub is reachable is inconclusive: request scoped network escalation for the same command automatically and follow the bounded connectivity recovery contract. Do not open browser authentication, substitute browser automation, or declare the credential invalid unless reachable GitHub rejects authentication. Record the exact successful path or blocking evidence.
 5. Read the root AGENTS.md from authoritative origin/main and parse only the exact Roundlet authority switches defined by the skill. Fail closed on missing, malformed, duplicate, or conflicting values. Require `roundlet.enabled: true`; record every other `false` switch as a later mutation boundary rather than silently changing it or rejecting activation.
 6. Add `.roundlet/` to this checkout's local `.git/info/exclude` if it is not already excluded. Never commit that exclusion or any `.roundlet` file.
-7. Inspect `.roundlet/lease.json`, `.roundlet/current.md`, GitHub traces, active codex/* branches and pull requests, local worktrees, and relevant Codex tasks/heartbeats. If any evidence suggests another live or unreconciled run, stop with STALE_OR_ACTIVE_RUN_REQUIRES_OWNER; never expire, steal, replace, or overwrite it.
+7. Inspect `.roundlet/lease.json`, `.roundlet/current.md`, `.roundlet/contracts/`, GitHub traces, active codex/* branches and pull requests, local worktrees, and relevant Codex tasks/heartbeats. If any evidence suggests another live or unreconciled run, stop with STALE_OR_ACTIVE_RUN_REQUIRES_OWNER; never expire, steal, replace, or overwrite it.
 
 If and only if all preflight checks pass:
-1. Create `.roundlet/lease.json` and `.roundlet/current.md` as the advisory recovery index defined by the skill. Use an unguessable run ID, the exact target identity, this authoritative machine/checkout, the owner identity, activation time, and the Orchestrator task identity once known. Do not add an expiry.
-2. Create exactly one long-lived Orchestrator task using configured role `orchestrator` model and reasoning effort. Give it the exact target, checkout, run ID, owner allowlist, resolved authority, configuration, lease/current paths, and the Orchestrator contract from the skill. When Launcher preflight relied on `gh`, require the Orchestrator to repeat the representative read-only request in its own task under the same automatic escalation and bounded recovery rules before it answers exactly:
+1. Create `.roundlet/contracts/<contract-id>/` by copying the exact manifest inputs without transformation, include the canonical manifest, and read back every path, hash, and resolved role value. If an existing directory with that ID differs, stop with `CONTRACT_BUNDLE_CONFLICT`.
+2. Create `.roundlet/lease.json` and `.roundlet/current.md` as the advisory recovery index defined by the skill. Use an unguessable run ID, the exact target identity, this authoritative machine/checkout, the owner identity, activation time, and the Orchestrator task identity once known. Do not add an expiry.
+3. Record the same activation and active contract ID and bundle path in both advisory files. Create exactly one long-lived Orchestrator task using role `orchestrator` model and reasoning effort from the pinned bundle. Give it the exact target, checkout, run ID, owner allowlist, resolved authority, pinned configuration, contract ID and bundle path, lease/current paths, and the Orchestrator contract from that bundle. When Launcher preflight relied on `gh`, require the Orchestrator to repeat the representative read-only request in its own task under the same automatic escalation and bounded recovery rules before it answers exactly:
    ACTIVATION_READY run=<run-id> target=<owner/repository> state=IDLE
    without selecting an issue yet.
-3. Wait for that exact response. If creation, preflight, or acknowledgement is incomplete or ambiguous, stop and preserve evidence; do not attach a heartbeat.
-4. Create exactly one recurring heartbeat every configured `heartbeat.active_minutes`, addressed to the long-lived Orchestrator task. Its instruction is: invoke one idempotent Roundlet tick, prove the bounded observation baseline unchanged or perform full reconciliation in the same tick, make at most one safe state transition, maintain the configured phase-aware interval on that same heartbeat, and report the resulting state.
-5. Send the heartbeat identity and schedule to the Orchestrator. Require and wait for:
+4. Wait for that exact response. If creation, preflight, or acknowledgement is incomplete or ambiguous, stop and preserve evidence; do not attach a heartbeat.
+5. Create exactly one recurring heartbeat every configured `heartbeat.active_minutes`, addressed to the long-lived Orchestrator task. Its instruction is: invoke one idempotent Roundlet tick, prove the bounded observation baseline unchanged or perform full reconciliation in the same tick, make at most one safe state transition, maintain the configured phase-aware interval on that same heartbeat, and report the resulting state.
+6. Send the heartbeat identity and schedule to the Orchestrator. Require and wait for:
    HEARTBEAT_BOUND run=<run-id> heartbeat=<heartbeat-id> interval=<minutes>m
-6. Verify the lease/current files name the same run, Orchestrator, and heartbeat, then send the Orchestrator one initial tick.
-7. Report the target, run ID, Orchestrator task, heartbeat, and preflight result to the owner. Archive this Launcher task. The Orchestrator task must remain long-lived.
+7. Verify the lease/current files name the same run, Orchestrator, heartbeat, active contract ID, and verified bundle, then send the Orchestrator one initial tick.
+8. Report the target, run ID, active contract ID, Orchestrator task, heartbeat, and preflight result to the owner. Archive this Launcher task. The Orchestrator task must remain long-lived.
 
 Never attach the heartbeat to this Launcher. Never create a second Orchestrator or heartbeat. Never begin issue work after a failed or partial preflight.
 ```
@@ -61,13 +62,45 @@ Target:
 Read the complete Roundlet SKILL.md and every required reference before acting. This prompt is explicit owner authorization to investigate and propose recovery; it is not authorization to discard, overwrite, merge, close, delete, or otherwise destroy old work.
 
 1. Perform the normal capability, repository, configuration, authority, and identity preflight.
-2. Reconcile `.roundlet/lease.json`, `.roundlet/current.md`, all Roundlet GitHub trace comments, active pull requests, exact branch SHAs, local and remote branches, worktrees, checks, and all identifiable old Orchestrator/Worker/Supervisor tasks and heartbeats.
+2. Reconcile `.roundlet/lease.json`, `.roundlet/current.md`, the named active contract bundle and manifest, all Roundlet GitHub trace comments, active pull requests, exact branch SHAs, local and remote branches, worktrees, checks, and all identifiable old Orchestrator/Worker/Supervisor tasks and heartbeats. Treat the installed skill/configuration only as a migration candidate.
 3. If the old Orchestrator or heartbeat is still live or its ownership is ambiguous, stop with RECOVERY_OWNER_DECISION_REQUIRED and present exact evidence. Do not create a replacement.
 4. If the old Orchestrator and heartbeat are conclusively unavailable, reconstruct the current phase from durable GitHub and Git evidence. Preserve the same run ID when identity is certain; otherwise stop for owner input.
 5. If an active Worker task is unavailable, stop with WORKER_REPLACEMENT_REQUIRES_OWNER. Do not silently replace it.
-6. Create exactly one replacement Orchestrator using the configured model and effort. Give it the reconstructed state, evidence, task identities, branch/worktree, candidate SHA, review epoch/round, current Supervisor attempt/profile when applicable, and explicit instruction to acknowledge RECOVERY_READY without advancing work.
+6. Create exactly one replacement Orchestrator using the active pinned bundle's configured model and effort. Give it the reconstructed state, evidence, task identities, branch/worktree, candidate SHA, review epoch/round, current Supervisor attempt/profile when applicable, and explicit instruction to acknowledge RECOVERY_READY without advancing work.
 7. After that acknowledgement, disable or remove any conclusively stale heartbeat if possible, create one replacement heartbeat at configured `heartbeat.active_minutes`, bind it to the replacement Orchestrator, reconstruct the observation counters without treating stale fingerprints as proof, update the advisory files, and send one recovery tick.
 8. Report every retained, replaced, or unresolved resource to the owner and archive this recovery Launcher.
 
 Fail closed at every ambiguity. Never infer owner consent for cleanup, abort, merge, or task replacement.
+```
+
+## Owner-authorized in-place contract migration
+
+Use this only in the existing long-lived Orchestrator task after an allowlisted owner explicitly authorizes migration to an exact installed candidate. It updates the prompt/configuration contract without replacing the run or abandoning active work.
+
+```text
+Use $roundlet to migrate the existing run in place to the exact currently installed candidate contract.
+
+Target repository: <OWNER/REPOSITORY>
+Authoritative checkout: <ABSOLUTE_PATH>
+Expected current contract ID: <OLD_CONTRACT_ID>
+Owner-authorized candidate fingerprint or commit: <EXACT_CANDIDATE_IDENTITY>
+
+Retain the same run ID, Orchestrator task, heartbeat, active Worker, branch, worktree,
+pull request, issue, candidate SHA, and review state. Pause the heartbeat before migration.
+Read the old active bundle first. Reconcile GitHub, Git, every retained task, heartbeat,
+lease/current pointers, active bundle, installed candidate, authority, and current phase.
+Stop on any contradiction or uncommitted atomic mutation.
+
+Build and read back a new content-addressed bundle without changing the active pointer.
+Verify every manifest path/hash and every resolved role model/effort. In this same
+Orchestrator task, execute one migration turn using the candidate Orchestrator model and
+reasoning effort exactly; do not substitute. Require the structured
+CONTRACT_MIGRATION_READY acknowledgement from thread-prompts.md.
+
+Only after the acknowledgement and a truthful checkpoint are durable may you atomically
+switch both advisory active-contract pointers to the new ID. Read them back, reset the
+semantic baseline, resume the same heartbeat at active_minutes, and perform no repository
+transition in the migration turn. Keep the old bundle until the run stops. On any failure,
+leave the old active pointer and all retained resources unchanged, record
+CONTRACT_MIGRATION_REQUIRED with exact evidence, and await owner direction.
 ```

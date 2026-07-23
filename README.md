@@ -18,7 +18,7 @@ This README is the human-facing entry point for the source repository. It is **n
 
 ## Understand the architecture
 
-Roundlet uses Codex tasks, GitHub, Git branches/worktrees, and two advisory local files. It does not ship an executable orchestration runtime, database, package, distributed lock, or CI service.
+Roundlet uses Codex tasks, GitHub, Git branches/worktrees, two advisory local files, and activation-time content-addressed contract snapshots. It does not ship an executable orchestration runtime, database, package, distributed lock, or CI service.
 
 ```mermaid
 flowchart LR
@@ -29,7 +29,7 @@ flowchart LR
     Orchestrator --> Worker["One persistent Worker per leaf"]
     Orchestrator --> Supervisor["Fresh read-only Supervisor per attempt"]
     Worker <--> Worktree["One codex/* branch and isolated worktree"]
-    Orchestrator <--> Advisory[".roundlet/lease.json and current.md"]
+    Orchestrator <--> Advisory[".roundlet lease/current and pinned contracts"]
 ```
 
 The **outer loop** schedules and completes one leaf issue before considering another:
@@ -118,7 +118,7 @@ You need:
 
 Roundlet fails closed if any configured capability or mutation cannot be verified. It does not silently substitute another model, effort, Supervisor attempt profile, or merge method.
 
-Roundlet does not require a custom Codex permission profile or project `config.toml`. When required GitHub CLI access is blocked by the network sandbox, it requires the model to request scoped escalation automatically, including through **Approve for me** when available, and distinguishes connectivity failure from a credential rejection returned by reachable GitHub. The skill cannot grant or assume network access; the host permission policy remains authoritative. Only an explicit approval denial, unavailable approval mechanism, confirmed authentication rejection, or connectivity that remains unavailable after bounded recovery blocks activation for owner input.
+The checked-in configuration uses `gpt-5.6-sol` with high reasoning for the long-lived Orchestrator and retains the configured Worker and Supervisor profiles. Roundlet does not require a custom Codex permission profile or project `config.toml`. When required GitHub CLI access is blocked by the network sandbox, it requires the model to request scoped escalation automatically, including through **Approve for me** when available, and distinguishes connectivity failure from a credential rejection returned by reachable GitHub. The skill cannot grant or assume network access; the host permission policy remains authoritative. Only an explicit approval denial, unavailable approval mechanism, confirmed authentication rejection, or connectivity that remains unavailable after bounded recovery blocks activation for owner input.
 
 ### 2. Choose the source you will install
 
@@ -223,8 +223,9 @@ authorize those actions.
 
 Roundlet creates only:
 
-- `.roundlet/lease.json`, containing stable run and task identities without an expiry; and
-- `.roundlet/current.md`, containing concise reconciliation pointers plus bounded observation fingerprints, cursors, counters, and intervals for the current state.
+- `.roundlet/lease.json`, containing stable run, task, activation-contract, and active-contract identities without an expiry;
+- `.roundlet/current.md`, containing concise reconciliation pointers, active contract and pending-migration identity, plus bounded observation fingerprints, cursors, counters, and intervals for the current state; and
+- `.roundlet/contracts/<contract-id>/`, containing read-only content-addressed snapshots of the exact skill, required references, resolved role configuration, and manifest used by the run.
 
 Add this one line to the authoritative checkout's local `.git/info/exclude`:
 
@@ -284,8 +285,8 @@ unreconciled run, unsupported capability, or ambiguous authority.
 The canonical full prompt is visible at [`launcher.md`](skills/roundlet/references/launcher.md#new-activation). A successful Launcher:
 
 1. verifies configuration, models, GitHub, Git, rules, authority, local state, task/heartbeat capabilities, and any required GitHub CLI path in both the Launcher and long-lived Orchestrator tasks;
-2. creates the two advisory files;
-3. creates exactly one long-lived Orchestrator and waits for `ACTIVATION_READY`;
+2. creates and reads back the content-addressed activation contract bundle, then creates the two advisory files with the same active contract identity;
+3. creates exactly one long-lived Orchestrator from that pinned bundle and waits for `ACTIVATION_READY`;
 4. attaches exactly one heartbeat at the configured active interval, verifies that the same heartbeat can adopt every configured backoff interval, and waits for `HEARTBEAT_BOUND`;
 5. sends one initial tick; and
 6. reports the run identities and archives itself.
@@ -301,6 +302,7 @@ The [`operator guide`](skills/roundlet/references/operator-guide.md) contains th
 | Inspect without advancing | [Inspect status without advancing](skills/roundlet/references/operator-guide.md#inspect-status-without-advancing) |
 | Pause safely | [Pause at a safe checkpoint](skills/roundlet/references/operator-guide.md#pause-at-a-safe-checkpoint) |
 | Resume | [Resume the paused run](skills/roundlet/references/operator-guide.md#resume-the-paused-run) |
+| Migrate an active run to an owner-approved installed contract | [Owner-authorized in-place contract migration](skills/roundlet/references/launcher.md#owner-authorized-in-place-contract-migration) |
 | Finish current work, then stop | [Stop after the current issue](skills/roundlet/references/operator-guide.md#stop-after-the-current-issue) |
 | Handle a closed, ignored, or withdrawn active leaf | [Choose an explicit abort disposition](skills/roundlet/references/operator-guide.md#resolve-an-active-issue-that-was-closed-ignored-or-withdrawn) |
 | Recover an inaccessible Orchestrator or heartbeat | [Explicit recovery Launcher](skills/roundlet/references/launcher.md#explicit-recovery) |
@@ -314,12 +316,14 @@ Important distinctions:
 - **Stop-after-current** completes the active issue and ordered cleanup, then stops. If idle, it stops immediately.
 - Without stop-after-current, cleanup returns to IDLE at the active interval and Roundlet continues selecting later issues automatically. Quiet IDLE ticks back off through 5/15/30/60 minutes; owner-input waits back off through 5/15/30 minutes.
 - There is no immediate destructive stop. Active work requires `resume`, `preserve-and-stop`, or an explicitly scoped `abandon-and-cleanup` owner decision.
-- **Recovery** is only for an inaccessible Orchestrator or heartbeat. A stale-looking local file never authorizes takeover.
+- **Contract migration** is the only way an active run adopts a changed installed skill or configuration. It keeps the same run and repository resources, requires exact owner authorization, and makes no repository transition while switching contracts.
+- **Recovery** is only for an inaccessible Orchestrator or heartbeat. It reads the pinned active bundle; a stale-looking local file never authorizes takeover.
 - **GitHub CLI recovery** automatically escalates sandbox-blocked network access and retries bounded transient transport failures without changing Roundlet phase; it never launches browser authentication as an implicit workaround.
 
 ## Understand safety boundaries
 
 - The local lease is advisory; it cannot prevent split-brain across machines, clones, or tasks.
+- Every run reads an immutable activation-time contract bundle. Installed updates are separately fingerprinted migration candidates and never become live instructions silently.
 - GitHub issues, pull requests, reviews, checks, and append-only Roundlet comments are the durable backlog and audit trail.
 - Only the Orchestrator mutates GitHub. Workers and Supervisors return proposals for verification.
 - Lightweight metadata is only an unchanged proof. Any changed, incomplete, overflowed, action-ready, or periodically due observation triggers full reconciliation in the same heartbeat before reasoning or mutation.
