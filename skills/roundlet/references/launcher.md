@@ -90,6 +90,7 @@ Run ID and activation time: <RUN_ID> / <LEASE_ACTIVATED_AT>
 Expected Orchestrator task: <ORCHESTRATOR_TASK_ID>
 Owner-authorized activation source/ref: <EXACT_SOURCE_LOCATOR_AND_IMMUTABLE_REF>
 Expected activation-time Orchestrator model/effort: <MODEL> / <EFFORT>
+Expected activation-time retained Worker model/effort when one exists: <MODEL> / <EFFORT>
 
 Pause the heartbeat and make no GitHub, Git, issue, pull-request, branch, worktree, review,
 or cleanup transition. Use only the following literal owner-authorized bootstrap canary protocol; do not load or infer it from the installed candidate or old activation source.
@@ -103,7 +104,7 @@ phase: LEGACY_BOOTSTRAP
 role: <ORCHESTRATOR|WORKER>
 run_id: <exact-lease-run-id>
 role_task: <exact-task-id>
-execution_profile: <task-metadata-verified-model-and-reasoning-effort>
+execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>
 host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>
 target_paths: <exact-local-canary-paths>
 advisory_surface: <PASS|NOT_APPLICABLE|FAIL> <evidence-digest-or-none>
@@ -116,8 +117,8 @@ capability_outcome: <PASS|FILESYSTEM_CAPABILITY_UNAVAILABLE>
 cleanup: <VERIFIED|FAILED> <evidence-digest>
 repository_transition: none
 
-- The same Orchestrator must return advisory `PASS` with other surfaces `NOT_APPLICABLE`. When an active leaf retains a Worker, send these literal rules to that same Worker without invoking `$roundlet`; require advisory `NOT_APPLICABLE`, worktree/index `PASS`, and exact state restoration. A phase with no Worker does not invent one.
-- Build exactly `{"schema":"roundlet-filesystem-canary-set/v1","run_id":"<exact-lease-run-id>","transition":"LEGACY_BOOTSTRAP","results":[<entries>]}`. Each entry contains exactly `phase`, `role`, `role_task`, `execution_profile`, `host_route_fingerprint`, `advisory_surface`, `worktree_surface`, `index_surface`, `cleanup`, and `result_sha256`, where the result digest is `sha256:<lowercase-hex>` of exact stored result bytes. Sort entries by the unsigned UTF-8 byte tuple `(phase, role, role_task, execution_profile, host_route_fingerprint)`, reject duplicates, serialize with RFC 8785 JCS without BOM, trailing newline, or floats, and identify the set as `sha256:<lowercase-hex>` of the exact canonical manifest bytes. Decode every result and require the exact line schema/order, a valid typed-outcome combination, run ID equal set run ID, phase equal transition, repository transition `none`, capability `PASS`, cleanup `VERIFIED`, and every projected phase/role/task/profile/route/surface/cleanup value equal the entry. Require exactly the applicable Orchestrator plus retained-Worker roles, all required surfaces `PASS`, and only inapplicable surfaces `NOT_APPLICABLE`; missing, extra, duplicate, cross-run/phase, stale, mismatched, or failed evidence invalidates the set. Store accepted bytes under `.roundlet/canary-evidence/accepted/<aggregate-sha256-hex>/`, with exact results at `results/<zero-padded-ordinal>-<result-sha256-hex>.txt` and `manifest.json` written/read back last; store failed attempts under `.roundlet/canary-evidence/failed/<run-id>/<attempt-id>/`. These bounded bytes are immutable, conflicting paths fail closed, and failed evidence is never promoted.
+- The same Orchestrator must return advisory `PASS` with other surfaces `NOT_APPLICABLE`. When an active leaf retains a Worker, send these literal rules to that same Worker without invoking `$roundlet`; deliver that turn with the proven activation-time Worker model/effort override, verify task metadata and exact `execution_profile` match the proven old resolved configuration, and require advisory `NOT_APPLICABLE`, worktree/index `PASS`, and exact state restoration. A phase with no Worker does not invent one.
+- Build exactly `{"schema":"roundlet-filesystem-canary-set/v1","run_id":"<exact-lease-run-id>","transition":"LEGACY_BOOTSTRAP","results":[<entries>]}`. Each entry contains exactly `phase`, `role`, `role_task`, `execution_profile`, `host_route_fingerprint`, `advisory_surface`, `worktree_surface`, `index_surface`, `cleanup`, and `result_sha256`, where the result digest is `sha256:<lowercase-hex>` of exact stored result bytes. Sort entries by the unsigned UTF-8 byte tuple `(phase, role, role_task, execution_profile, host_route_fingerprint)`, reject duplicates, serialize with RFC 8785 JCS without BOM, trailing newline, or floats, and identify the set as `sha256:<lowercase-hex>` of the exact canonical manifest bytes. Decode every result and require the exact line schema/order, a valid typed-outcome combination, run ID equal set run ID, phase equal transition, repository transition `none`, capability `PASS`, cleanup `VERIFIED`, and every projected phase/role/task/profile/route/surface/cleanup value equal the entry. Require exactly the applicable Orchestrator plus retained-Worker roles, all required surfaces `PASS`, and only inapplicable surfaces `NOT_APPLICABLE`; missing, extra, duplicate, cross-run/phase, stale, mismatched, or failed evidence invalidates the set. Store accepted bytes under `.roundlet/canary-evidence/accepted/<aggregate-sha256-hex>/`, with exact results at `results/<zero-padded-ordinal>-<result-sha256-hex>.txt` and `manifest.json` written/read back last. When the exact advisory route can write/read it, store failed attempts under `.roundlet/canary-evidence/failed/<run-id>/<attempt-id>/`. If that advisory route itself fails, retain the exact bounded result only in the existing immutable task response identified by task ID, response/event ID, and digest; do not substitute a route merely to create local evidence. Such no-write evidence is failed-only and can never be accepted. These bounded bytes are immutable, conflicting paths fail closed, and failed evidence is never promoted.
 
 Read back the exact LEGACY_BOOTSTRAP manifest, result bytes, and aggregate SHA-256 before any contract write. On any denial, unavailable approval, launched non-zero execution, read-back mismatch, cleanup mismatch, or invalid aggregate, retain every resource, create no contract record, and report FILESYSTEM_CAPABILITY_BLOCKED with the exact type.
 Prove this run predates contract state and has no activation ID,
@@ -150,11 +151,20 @@ model/effort read-back, filesystem-canary evidence-set digest, other evidence di
 field and referenced byte reads back. A partial record has no effect; multiple valid records
 or contradictory evidence fail closed.
 
-After the one valid record exists, resolve it as the immutable activation ID, refresh only
-derived mirrors, and reply LEGACY_CONTRACT_PINNED with the run ID, task ID, source/ref,
-contract ID, record path/hash, retained resources, and repository_transition:none. Keep the
-heartbeat paused. Do not adopt the candidate in this turn. If exact activation identity is
-not provable, create no record and reply LEGACY_CONTRACT_IDENTITY_REQUIRES_OWNER.
+After the one valid record exists, resolve it as the immutable activation ID, refresh only derived mirrors, and return exactly these lines in this order:
+LEGACY_CONTRACT_PINNED
+run_id: <stable-run-id>
+orchestrator_task: <verified-same-task-id>
+activation_source_ref: <exact-immutable-source-and-ref>
+activation_contract_id: <verified-old-id>
+legacy_record: <absolute-path-and-sha256>
+filesystem_canary_evidence_set: <verified-aggregate-sha256>
+filesystem_canary_evidence_path: <absolute-accepted-path>
+orchestrator_model: <task-metadata-readback-model>
+reasoning_effort: <task-metadata-readback-effort>
+resources_retained: <heartbeat-and-every-reconciled-worker-branch-worktree-pr-issue-sha-or-none>
+repository_transition: none
+Keep the heartbeat paused. Do not adopt the candidate in this turn. A missing field, unverified evidence path/digest, self-reported or substituted profile, changed resource, or repository transition invalidates the acknowledgement. If exact activation identity is not provable, create no record and reply LEGACY_CONTRACT_IDENTITY_REQUIRES_OWNER.
 ```
 
 Only after `LEGACY_CONTRACT_PINNED` is externally verified may the owner use the applicable between-issue adoption or active in-place migration protocol.
@@ -173,24 +183,23 @@ Expected current contract bundle: <ABSOLUTE_OLD_BUNDLE_PATH>
 Owner-authorized candidate source/ref: <EXACT_CANDIDATE_IDENTITY>
 Expected same Orchestrator task: <ORCHESTRATOR_TASK_ID>
 Expected candidate Orchestrator model/effort: <MODEL> / <EFFORT>
+Expected candidate Worker model/effort: <MODEL> / <EFFORT>
 
 Use only this literal owner-authorized BETWEEN_ISSUES_ADOPTION canary protocol for this preparation; do not load it from the installed candidate or assume the old bundle contains it.
 - The approval retry limit is exactly `1`. For each required file surface, prove a unique path absent; create first bytes and verify exact path/bytes/SHA-256; change the same artifact through the intended role route and verify distinct second bytes/hash; remove only it and a canary-created empty parent; then prove absence and exact surrounding-state restoration. The Worker also stages only a separate initially absent unignored path, verifies exact index path/mode/blob/content, unstages only it, removes it, and proves complete initial/final HEAD, status, index tree, and pre-existing identities equal. No commit, GitHub mutation, source edit, existing path, user work, or helper/route substitution is allowed.
-- Store each result as exact UTF-8 without BOM or trailing newline with these lines in this order: `FILESYSTEM_CANARY_RESULT`; `phase: BETWEEN_ISSUES_ADOPTION`; `role: <ORCHESTRATOR|WORKER>`; `run_id: <exact-run-id>`; `role_task: <exact-task-id>`; `execution_profile: <task-metadata-verified-model-and-reasoning-effort>`; `host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>`; `target_paths: <exact-local-canary-paths>`; `advisory_surface: <PASS|NOT_APPLICABLE|FAIL> <evidence-digest-or-none>`; `worktree_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-identity-digest-or-none>`; `index_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-index-and-entry-digest-or-none>`; `approval_retry_count: <0|1>`; `approval_outcome: <NOT_REQUIRED|APPROVED|ESCALATION_DENIED|ESCALATION_UNAVAILABLE>`; `execution_outcome: <SUCCEEDED|NOT_LAUNCHED|DIRECT_EXECUTION_FAILED|ESCALATED_EXECUTION_FAILED>`; `capability_outcome: <PASS|FILESYSTEM_CAPABILITY_UNAVAILABLE>`; `cleanup: <VERIFIED|FAILED> <evidence-digest>`; `repository_transition: none`.
+- Store each result as exact UTF-8 without BOM or trailing newline with these lines in this order: `FILESYSTEM_CANARY_RESULT`; `phase: BETWEEN_ISSUES_ADOPTION`; `role: <ORCHESTRATOR|WORKER>`; `run_id: <exact-run-id>`; `role_task: <exact-task-id>`; `execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>`; `host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>`; `target_paths: <exact-local-canary-paths>`; `advisory_surface: <PASS|NOT_APPLICABLE|FAIL> <evidence-digest-or-none>`; `worktree_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-identity-digest-or-none>`; `index_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-index-and-entry-digest-or-none>`; `approval_retry_count: <0|1>`; `approval_outcome: <NOT_REQUIRED|APPROVED|ESCALATION_DENIED|ESCALATION_UNAVAILABLE>`; `execution_outcome: <SUCCEEDED|NOT_LAUNCHED|DIRECT_EXECUTION_FAILED|ESCALATED_EXECUTION_FAILED>`; `capability_outcome: <PASS|FILESYSTEM_CAPABILITY_UNAVAILABLE>`; `cleanup: <VERIFIED|FAILED> <evidence-digest>`; `repository_transition: none`.
 - Retry only an initial restriction once through the narrowest host-supported approval for the same target/operation. The only valid `(approval_retry_count, approval_outcome, execution_outcome)` tuples are `(0, NOT_REQUIRED, SUCCEEDED)`, `(0, NOT_REQUIRED, DIRECT_EXECUTION_FAILED)`, `(1, APPROVED, SUCCEEDED)`, `(1, APPROVED, ESCALATED_EXECUTION_FAILED)`, `(1, ESCALATION_DENIED, NOT_LAUNCHED)`, and `(0, ESCALATION_UNAVAILABLE, NOT_LAUNCHED)`. PASS requires execution `SUCCEEDED`, every required surface PASS, only inapplicable surfaces NOT_APPLICABLE, capability PASS, and cleanup VERIFIED. Every other valid tuple and every failure requires `FILESYSTEM_CAPABILITY_UNAVAILABLE`; cleanup remains independently truthful and external cleanup never changes it.
-- Require exactly the same Orchestrator with advisory PASS and other surfaces NOT_APPLICABLE, plus one short-lived candidate-configured Worker with advisory NOT_APPLICABLE and worktree/index PASS.
-- Build exactly `{"schema":"roundlet-filesystem-canary-set/v1","run_id":"<exact-run-id>","transition":"BETWEEN_ISSUES_ADOPTION","results":[<entries>]}`. Each entry contains exactly `phase`, `role`, `role_task`, `execution_profile`, `host_route_fingerprint`, `advisory_surface`, `worktree_surface`, `index_surface`, `cleanup`, and `result_sha256`; the result digest is `sha256:<lowercase-hex>` of exact result bytes. Sort entries by the unsigned UTF-8 byte tuple `(phase, role, role_task, execution_profile, host_route_fingerprint)`, reject duplicates, serialize with RFC 8785 JCS without BOM/trailing newline/floats, and identify the set as `sha256:<lowercase-hex>` of the exact canonical manifest bytes. Decode every result and require its exact schema/order, valid typed-outcome combination, run ID equal set run ID, phase equal transition, repository transition none, capability PASS, cleanup VERIFIED, and every projected phase/role/task/profile/route/surface/cleanup value equal the entry. Require exactly the roles/surfaces above; missing, extra, duplicate, stale, cross-run/phase, failed, overwritten, or mismatched evidence invalidates the set. Read back exact result bytes, manifest bytes, and aggregate digest before relying on it. Store accepted bytes under `.roundlet/canary-evidence/accepted/<aggregate-sha256-hex>/`, with exact results at `results/<zero-padded-ordinal>-<result-sha256-hex>.txt` and `manifest.json` written/read back last; store failed attempts under `.roundlet/canary-evidence/failed/<run-id>/<attempt-id>/`. These bounded bytes are immutable, conflicting paths fail closed, and failed evidence is never promoted.
+- Require exactly the same Orchestrator with advisory PASS and other surfaces NOT_APPLICABLE, plus one short-lived Worker whose turn is delivered with the exact candidate Worker model/effort override, whose task metadata and `execution_profile` equal the candidate resolved configuration, and whose advisory is NOT_APPLICABLE with worktree/index PASS.
+- Build exactly `{"schema":"roundlet-filesystem-canary-set/v1","run_id":"<exact-run-id>","transition":"BETWEEN_ISSUES_ADOPTION","results":[<entries>]}`. Each entry contains exactly `phase`, `role`, `role_task`, `execution_profile`, `host_route_fingerprint`, `advisory_surface`, `worktree_surface`, `index_surface`, `cleanup`, and `result_sha256`; the result digest is `sha256:<lowercase-hex>` of exact result bytes. Sort entries by the unsigned UTF-8 byte tuple `(phase, role, role_task, execution_profile, host_route_fingerprint)`, reject duplicates, serialize with RFC 8785 JCS without BOM/trailing newline/floats, and identify the set as `sha256:<lowercase-hex>` of the exact canonical manifest bytes. Decode every result and require its exact schema/order, valid typed-outcome combination, run ID equal set run ID, phase equal transition, repository transition none, capability PASS, cleanup VERIFIED, and every projected phase/role/task/profile/route/surface/cleanup value equal the entry. Require exactly the roles/surfaces above; missing, extra, duplicate, stale, cross-run/phase, failed, overwritten, or mismatched evidence invalidates the set. Read back exact result bytes, manifest bytes, and aggregate digest before relying on it. Store accepted bytes under `.roundlet/canary-evidence/accepted/<aggregate-sha256-hex>/`, with exact results at `results/<zero-padded-ordinal>-<result-sha256-hex>.txt` and `manifest.json` written/read back last. When the exact advisory route can write/read it, store failed attempts under `.roundlet/canary-evidence/failed/<run-id>/<attempt-id>/`. If that advisory route itself fails, retain the exact bounded result only in the existing immutable task response identified by task ID, response/event ID, and digest; do not substitute a route merely to create local evidence. Such no-write evidence is failed-only and can never be accepted. These bounded bytes are immutable, conflicting paths fail closed, and failed evidence is never promoted.
 
 Pause the heartbeat. Resolve and read the effective old bundle, reconcile every run resource,
 and prove the run is cleanly IDLE with no leaf resources. Before contract work, this
 Orchestrator must pass a unique ignored advisory create/edit/read-back/cleanup canary; create
 a temporary linked worktree plus short-lived candidate-configured Worker to pass the unique
 worktree file and exact Git-index stage/read-back/unstage canaries with exact artifact/index cleanup proof. Aggregate both role results as the exact BETWEEN_ISSUES_ADOPTION evidence set and read back its manifest/digest; only then archive/remove the clean short-lived Worker/worktree and verify that resource cleanup. The completed-transition set remains immutable evidence for this preparation but cannot authorize a later transition. Classify typed outcomes and stop before contract work on any failure. Verify task metadata shows this
-same task and the exact candidate model/effort for this turn. Build and read back the new
-bundle and prepared migration record that binds the verified filesystem-canary evidence-set digest. Make no GitHub or repository transition.
+same task and the exact candidate model/effort for this turn. Build and read back the new bundle. Create `prepared.json` as RFC 8785 canonical JSON with no BOM or trailing newline and exactly these fields: `schema` = `roundlet-contract-migration-prepared/v1`; positive integer `sequence`; `migration_id`; `run_id`; `mode`; `old_contract_id`; `new_contract_id`; `candidate_source`; `candidate_ref`; `owner_authorization_event`; `orchestrator_task`; `orchestrator_model`; `reasoning_effort`; `model_readback_source`; `filesystem_canary_evidence_set_digest`; `filesystem_canary_evidence_path`; `bundle_manifest_sha256`; and `prepared_at`. Hash values use `sha256:<64-lowercase-hex>`. Write it at `.roundlet/migrations/<sequence>-<migration-id>/prepared.json`, read back exact bytes/fields, and fail closed on any existing conflicting path. Make no GitHub or repository transition.
 
-After all gates and a truthful checkpoint pass, reply with exactly these lines in this order:
-```text
+After all gates and a truthful checkpoint pass, return exactly these lines in this order:
 CONTRACT_MIGRATION_READY
 mode: BETWEEN_ISSUES
 run_id: <stable-run-id>
@@ -201,11 +210,13 @@ orchestrator_model: <task-metadata-readback-model>
 reasoning_effort: <task-metadata-readback-effort>
 model_readback_source: <task-metadata-source>
 filesystem_canary_evidence_set: <verified-aggregate-sha256>
+filesystem_canary_evidence_path: <absolute-accepted-path>
+prepared_record: <absolute-path-and-sha256>
+truthful_checkpoint: <absolute-path-and-sha256>
 phase: <retained-phase>
 resources_retained: <orchestrator-heartbeat-and-every-reconciled-optional-resource-or-none>
 repository_transition: none
-```
-A missing field, wrong mode/task, self-reported or substituted model/effort, changed retained resource, unpaused heartbeat, unverifiable bundle/prepared record/evidence set, or repository transition invalidates the acknowledgement.
+A missing field, wrong mode/task, self-reported or substituted model/effort, changed retained resource, unpaused heartbeat, unverifiable bundle/prepared record/checkpoint/evidence set, or repository transition invalidates the acknowledgement.
 Do not create committed.json, refresh mirrors, resume the heartbeat, or make any repository transition in this preparation turn. A separate verified commit turn performs the single commit point.
 ```
 
@@ -223,13 +234,14 @@ Expected current contract bundle: <ABSOLUTE_OLD_BUNDLE_PATH>
 Owner-authorized candidate source/ref: <EXACT_CANDIDATE_IDENTITY>
 Expected same Orchestrator task: <ORCHESTRATOR_TASK_ID>
 Expected candidate Orchestrator model/effort: <MODEL> / <EFFORT>
+Expected candidate Worker model/effort when one is retained: <MODEL> / <EFFORT>
 
 Use only this literal owner-authorized ACTIVE_IN_PLACE_MIGRATION canary protocol for this preparation; do not load it from the installed candidate or assume the old bundle contains it.
 - The approval retry limit is exactly `1`. For each required file surface, prove a unique path absent; create first bytes and verify exact path/bytes/SHA-256; change the same artifact through the intended role route and verify distinct second bytes/hash; remove only it and a canary-created empty parent; then prove absence and exact surrounding-state restoration. The Worker also stages only a separate initially absent unignored path, verifies exact index path/mode/blob/content, unstages only it, removes it, and proves complete initial/final HEAD, status, index tree, and pre-existing identities equal. No commit, GitHub mutation, source edit, existing path, user work, or helper/route substitution is allowed.
-- Store each result as exact UTF-8 without BOM or trailing newline with these lines in this order: `FILESYSTEM_CANARY_RESULT`; `phase: ACTIVE_IN_PLACE_MIGRATION`; `role: <ORCHESTRATOR|WORKER>`; `run_id: <exact-run-id>`; `role_task: <exact-task-id>`; `execution_profile: <task-metadata-verified-model-and-reasoning-effort>`; `host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>`; `target_paths: <exact-local-canary-paths>`; `advisory_surface: <PASS|NOT_APPLICABLE|FAIL> <evidence-digest-or-none>`; `worktree_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-identity-digest-or-none>`; `index_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-index-and-entry-digest-or-none>`; `approval_retry_count: <0|1>`; `approval_outcome: <NOT_REQUIRED|APPROVED|ESCALATION_DENIED|ESCALATION_UNAVAILABLE>`; `execution_outcome: <SUCCEEDED|NOT_LAUNCHED|DIRECT_EXECUTION_FAILED|ESCALATED_EXECUTION_FAILED>`; `capability_outcome: <PASS|FILESYSTEM_CAPABILITY_UNAVAILABLE>`; `cleanup: <VERIFIED|FAILED> <evidence-digest>`; `repository_transition: none`.
+- Store each result as exact UTF-8 without BOM or trailing newline with these lines in this order: `FILESYSTEM_CANARY_RESULT`; `phase: ACTIVE_IN_PLACE_MIGRATION`; `role: <ORCHESTRATOR|WORKER>`; `run_id: <exact-run-id>`; `role_task: <exact-task-id>`; `execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>`; `host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>`; `target_paths: <exact-local-canary-paths>`; `advisory_surface: <PASS|NOT_APPLICABLE|FAIL> <evidence-digest-or-none>`; `worktree_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-identity-digest-or-none>`; `index_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-index-and-entry-digest-or-none>`; `approval_retry_count: <0|1>`; `approval_outcome: <NOT_REQUIRED|APPROVED|ESCALATION_DENIED|ESCALATION_UNAVAILABLE>`; `execution_outcome: <SUCCEEDED|NOT_LAUNCHED|DIRECT_EXECUTION_FAILED|ESCALATED_EXECUTION_FAILED>`; `capability_outcome: <PASS|FILESYSTEM_CAPABILITY_UNAVAILABLE>`; `cleanup: <VERIFIED|FAILED> <evidence-digest>`; `repository_transition: none`.
 - Retry only an initial restriction once through the narrowest host-supported approval for the same target/operation. The only valid `(approval_retry_count, approval_outcome, execution_outcome)` tuples are `(0, NOT_REQUIRED, SUCCEEDED)`, `(0, NOT_REQUIRED, DIRECT_EXECUTION_FAILED)`, `(1, APPROVED, SUCCEEDED)`, `(1, APPROVED, ESCALATED_EXECUTION_FAILED)`, `(1, ESCALATION_DENIED, NOT_LAUNCHED)`, and `(0, ESCALATION_UNAVAILABLE, NOT_LAUNCHED)`. PASS requires execution `SUCCEEDED`, every required surface PASS, only inapplicable surfaces NOT_APPLICABLE, capability PASS, and cleanup VERIFIED. Every other valid tuple and every failure requires `FILESYSTEM_CAPABILITY_UNAVAILABLE`; cleanup remains independently truthful and external cleanup never changes it.
-- Require the same Orchestrator with advisory PASS and other surfaces NOT_APPLICABLE plus, only when an active leaf retains a Worker, that same Worker with advisory NOT_APPLICABLE and worktree/index PASS; a phase with no Worker does not invent one.
-- Build exactly `{"schema":"roundlet-filesystem-canary-set/v1","run_id":"<exact-run-id>","transition":"ACTIVE_IN_PLACE_MIGRATION","results":[<entries>]}`. Each entry contains exactly `phase`, `role`, `role_task`, `execution_profile`, `host_route_fingerprint`, `advisory_surface`, `worktree_surface`, `index_surface`, `cleanup`, and `result_sha256`; the result digest is `sha256:<lowercase-hex>` of exact result bytes. Sort entries by the unsigned UTF-8 byte tuple `(phase, role, role_task, execution_profile, host_route_fingerprint)`, reject duplicates, serialize with RFC 8785 JCS without BOM/trailing newline/floats, and identify the set as `sha256:<lowercase-hex>` of the exact canonical manifest bytes. Decode every result and require its exact schema/order, valid typed-outcome combination, run ID equal set run ID, phase equal transition, repository transition none, capability PASS, cleanup VERIFIED, and every projected phase/role/task/profile/route/surface/cleanup value equal the entry. Require exactly the roles/surfaces above; missing, extra, duplicate, stale, cross-run/phase, failed, overwritten, or mismatched evidence invalidates the set. Read back exact result bytes, manifest bytes, and aggregate digest before relying on it. Store accepted bytes under `.roundlet/canary-evidence/accepted/<aggregate-sha256-hex>/`, with exact results at `results/<zero-padded-ordinal>-<result-sha256-hex>.txt` and `manifest.json` written/read back last; store failed attempts under `.roundlet/canary-evidence/failed/<run-id>/<attempt-id>/`. These bounded bytes are immutable, conflicting paths fail closed, and failed evidence is never promoted.
+- Require the same Orchestrator with advisory PASS and other surfaces NOT_APPLICABLE plus, only when an active leaf retains a Worker, that same Worker running this canary turn under the exact candidate Worker model/effort override with task metadata and `execution_profile` equal to the candidate resolved configuration, advisory NOT_APPLICABLE, and worktree/index PASS; a phase with no Worker does not invent one.
+- Build exactly `{"schema":"roundlet-filesystem-canary-set/v1","run_id":"<exact-run-id>","transition":"ACTIVE_IN_PLACE_MIGRATION","results":[<entries>]}`. Each entry contains exactly `phase`, `role`, `role_task`, `execution_profile`, `host_route_fingerprint`, `advisory_surface`, `worktree_surface`, `index_surface`, `cleanup`, and `result_sha256`; the result digest is `sha256:<lowercase-hex>` of exact result bytes. Sort entries by the unsigned UTF-8 byte tuple `(phase, role, role_task, execution_profile, host_route_fingerprint)`, reject duplicates, serialize with RFC 8785 JCS without BOM/trailing newline/floats, and identify the set as `sha256:<lowercase-hex>` of the exact canonical manifest bytes. Decode every result and require its exact schema/order, valid typed-outcome combination, run ID equal set run ID, phase equal transition, repository transition none, capability PASS, cleanup VERIFIED, and every projected phase/role/task/profile/route/surface/cleanup value equal the entry. Require exactly the roles/surfaces above; missing, extra, duplicate, stale, cross-run/phase, failed, overwritten, or mismatched evidence invalidates the set. Read back exact result bytes, manifest bytes, and aggregate digest before relying on it. Store accepted bytes under `.roundlet/canary-evidence/accepted/<aggregate-sha256-hex>/`, with exact results at `results/<zero-padded-ordinal>-<result-sha256-hex>.txt` and `manifest.json` written/read back last. When the exact advisory route can write/read it, store failed attempts under `.roundlet/canary-evidence/failed/<run-id>/<attempt-id>/`. If that advisory route itself fails, retain the exact bounded result only in the existing immutable task response identified by task ID, response/event ID, and digest; do not substitute a route merely to create local evidence. Such no-write evidence is failed-only and can never be accepted. These bounded bytes are immutable, conflicting paths fail closed, and failed evidence is never promoted.
 
 Retain the same run ID, Orchestrator task, heartbeat, and every reconciled active Worker, branch, worktree, pull request, issue, candidate SHA, and review-state resource that exists; do not invent absent optional resources. Pause the heartbeat before migration.
 Before contract work, this Orchestrator must pass a unique ignored advisory
@@ -243,11 +255,8 @@ lease/current pointers, active bundle, installed candidate, authority, and curre
 Stop on any contradiction or uncommitted atomic mutation.
 
 Verify task metadata proves this exact Orchestrator task is executing this turn under the
-candidate model and reasoning effort; self-reported model text is insufficient. Build and
-read back the new content-addressed bundle and a prepared migration record that binds the
-verified filesystem-canary evidence-set digest without changing the effective contract. Verify every manifest field/path/hash and every resolved role value.
-Write the truthful checkpoint, then reply with exactly these lines in this order:
-```text
+candidate model and reasoning effort; self-reported model text is insufficient. Build and read back the new content-addressed bundle. Create `prepared.json` as RFC 8785 canonical JSON with no BOM or trailing newline and exactly these fields: `schema` = `roundlet-contract-migration-prepared/v1`; positive integer `sequence`; `migration_id`; `run_id`; `mode`; `old_contract_id`; `new_contract_id`; `candidate_source`; `candidate_ref`; `owner_authorization_event`; `orchestrator_task`; `orchestrator_model`; `reasoning_effort`; `model_readback_source`; `filesystem_canary_evidence_set_digest`; `filesystem_canary_evidence_path`; `bundle_manifest_sha256`; and `prepared_at`. Hash values use `sha256:<64-lowercase-hex>`. Write it at `.roundlet/migrations/<sequence>-<migration-id>/prepared.json`, read back exact bytes/fields, and fail closed on any existing conflicting path. This preparation does not change the effective contract. Verify every manifest field/path/hash and every resolved role value.
+Write the truthful checkpoint, then return exactly these lines in this order:
 CONTRACT_MIGRATION_READY
 mode: ACTIVE_IN_PLACE
 run_id: <stable-run-id>
@@ -258,11 +267,13 @@ orchestrator_model: <task-metadata-readback-model>
 reasoning_effort: <task-metadata-readback-effort>
 model_readback_source: <task-metadata-source>
 filesystem_canary_evidence_set: <verified-aggregate-sha256>
+filesystem_canary_evidence_path: <absolute-accepted-path>
+prepared_record: <absolute-path-and-sha256>
+truthful_checkpoint: <absolute-path-and-sha256>
 phase: <retained-phase>
 resources_retained: <orchestrator-heartbeat-and-every-reconciled-worker-branch-worktree-pr-issue-sha-or-none>
 repository_transition: none
-```
-A missing field, wrong mode/task, self-reported or substituted model/effort, changed retained resource, unpaused heartbeat, unverifiable bundle/prepared record/evidence set, or repository transition invalidates the acknowledgement.
+A missing field, wrong mode/task, self-reported or substituted model/effort, changed retained resource, unpaused heartbeat, unverifiable bundle/prepared record/checkpoint/evidence set, or repository transition invalidates the acknowledgement.
 Do not create committed.json, refresh mirrors, resume the heartbeat, or make any repository transition in this preparation turn. Keep the old bundle and every retained resource unchanged.
 ```
 
@@ -287,13 +298,12 @@ prepared record, owner authorization, exact READY bytes/digest, exact truthful c
 bytes/digest, and bound filesystem-canary evidence-set manifest and digest again. Require committed.json to bind both verified digests. If any
 value differs, create no committed record and report CONTRACT_MIGRATION_COMMIT_BLOCKED.
 
-Create and read back exactly one valid committed.json as the commit point. Resolve the new
+Create `committed.json` as RFC 8785 canonical JSON with no BOM or trailing newline and exactly these fields: `schema` = `roundlet-contract-migration-committed/v1`; `migration_id`; `prepared_sha256`; `ready_evidence_sha256`; `truthful_checkpoint_sha256`; `old_contract_id`; `new_contract_id`; and `committed_at`. Hash values use `sha256:<64-lowercase-hex>`. Write it beside the verified prepared record, read back exact bytes/fields, and fail closed on any existing conflicting path. That exactly one valid committed.json is the commit point. Resolve the new
 effective contract from the complete unique chain. Refresh derived lease/current mirrors,
 read them back, reset the semantic baseline, and resume the same heartbeat at active_minutes.
 Make no GitHub or repository transition. A pre-commit failure leaves the old contract
 effective. If mirror refresh fails after the valid commit, the new contract remains effective:
-pause and repair mirrors from the chain before any other transition. Reply with exactly these lines in this order:
-```text
+pause and repair mirrors from the chain before any other transition. Return exactly these lines in this order:
 CONTRACT_MIGRATION_COMMITTED
 mode: <BETWEEN_ISSUES|ACTIVE_IN_PLACE>
 run_id: <stable-run-id>
@@ -308,6 +318,5 @@ effective_chain: <ordered-contract-ids>
 derived_mirrors: <VERIFIED|REPAIR_REQUIRED>
 heartbeat: <same-id-and-state>
 repository_transition: none
-```
 A missing or mismatched READY/checkpoint/canary digest is invalid. If no committed record was created, return `CONTRACT_MIGRATION_COMMIT_BLOCKED` and keep the old contract effective. If the commit point succeeded but mirror or heartbeat repair is required, the new contract remains effective; return `REPAIR_REQUIRED`, keep the heartbeat paused, and repair only from the committed chain.
 ```

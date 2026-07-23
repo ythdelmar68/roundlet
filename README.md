@@ -249,7 +249,7 @@ tracked file. Verify with git check-ignore that .roundlet/lease.json resolves to
 checkout's .git/info/exclude. Report the exact evidence and make no other mutation.
 ```
 
-The Launcher repeats and verifies this local step during activation. Canary artifacts are transient, uniquely named, bounded, and must be removed with exact read-back proof; they are never durable Roundlet state or committed source.
+The Launcher repeats and verifies this local step during activation. Mutation artifacts are transient, uniquely named, bounded, and must be removed with exact read-back proof; they are never durable Roundlet state or committed source. Their bounded result bytes and canonical manifests are separate immutable recovery evidence under `.roundlet/canary-evidence/`.
 
 ## Prepare the GitHub backlog
 

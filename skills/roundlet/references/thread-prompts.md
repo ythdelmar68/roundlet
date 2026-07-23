@@ -63,7 +63,7 @@ phase: <ACTIVATION|ISSUE_CLAIM|RECOVERY|LEGACY_BOOTSTRAP|BETWEEN_ISSUES_ADOPTION
 role: <LAUNCHER|ORCHESTRATOR|WORKER>
 run_id: <stable-run-id-or-benchmark-nonce>
 role_task: <exact-task-id>
-execution_profile: <task-metadata-verified-model-and-reasoning-effort>
+execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>
 host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>
 target_paths: <exact-local-canary-paths-or-none>
 advisory_surface: <PASS|NOT_APPLICABLE|FAIL> <evidence-digest-or-none>
@@ -218,6 +218,7 @@ activation_source_ref: <exact-immutable-source-and-ref>
 activation_contract_id: <verified-old-id>
 legacy_record: <absolute-path-and-sha256>
 filesystem_canary_evidence_set: <verified-aggregate-sha256>
+filesystem_canary_evidence_path: <absolute-accepted-path>
 orchestrator_model: <task-metadata-readback-model>
 reasoning_effort: <task-metadata-readback-effort>
 resources_retained: <heartbeat-and-every-reconciled-worker-branch-worktree-pr-issue-sha-or-none>
@@ -241,12 +242,15 @@ orchestrator_model: <task-metadata-readback-model>
 reasoning_effort: <task-metadata-readback-effort>
 model_readback_source: <task-metadata-source>
 filesystem_canary_evidence_set: <verified-aggregate-sha256>
+filesystem_canary_evidence_path: <absolute-accepted-path>
+prepared_record: <absolute-path-and-sha256>
+truthful_checkpoint: <absolute-path-and-sha256>
 phase: <retained-phase>
 resources_retained: <orchestrator-heartbeat-and-every-reconciled-worker-branch-worktree-pr-issue-sha-or-none>
 repository_transition: none
 ```
 
-A missing field, wrong mode/task, self-reported rather than metadata-read model/effort, substituted setting, changed retained resource, unpaused heartbeat, unverifiable bundle or prepared record, or repository transition invalidates the acknowledgement. The preparation turn must not create the committed record, refresh mirrors, or resume the heartbeat. Keep the old contract effective and return to the applicable `CONTRACT_ADOPTION_REQUIRED` or `CONTRACT_MIGRATION_REQUIRED` phase.
+A missing field, wrong mode/task, self-reported rather than metadata-read model/effort, substituted setting, changed retained resource, unpaused heartbeat, unverifiable bundle, prepared record, checkpoint, or evidence path/digest, or repository transition invalidates the acknowledgement. The preparation turn must not create the committed record, refresh mirrors, or resume the heartbeat. Keep the old contract effective and return to the applicable `CONTRACT_ADOPTION_REQUIRED` or `CONTRACT_MIGRATION_REQUIRED` phase.
 
 ## Contract migration commit result
 
