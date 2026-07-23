@@ -9,6 +9,7 @@ These are prompt contracts, not hidden role knowledge. The Launcher and Orchestr
 - [Long-lived Orchestrator bootstrap](#long-lived-orchestrator-bootstrap)
 - [Heartbeat tick](#heartbeat-tick)
 - [Contract migration acknowledgement](#contract-migration-acknowledgement)
+- [Contract migration commit result](#contract-migration-commit-result)
 - [Worker contract](#worker-contract)
 - [Supervisor contract](#supervisor-contract)
 
@@ -52,7 +53,7 @@ Every role must treat a GitHub CLI result produced before GitHub is reachable as
 The Launcher creates the Orchestrator with this contract:
 
 ```text
-Use $roundlet as the only long-lived Orchestrator for the exact target and run below.
+Act as the only long-lived Roundlet Orchestrator for the exact target and run below. Do not invoke or load the installed `$roundlet` skill; read only the supplied pinned bundle.
 
 <include the exact target repository, authoritative checkout, run ID, owner allowlist,
 resolved configuration, active contract ID and bundle path, root origin/main authority
@@ -159,21 +160,44 @@ next_safe_action: <one-line-action>
 
 ## Contract migration acknowledgement
 
-Only the same long-lived Orchestrator may acknowledge an owner-authorized in-place migration. After verifying the old bundle, installed candidate, new bundle, all retained resources, candidate Orchestrator model/effort, and paused heartbeat—but before switching the active pointer—reply exactly:
+Only the same long-lived Orchestrator may acknowledge an owner-authorized between-issue adoption or in-place migration. After verifying the effective old bundle, candidate, new bundle, prepared record, retained resources, task-metadata model/effort read-back, and paused heartbeat—but before creating the committed record—reply exactly:
 
 ```text
 CONTRACT_MIGRATION_READY
+mode: <BETWEEN_ISSUES|ACTIVE_IN_PLACE>
 run_id: <stable-run-id>
+orchestrator_task: <verified-same-task-id>
 old_contract_id: <verified-old-id>
 new_contract_id: <verified-new-id>
-orchestrator_model: <exact-candidate-model>
-reasoning_effort: <exact-candidate-effort>
+orchestrator_model: <task-metadata-readback-model>
+reasoning_effort: <task-metadata-readback-effort>
+model_readback_source: <task-metadata-source>
 phase: <retained-phase>
 resources_retained: <orchestrator-heartbeat-worker-branch-worktree-pr-issue-and-sha>
 repository_transition: none
 ```
 
-A missing field, wrong task, substituted model/effort, changed retained resource, unpaused heartbeat, unverifiable bundle, or repository transition invalidates the acknowledgement. Leave the old active pointer unchanged and return to `CONTRACT_MIGRATION_REQUIRED`.
+A missing field, wrong mode/task, self-reported rather than metadata-read model/effort, substituted setting, changed retained resource, unpaused heartbeat, unverifiable bundle or prepared record, or repository transition invalidates the acknowledgement. The preparation turn must not create the committed record, refresh mirrors, or resume the heartbeat. Keep the old contract effective and return to the applicable `CONTRACT_ADOPTION_REQUIRED` or `CONTRACT_MIGRATION_REQUIRED` phase.
+
+## Contract migration commit result
+
+Only the separately delivered commit turn may return:
+
+```text
+CONTRACT_MIGRATION_COMMITTED
+mode: <BETWEEN_ISSUES|ACTIVE_IN_PLACE>
+run_id: <stable-run-id>
+orchestrator_task: <verified-same-task-id>
+old_contract_id: <verified-old-id>
+new_contract_id: <verified-new-id>
+committed_record: <absolute-path-and-sha256>
+effective_chain: <ordered-contract-ids>
+derived_mirrors: <VERIFIED|REPAIR_REQUIRED>
+heartbeat: <same-id-and-state>
+repository_transition: none
+```
+
+If the committed record was not created, return `CONTRACT_MIGRATION_COMMIT_BLOCKED` and keep the old contract effective. If it was validly created but a later mirror or heartbeat step failed, the new contract remains effective; return `REPAIR_REQUIRED`, pause, and repair only from the committed chain before any repository transition.
 
 ## Worker contract
 

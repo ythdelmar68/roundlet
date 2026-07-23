@@ -11,7 +11,7 @@ Operate a single-target-repository outer loop through Codex tasks, GitHub, Git w
 
 - Use exactly one long-lived Orchestrator task, one phase-aware heartbeat, one authoritative machine, and at most one active leaf issue for a target repository.
 - Pin every run at activation to an immutable content-addressed bundle under `.roundlet/contracts/<contract-id>/` containing this file, every required reference, the resolved role configuration, and a manifest of ordered paths and SHA-256 values. Read active-run instructions only from that bundle.
-- Treat a changed installed skill or configuration as a migration candidate, never as live instructions. Require explicit allowlisted-owner authorization and the in-place contract-migration protocol before switching the run's active contract identity.
+- Treat a changed installed skill or configuration as a candidate, never as live instructions. At clean `IDLE` with no leaf resources, require explicit allowlisted-owner authorization and the between-issue adoption protocol. In every other phase, require explicit authorization and the in-place migration protocol.
 - Refuse activation when another live or unreconciled Roundlet run may own that target. The file lease is advisory and never prevents split-brain across machines, clones, or Codex tasks.
 - Treat GitHub issues and pull requests as the durable backlog and audit history. Let only the Orchestrator mutate GitHub.
 - Keep the same Worker task for initial implementation, repairs, the optional final repair, and cleanup preflight. Create a fresh read-only Supervisor task for every review attempt.
@@ -28,7 +28,7 @@ Operate a single-target-repository outer loop through Codex tasks, GitHub, Git w
 
 ## Read the operating contract
 
-For a new activation, read the installed copies of all of the following. For an active run or recovery, read the same paths from the active bundle named by `.roundlet/current.md`; inspect the installed copies only as a separately fingerprinted migration candidate:
+For a new activation, read the installed copies of all of the following. For an active run or recovery, first resolve the effective active bundle from the immutable activation record and valid committed migration chain, then read the same paths only from that bundle; inspect installed copies only as a separately fingerprinted candidate. Routine owner and recovery prompts must not invoke the installed `$roundlet` skill:
 
 - [`references/roundlet-config.json`](references/roundlet-config.json) for role, heartbeat, review, merge, and owner settings.
 - [`references/launcher.md`](references/launcher.md) for the copyable Launcher and recovery prompts.
@@ -56,7 +56,7 @@ Do not attach the heartbeat to the Launcher. Do not proceed after a partial or a
 On activation and each heartbeat:
 
 1. Read the active bundle named by the advisory state and compute the phase-aware observation vector defined in the operator guide. Fingerprint the installed skill and configuration separately without adopting them. When the vector is not a complete exact match for the last fully reconciled baseline, perform full GitHub, Git, Codex task, heartbeat, lease, contract, authority, and current-state reconciliation in the same tick before acting.
-2. If the installed fingerprint differs, enter `CONTRACT_MIGRATION_REQUIRED` before any repository transition. If paused, stopped, awaiting owner input, blocked on repository authority, or already processing an issue, follow that state instead of scheduling.
+2. If the installed fingerprint differs while cleanly `IDLE` with no active leaf, branch, worktree, Worker, pull request, or unresolved cleanup, enter `CONTRACT_ADOPTION_REQUIRED`. In every other phase enter `CONTRACT_MIGRATION_REQUIRED`. Make no repository transition until the allowlisted owner authorizes the exact candidate and the applicable protocol succeeds. If paused, stopped, awaiting owner input, blocked on repository authority, or already processing an issue, follow that state instead of scheduling.
 3. If IDLE observation is unchanged, make no scheduling mutation and apply the configured no-op heartbeat backoff. Otherwise scan every open issue in the target repository, including issues created after activation.
 4. Exclude umbrella, scheduling-blocked, ignored, non-actionable, dependency-blocked, and already-owned issues.
 5. Rank all ready leaf candidates across umbrellas using the contract in the operator guide.

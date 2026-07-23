@@ -20,7 +20,7 @@ Target:
 Read the complete Roundlet SKILL.md and every reference it requires before acting. Do not implement an issue in this Launcher task.
 
 Perform a fail-closed activation preflight:
-1. Resolve the exact installed skill source and configuration. Compute the ordered SHA-256 manifest for `SKILL.md`, every required reference, and the resolved role configuration; derive the candidate contract ID from that canonical manifest. Validate that every required configuration value is present and internally consistent. Require unique Supervisor attempt-profile names and an ordered profile count exactly equal to `max_supervisor_attempts_per_round`. Require both heartbeat backoff arrays to start at `active_minutes`, increase strictly, contain positive whole minutes, and support updating one existing heartbeat; require a positive full-reconciliation tick bound.
+1. Resolve the exact installed skill source and configuration. Build a `roundlet-contract/v1` manifest containing the source kind and locator, the full source Git OID when provably applicable or `installed-tree:<root-digest>` otherwise, the contract schema version, the resolved role configuration, and every required relative path with the SHA-256 of its exact bytes. Serialize it as UTF-8 without BOM or a trailing newline, with compact JSON separators, keys sorted lexicographically at every level, and files sorted by relative path. Derive the lowercase-hex contract ID from the SHA-256 of those manifest bytes with `contract_id` omitted, then add that ID and reserialize under the same rules. Validate that every required configuration value is present and internally consistent. Require unique Supervisor attempt-profile names and an ordered profile count exactly equal to `max_supervisor_attempts_per_round`. Require both heartbeat backoff arrays to start at `active_minutes`, increase strictly, contain positive whole minutes, and support updating one existing heartbeat; require a positive full-reconciliation tick bound.
 2. Verify that this Codex host can create, address, wait for, archive, and resume tasks; create, inspect, update, pause/resume, and stop one recurring heartbeat at every configured interval; select every configured model and reasoning effort in every Supervisor attempt profile exactly; and access Git, the target checkout, and GitHub with the required read/write capabilities. Do not substitute an unsupported model, effort, attempt profile, or interval.
 3. Verify the target identity, clean authoritative checkout, main branch, origin URL, GitHub default branch, HEAD == local main == origin/main, merge-commit support, issue and pull-request access, and authenticated GitHub identity. Record whether the primary branch is protected. Inspect and obey every existing required check and branch rule; fail closed if existing rules cannot be inspected or conflict with the configured workflow. Absence of branch protection is not itself an activation blocker.
 4. When `gh` is installed or a required capability relies on it, run a representative read-only GitHub CLI request in this Launcher task. A failure observed before GitHub is reachable is inconclusive: request scoped network escalation for the same command automatically and follow the bounded connectivity recovery contract. Do not open browser authentication, substitute browser automation, or declare the credential invalid unless reachable GitHub rejects authentication. Record the exact successful path or blocking evidence.
@@ -51,7 +51,7 @@ Use this only when the original Orchestrator or heartbeat is genuinely inaccessi
 Copy and paste this entire prompt into a new Codex task:
 
 ```text
-Use $roundlet as a short-lived recovery Launcher for exactly one previously activated target.
+Act as a short-lived Roundlet recovery Launcher for exactly one previously activated target. Do not invoke or load the installed `$roundlet` skill.
 
 Target:
 - GitHub repository: <OWNER/REPOSITORY>
@@ -59,7 +59,7 @@ Target:
 - Existing Roundlet run ID, if known: <RUN_ID_OR_UNKNOWN>
 - Owner recovery instruction: reconcile the old run and, only if replacement is safe, create one replacement Orchestrator and heartbeat
 
-Read the complete Roundlet SKILL.md and every required reference before acting. This prompt is explicit owner authorization to investigate and propose recovery; it is not authorization to discard, overwrite, merge, close, delete, or otherwise destroy old work.
+Read only `.roundlet/lease.json` and the minimal contract commit records needed to resolve the effective active bundle, verify that bundle completely, then read its `SKILL.md` and every required reference before acting. Treat installed skill/configuration files only as a separately fingerprinted candidate. This prompt is explicit owner authorization to investigate and propose recovery; it is not authorization to discard, overwrite, merge, close, delete, or otherwise destroy old work.
 
 1. Perform the normal capability, repository, configuration, authority, and identity preflight.
 2. Reconcile `.roundlet/lease.json`, `.roundlet/current.md`, the named active contract bundle and manifest, all Roundlet GitHub trace comments, active pull requests, exact branch SHAs, local and remote branches, worktrees, checks, and all identifiable old Orchestrator/Worker/Supervisor tasks and heartbeats. Treat the installed skill/configuration only as a migration candidate.
@@ -73,17 +73,46 @@ Read the complete Roundlet SKILL.md and every required reference before acting. 
 Fail closed at every ambiguity. Never infer owner consent for cleanup, abort, merge, or task replacement.
 ```
 
-## Owner-authorized in-place contract migration
+## Owner-authorized between-issue contract adoption
 
-Use this only in the existing long-lived Orchestrator task after an allowlisted owner explicitly authorizes migration to an exact installed candidate. It updates the prompt/configuration contract without replacing the run or abandoning active work.
+Use this only in the existing long-lived Orchestrator task when the fully reconciled phase is `IDLE` and no active leaf, branch, worktree, Worker, pull request, unique work, or unresolved cleanup remains. Deliver the prompt as a same-task follow-up with the candidate's exact Orchestrator model and reasoning effort override. Before contract work, require task metadata read-back proving the same task identity and actual turn model/effort.
 
 ```text
-Use $roundlet to migrate the existing run in place to the exact currently installed candidate contract.
+Continue the existing Roundlet run as an owner-authorized between-issue contract adoption. Do not invoke or load the installed `$roundlet` skill as active instructions.
 
 Target repository: <OWNER/REPOSITORY>
 Authoritative checkout: <ABSOLUTE_PATH>
 Expected current contract ID: <OLD_CONTRACT_ID>
-Owner-authorized candidate fingerprint or commit: <EXACT_CANDIDATE_IDENTITY>
+Expected current contract bundle: <ABSOLUTE_OLD_BUNDLE_PATH>
+Owner-authorized candidate source/ref: <EXACT_CANDIDATE_IDENTITY>
+Expected same Orchestrator task: <ORCHESTRATOR_TASK_ID>
+Expected candidate Orchestrator model/effort: <MODEL> / <EFFORT>
+
+Pause the heartbeat. Resolve and read the effective old bundle, reconcile every run resource,
+and prove the run is cleanly IDLE with no leaf resources. Verify task metadata shows this
+same task and the exact candidate model/effort for this turn. Build and read back the new
+bundle and prepared migration record. Make no GitHub or repository transition.
+
+After all gates and a truthful checkpoint pass, reply exactly with CONTRACT_MIGRATION_READY
+using mode: BETWEEN_ISSUES. Do not create committed.json, refresh mirrors, resume the
+heartbeat, or make any repository transition in this preparation turn. A separate verified
+commit turn performs the single commit point.
+```
+
+## Owner-authorized in-place contract migration
+
+Use this only in the existing long-lived Orchestrator task after an allowlisted owner explicitly authorizes migration to an exact installed candidate. Deliver the prompt as a same-task follow-up with the candidate's exact Orchestrator model and reasoning effort override. Before any pointer or commit work, require task metadata read-back proving the same task identity and actual turn model/effort. It updates the prompt/configuration contract without replacing the run or abandoning active work.
+
+```text
+Continue the existing Roundlet run to migrate it in place to the exact owner-authorized candidate contract. Do not invoke or load the installed `$roundlet` skill as active instructions.
+
+Target repository: <OWNER/REPOSITORY>
+Authoritative checkout: <ABSOLUTE_PATH>
+Expected current contract ID: <OLD_CONTRACT_ID>
+Expected current contract bundle: <ABSOLUTE_OLD_BUNDLE_PATH>
+Owner-authorized candidate source/ref: <EXACT_CANDIDATE_IDENTITY>
+Expected same Orchestrator task: <ORCHESTRATOR_TASK_ID>
+Expected candidate Orchestrator model/effort: <MODEL> / <EFFORT>
 
 Retain the same run ID, Orchestrator task, heartbeat, active Worker, branch, worktree,
 pull request, issue, candidate SHA, and review state. Pause the heartbeat before migration.
@@ -91,16 +120,39 @@ Read the old active bundle first. Reconcile GitHub, Git, every retained task, he
 lease/current pointers, active bundle, installed candidate, authority, and current phase.
 Stop on any contradiction or uncommitted atomic mutation.
 
-Build and read back a new content-addressed bundle without changing the active pointer.
-Verify every manifest path/hash and every resolved role model/effort. In this same
-Orchestrator task, execute one migration turn using the candidate Orchestrator model and
-reasoning effort exactly; do not substitute. Require the structured
-CONTRACT_MIGRATION_READY acknowledgement from thread-prompts.md.
+Verify task metadata proves this exact Orchestrator task is executing this turn under the
+candidate model and reasoning effort; self-reported model text is insufficient. Build and
+read back the new content-addressed bundle and a prepared migration record without changing
+the effective contract. Verify every manifest field/path/hash and every resolved role value.
+Write the truthful checkpoint, then reply exactly with the structured
+CONTRACT_MIGRATION_READY acknowledgement from thread-prompts.md. Do not create
+committed.json, refresh mirrors, resume the heartbeat, or make any repository transition
+in this preparation turn. Keep the old bundle and every retained resource unchanged.
+```
 
-Only after the acknowledgement and a truthful checkpoint are durable may you atomically
-switch both advisory active-contract pointers to the new ID. Read them back, reset the
-semantic baseline, resume the same heartbeat at active_minutes, and perform no repository
-transition in the migration turn. Keep the old bundle until the run stops. On any failure,
-leave the old active pointer and all retained resources unchanged, record
-CONTRACT_MIGRATION_REQUIRED with exact evidence, and await owner direction.
+## Contract adoption or migration commit turn
+
+After an externally verified `CONTRACT_MIGRATION_READY` result, deliver this as a second same-task follow-up with the same candidate model and reasoning-effort override. If task metadata or any prepared evidence changed, do not commit.
+
+```text
+Complete only the previously prepared Roundlet contract adoption or migration. Do not invoke or load the installed $roundlet skill as active instructions.
+
+Expected Orchestrator task: <ORCHESTRATOR_TASK_ID>
+Expected run/mode: <RUN_ID> / <BETWEEN_ISSUES|ACTIVE_IN_PLACE>
+Expected old/new contract IDs: <OLD_ID> / <NEW_ID>
+Expected prepared.json SHA-256: <PREPARED_SHA256>
+Expected candidate model/effort: <MODEL> / <EFFORT>
+Expected CONTRACT_MIGRATION_READY evidence: <EXACT_ACK_ID_OR_DIGEST>
+
+Verify task metadata, the effective old chain, paused heartbeat, retained resources, bundle,
+prepared record, owner authorization, READY evidence, and truthful checkpoint again. If any
+value differs, create no committed record and report CONTRACT_MIGRATION_COMMIT_BLOCKED.
+
+Create and read back exactly one valid committed.json as the commit point. Resolve the new
+effective contract from the complete unique chain. Refresh derived lease/current mirrors,
+read them back, reset the semantic baseline, and resume the same heartbeat at active_minutes.
+Make no GitHub or repository transition. A pre-commit failure leaves the old contract
+effective. If mirror refresh fails after the valid commit, the new contract remains effective:
+pause and repair mirrors from the chain before any other transition. Reply exactly with the
+CONTRACT_MIGRATION_COMMITTED structure from thread-prompts.md.
 ```

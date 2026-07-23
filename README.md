@@ -223,9 +223,10 @@ authorize those actions.
 
 Roundlet creates only:
 
-- `.roundlet/lease.json`, containing stable run, task, activation-contract, and active-contract identities without an expiry;
-- `.roundlet/current.md`, containing concise reconciliation pointers, active contract and pending-migration identity, plus bounded observation fingerprints, cursors, counters, and intervals for the current state; and
-- `.roundlet/contracts/<contract-id>/`, containing read-only content-addressed snapshots of the exact skill, required references, resolved role configuration, and manifest used by the run.
+- `.roundlet/lease.json`, containing stable run/task identity and immutable activation-contract identity without an expiry;
+- `.roundlet/current.md`, containing concise reconciliation pointers, a derived effective-contract mirror, pending adoption/migration identity, and bounded observation state;
+- `.roundlet/contracts/<contract-id>/`, containing read-only content-addressed snapshots of the exact skill, required references, resolved role configuration, source/ref/version, and canonical manifest; and
+- `.roundlet/migrations/<sequence>-<migration-id>/`, containing immutable prepared and committed records that form the recoverable active-contract chain.
 
 Add this one line to the authoritative checkout's local `.git/info/exclude`:
 
@@ -302,7 +303,8 @@ The [`operator guide`](skills/roundlet/references/operator-guide.md) contains th
 | Inspect without advancing | [Inspect status without advancing](skills/roundlet/references/operator-guide.md#inspect-status-without-advancing) |
 | Pause safely | [Pause at a safe checkpoint](skills/roundlet/references/operator-guide.md#pause-at-a-safe-checkpoint) |
 | Resume | [Resume the paused run](skills/roundlet/references/operator-guide.md#resume-the-paused-run) |
-| Migrate an active run to an owner-approved installed contract | [Owner-authorized in-place contract migration](skills/roundlet/references/launcher.md#owner-authorized-in-place-contract-migration) |
+| Adopt a reviewed contract between issues | [Owner-authorized between-issue adoption](skills/roundlet/references/launcher.md#owner-authorized-between-issue-contract-adoption) |
+| Migrate an active run to an owner-approved contract | [Owner-authorized in-place migration](skills/roundlet/references/launcher.md#owner-authorized-in-place-contract-migration) |
 | Finish current work, then stop | [Stop after the current issue](skills/roundlet/references/operator-guide.md#stop-after-the-current-issue) |
 | Handle a closed, ignored, or withdrawn active leaf | [Choose an explicit abort disposition](skills/roundlet/references/operator-guide.md#resolve-an-active-issue-that-was-closed-ignored-or-withdrawn) |
 | Recover an inaccessible Orchestrator or heartbeat | [Explicit recovery Launcher](skills/roundlet/references/launcher.md#explicit-recovery) |
@@ -316,14 +318,15 @@ Important distinctions:
 - **Stop-after-current** completes the active issue and ordered cleanup, then stops. If idle, it stops immediately.
 - Without stop-after-current, cleanup returns to IDLE at the active interval and Roundlet continues selecting later issues automatically. Quiet IDLE ticks back off through 5/15/30/60 minutes; owner-input waits back off through 5/15/30 minutes.
 - There is no immediate destructive stop. Active work requires `resume`, `preserve-and-stop`, or an explicitly scoped `abandon-and-cleanup` owner decision.
-- **Contract migration** is the only way an active run adopts a changed installed skill or configuration. It keeps the same run and repository resources, requires exact owner authorization, and makes no repository transition while switching contracts.
+- **Between-issue adoption** handles an owner-approved candidate only when fully reconciled `IDLE` has no leaf resources. **In-place migration** handles every other phase and retains all active resources. Both use a same-task model/effort override verified from task metadata and make no repository transition.
 - **Recovery** is only for an inaccessible Orchestrator or heartbeat. It reads the pinned active bundle; a stale-looking local file never authorizes takeover.
 - **GitHub CLI recovery** automatically escalates sandbox-blocked network access and retries bounded transient transport failures without changing Roundlet phase; it never launches browser authentication as an implicit workaround.
 
 ## Understand safety boundaries
 
 - The local lease is advisory; it cannot prevent split-brain across machines, clones, or tasks.
-- Every run reads an immutable activation-time contract bundle. Installed updates are separately fingerprinted migration candidates and never become live instructions silently.
+- Every run reads an immutable activation-time contract bundle plus a unique valid committed migration chain. Installed updates are separately fingerprinted candidates and never become live instructions silently.
+- Routine owner and recovery prompts do not invoke the mutable installed skill. A prepared contract change has no effect; one valid commit record is the recoverable commit point, and lease/current active values are only mirrors.
 - GitHub issues, pull requests, reviews, checks, and append-only Roundlet comments are the durable backlog and audit trail.
 - Only the Orchestrator mutates GitHub. Workers and Supervisors return proposals for verification.
 - Lightweight metadata is only an unchanged proof. Any changed, incomplete, overflowed, action-ready, or periodically due observation triggers full reconciliation in the same heartbeat before reasoning or mutation.
