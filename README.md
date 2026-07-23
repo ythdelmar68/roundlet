@@ -287,7 +287,7 @@ unreconciled run, unsupported capability, or ambiguous authority.
 The canonical full prompt is visible at [`launcher.md`](skills/roundlet/references/launcher.md#new-activation). A successful Launcher:
 
 1. verifies configuration, models, GitHub, Git, rules, authority, local state, task/heartbeat capabilities, and any required GitHub CLI path;
-2. proves and cleans the Launcher's advisory route plus a short-lived configured Worker's linked-worktree file and Git-index routes with real canaries;
+2. reserves the stable run ID, then proves and cleans the Launcher's advisory route plus a short-lived configured Worker's linked-worktree file and Git-index routes with real same-run canaries;
 3. creates and reads back the content-addressed activation contract bundle, then creates the two advisory files with the same active contract identity;
 4. creates exactly one long-lived Orchestrator from that pinned bundle, requires its own advisory canary, binds all three role results in one canonical evidence set, and waits for digest-bound `ACTIVATION_READY`;
 5. attaches exactly one heartbeat at the configured active interval, verifies that the same heartbeat can adopt every configured backoff interval, and waits for `HEARTBEAT_BOUND`;

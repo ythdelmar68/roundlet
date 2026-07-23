@@ -27,13 +27,13 @@ Perform a fail-closed activation preflight:
 5. Read the root AGENTS.md from authoritative origin/main and parse only the exact Roundlet authority switches defined by the skill. Fail closed on missing, malformed, duplicate, or conflicting values. Require `roundlet.enabled: true`; record every other `false` switch as a later mutation boundary rather than silently changing it or rejecting activation.
 6. Add `.roundlet/` to this checkout's local `.git/info/exclude` if it is not already excluded. Never commit that exclusion or any `.roundlet` file.
 7. Inspect `.roundlet/lease.json`, `.roundlet/current.md`, `.roundlet/contracts/`, GitHub traces, active codex/* branches and pull requests, local worktrees, and relevant Codex tasks/heartbeats. If any evidence suggests another live or unreconciled run, stop with STALE_OR_ACTIVE_RUN_REQUIRES_OWNER; never expire, steal, replace, or overwrite it.
-8. Run activation filesystem canaries before creating the contract bundle or run. In this Launcher task, choose an unguessable nonce and exact absent path below ignored `.roundlet/`; create a bounded artifact, change it through the mutation route intended for advisory checkpoints, read back exact identity/content, remove it and any empty canary parent, and prove the path absent. Then create a temporary isolated linked worktree at an exact unique path from authoritative `origin/main` and a short-lived canary Worker task using the configured Worker model/effort. That task must capture exact initial HEAD/status/index identity, create and change one unique bounded worktree artifact, read back identity/content, stage only one separate unique unignored canary path, verify its exact index entry/blob/content, unstage only that path, remove both artifacts, and prove HEAD/status/index match the initial values. Archive the canary Worker and normally remove the temporary linked worktree only after exact cleanup proof. Use no user path, existing file, unique work, issue branch, commit, or GitHub mutation.
+8. Reserve one unguessable stable run ID before creating the contract bundle or any run resource, and use that exact ID in every activation canary result and later lease/current record; reservation alone grants no ownership. Run activation filesystem canaries before creating the contract bundle or run. In this Launcher task, choose a separate unguessable artifact nonce and exact absent path below ignored `.roundlet/`; create a bounded artifact, change it through the mutation route intended for advisory checkpoints, read back exact identity/content, remove it and any empty canary parent, and prove the path absent. Then create a temporary isolated linked worktree at an exact unique path from authoritative `origin/main` and a short-lived canary Worker task using the configured Worker model/effort. That task must capture exact initial HEAD/status/index identity, create and change one unique bounded worktree artifact, read back identity/content, stage only one separate unique unignored canary path, verify its exact index entry/blob/content, unstage only that path, remove both artifacts, and prove HEAD/status/index match the initial values. Archive the canary Worker and normally remove the temporary linked worktree only after exact cleanup proof. Use no user path, existing file, unique work, issue branch, commit, or GitHub mutation.
 
 Classify every denial/escalation/execution/capability outcome with the operator guide's exact typed taxonomy. An initial sandbox denial gets at most the configured one narrow host-supported approval retry. A launched non-zero result is not an approval denial. Any failed read-back, identity check, restoration, task cleanup, or worktree cleanup is `FILESYSTEM_CAPABILITY_UNAVAILABLE`; activation stops before issue selection, retains exact bounded evidence, reports any remaining exact canary/task/worktree path, and never claims cleanup that was not proven.
 
 If and only if all preflight checks pass:
 1. Create `.roundlet/contracts/<contract-id>/` by copying the exact manifest inputs without transformation, include the canonical manifest, and read back every path, hash, and resolved role value. If an existing directory with that ID differs, stop with `CONTRACT_BUNDLE_CONFLICT`.
-2. Create `.roundlet/lease.json` and `.roundlet/current.md` as the advisory recovery index defined by the skill. Use an unguessable run ID, the exact target identity, this authoritative machine/checkout, the owner identity, activation time, and the Orchestrator task identity once known. Do not add an expiry.
+2. Create `.roundlet/lease.json` and `.roundlet/current.md` as the advisory recovery index defined by the skill. Reuse the exact stable run ID reserved before the canaries, plus the exact target identity, this authoritative machine/checkout, the owner identity, activation time, and the Orchestrator task identity once known. Do not add an expiry.
 3. Record the same activation and active contract ID and bundle path in both advisory files. Create exactly one long-lived Orchestrator task using role `orchestrator` model and reasoning effort from the pinned bundle. Give it the exact target, checkout, run ID, owner allowlist, resolved authority, pinned configuration, contract ID and bundle path, lease/current paths, the verified exact Launcher and activation-Worker canary results plus their hashes as provisional inputs, and the Orchestrator contract from that bundle. Require this Orchestrator task to repeat the unique advisory-state create/edit/read-back/cleanup canary on a new exact path, aggregate all three required results into the canonical activation evidence set, and read back its manifest/digest before readiness. When Launcher preflight relied on `gh`, require the Orchestrator to repeat the representative read-only request in its own task under the same automatic escalation and bounded recovery rules before it answers exactly:
    ACTIVATION_READY run=<run-id> target=<owner/repository> state=IDLE canary_set=<sha256>
    without selecting an issue yet.
@@ -92,13 +92,35 @@ Owner-authorized activation source/ref: <EXACT_SOURCE_LOCATOR_AND_IMMUTABLE_REF>
 Expected activation-time Orchestrator model/effort: <MODEL> / <EFFORT>
 
 Pause the heartbeat and make no GitHub, Git, issue, pull-request, branch, worktree, review,
-or cleanup transition. Before any contract write, this Orchestrator must prove a unique
-ignored `.roundlet/` create/edit/read-back/cleanup canary. When an active leaf retains a Worker,
-that same retained Worker must prove unique file mutation plus exact-path stage/index-read-back/unstage/cleanup in its
-linked worktree while restoring the complete initial HEAD/status/index identity; a phase with no Worker does not invent one. Use the
-configured one narrow approval retry and typed outcomes. Aggregate the Orchestrator and every applicable retained-Worker result as the exact LEGACY_BOOTSTRAP evidence set and read back its manifest/digest. On any denial, unavailable approval,
-launched non-zero execution, read-back mismatch, cleanup mismatch, or invalid aggregate, retain every resource,
-create no contract record, and report FILESYSTEM_CAPABILITY_BLOCKED with the exact type.
+or cleanup transition. Use only the following literal owner-authorized bootstrap canary protocol; do not load or infer it from the installed candidate or old activation source.
+
+- The approval retry limit is exactly `1`. For each required surface, prove a unique path absent; create first bytes and read back exact path/bytes/SHA-256; change the same artifact through the intended role mutation route and verify distinct second bytes/hash; remove only that artifact and a canary-created empty parent; then prove path absence and exact surrounding-state restoration. The Worker also stages only a separate initially absent unignored path, verifies exact index path/mode/blob/content, unstages only it, removes it, and proves complete initial/final HEAD, status, index tree, and pre-existing identities equal. No commit, GitHub mutation, source edit, existing path, user work, or route/helper substitution is allowed.
+- Retry only an initial restriction once through the narrowest host-supported approval for the same target/operation. `ESCALATION_DENIED` means explicit denial; `ESCALATION_UNAVAILABLE` means no supported approval path; `ESCALATED_EXECUTION_FAILED` means approval succeeded and the operation launched but failed. Any failed/missing mutation, read-back, identity, index, restoration, or cleanup yields `FILESYSTEM_CAPABILITY_UNAVAILABLE`; external cleanup never changes that result.
+- Store each exact UTF-8 result without BOM or trailing newline in this literal shape:
+
+```text
+FILESYSTEM_CANARY_RESULT
+phase: LEGACY_BOOTSTRAP
+role: <ORCHESTRATOR|WORKER>
+run_id: <exact-lease-run-id>
+role_task: <exact-task-id>
+host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>
+target_paths: <exact-local-canary-paths>
+advisory_surface: <PASS|NOT_APPLICABLE|FAIL> <evidence-digest-or-none>
+worktree_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-identity-digest-or-none>
+index_surface: <PASS|NOT_APPLICABLE|FAIL> <initial-final-index-and-entry-digest-or-none>
+approval_retry_count: <0|1>
+approval_outcome: <NOT_REQUIRED|APPROVED|ESCALATION_DENIED|ESCALATION_UNAVAILABLE>
+execution_outcome: <SUCCEEDED|NOT_LAUNCHED|ESCALATED_EXECUTION_FAILED>
+capability_outcome: <PASS|FILESYSTEM_CAPABILITY_UNAVAILABLE>
+cleanup: <VERIFIED|FAILED> <evidence-digest>
+repository_transition: none
+```
+
+- The same Orchestrator must return advisory `PASS` with other surfaces `NOT_APPLICABLE`. When an active leaf retains a Worker, send these literal rules to that same Worker without invoking `$roundlet`; require advisory `NOT_APPLICABLE`, worktree/index `PASS`, and exact state restoration. A phase with no Worker does not invent one.
+- Build exactly `{"schema":"roundlet-filesystem-canary-set/v1","run_id":"<exact-lease-run-id>","transition":"LEGACY_BOOTSTRAP","results":[<entries>]}`. Each entry contains exactly `phase`, `role`, `role_task`, `host_route_fingerprint`, `advisory_surface`, `worktree_surface`, `index_surface`, `cleanup`, and `result_sha256`, where the digest is `sha256:<lowercase-hex>` of the exact stored result bytes. Sort entries by the unsigned UTF-8 byte tuple `(phase, role, role_task, host_route_fingerprint)`, reject duplicates, and serialize with RFC 8785 JCS without BOM, trailing newline, or floats. Decode every result and require its run ID to equal set run ID, phase to equal transition, repository transition `none`, and every projected value to equal the entry. Require exactly the applicable Orchestrator plus retained-Worker roles, all required surfaces `PASS`, only inapplicable surfaces `NOT_APPLICABLE`, and every cleanup `VERIFIED`; missing, extra, cross-run/phase, stale, mismatched, or failed evidence invalidates the set.
+
+Read back the exact LEGACY_BOOTSTRAP manifest, result bytes, and aggregate SHA-256 before any contract write. On any denial, unavailable approval, launched non-zero execution, read-back mismatch, cleanup mismatch, or invalid aggregate, retain every resource, create no contract record, and report FILESYSTEM_CAPABILITY_BLOCKED with the exact type.
 Prove this run predates contract state and has no activation ID,
 legacy-activation record, contract bundle, prepared record, or committed record. Reconcile
 the lease/current files, original Orchestrator bootstrap and task metadata, durable Roundlet

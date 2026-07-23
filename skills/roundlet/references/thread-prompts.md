@@ -61,7 +61,7 @@ Return:
 FILESYSTEM_CANARY_RESULT
 phase: <ACTIVATION|ISSUE_CLAIM|RECOVERY|LEGACY_BOOTSTRAP|BETWEEN_ISSUES_ADOPTION|ACTIVE_IN_PLACE_MIGRATION|BENCHMARK>
 role: <LAUNCHER|ORCHESTRATOR|WORKER>
-run_id: <run-id-or-preactivation-nonce>
+run_id: <stable-run-id-or-benchmark-nonce>
 role_task: <exact-task-id>
 host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>
 target_paths: <exact-local-canary-paths-or-none>

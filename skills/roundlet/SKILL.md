@@ -48,7 +48,7 @@ Use the Launcher prompt verbatim except for its explicit placeholders. The short
 1. Resolve the exact target repository, authoritative checkout, owner identity, and configuration.
 2. Perform the capability, repository, GitHub, local-state, model, and authority preflight.
 3. Reconcile any existing `.roundlet/lease.json`, `.roundlet/current.md`, or `.roundlet/contracts/` evidence; never take over automatically.
-4. Run and clean up the exact advisory-state canary plus a short-lived configured Worker canary in a temporary linked worktree for file and Git-index mutation. Stop before activation on any unproven surface or cleanup mismatch.
+4. Reserve one stable run ID, then run and clean up the exact advisory-state canary plus a short-lived configured Worker canary in a temporary linked worktree for file and Git-index mutation using that same run ID. Stop before activation on any unproven surface or cleanup mismatch.
 5. Create and read back the content-addressed activation contract bundle and manifest.
 6. Create the configured long-lived Orchestrator task from the pinned bundle, require it to repeat the advisory-state canary, and wait for its exact `ACTIVATION_READY` response.
 7. Attach one heartbeat at configured `heartbeat.active_minutes` to that Orchestrator, send it the heartbeat identity, and archive the Launcher.
