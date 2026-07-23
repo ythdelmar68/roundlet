@@ -20,7 +20,7 @@ Target:
 Read the complete Roundlet SKILL.md and every reference it requires before acting. Do not implement an issue in this Launcher task.
 
 Perform a fail-closed activation preflight:
-1. Resolve the exact installed skill source and configuration. Build a `roundlet-contract/v1` manifest containing the source kind and locator, the full source Git OID when provably applicable or `installed-tree:<root-digest>` otherwise, the contract schema version, the resolved role configuration, and every required relative path with the SHA-256 of its exact bytes. Serialize it as UTF-8 without BOM or a trailing newline, with compact JSON separators, keys sorted lexicographically at every level, and files sorted by relative path. Derive the lowercase-hex contract ID from the SHA-256 of those manifest bytes with `contract_id` omitted, then add that ID and reserialize under the same rules. Validate that every required configuration value is present and internally consistent. Require unique Supervisor attempt-profile names and an ordered profile count exactly equal to `max_supervisor_attempts_per_round`. Require both heartbeat backoff arrays to start at `active_minutes`, increase strictly, contain positive whole minutes, and support updating one existing heartbeat; require a positive full-reconciliation tick bound.
+1. Resolve the exact installed skill source and configuration. Build the exact `roundlet-contract/v1` JSON object and `roundlet-tree/v1` digest defined in the operator guide—same field names, types, source/ref/version rules, POSIX relative paths, file set, byte framing, ordering, and canonical JSON encoding. Derive the lowercase-hex contract ID from the SHA-256 of canonical manifest bytes with `contract_id` omitted, then add that ID and reserialize under the same rules. Validate that every required configuration value is present and internally consistent. Require unique Supervisor attempt-profile names and an ordered profile count exactly equal to `max_supervisor_attempts_per_round`. Require both heartbeat backoff arrays to start at `active_minutes`, increase strictly, contain positive whole minutes, and support updating one existing heartbeat; require a positive full-reconciliation tick bound.
 2. Verify that this Codex host can create, address, wait for, archive, and resume tasks; create, inspect, update, pause/resume, and stop one recurring heartbeat at every configured interval; select every configured model and reasoning effort in every Supervisor attempt profile exactly; and access Git, the target checkout, and GitHub with the required read/write capabilities. Do not substitute an unsupported model, effort, attempt profile, or interval.
 3. Verify the target identity, clean authoritative checkout, main branch, origin URL, GitHub default branch, HEAD == local main == origin/main, merge-commit support, issue and pull-request access, and authenticated GitHub identity. Record whether the primary branch is protected. Inspect and obey every existing required check and branch rule; fail closed if existing rules cannot be inspected or conflict with the configured workflow. Absence of branch protection is not itself an activation blocker.
 4. When `gh` is installed or a required capability relies on it, run a representative read-only GitHub CLI request in this Launcher task. A failure observed before GitHub is reachable is inconclusive: request scoped network escalation for the same command automatically and follow the bounded connectivity recovery contract. Do not open browser authentication, substitute browser automation, or declare the credential invalid unless reachable GitHub rejects authentication. Record the exact successful path or blocking evidence.
@@ -72,6 +72,45 @@ Read only `.roundlet/lease.json` and the minimal contract commit records needed 
 
 Fail closed at every ambiguity. Never infer owner consent for cleanup, abort, merge, or task replacement.
 ```
+
+## Owner-authorized legacy run contract bootstrap
+
+Use this one time for a pre-contract run whose lease has no activation contract identity. It pins the old instructions before any adoption or migration. Deliver it to the same long-lived Orchestrator with the exact activation-time Orchestrator model/effort override; do not use the candidate settings yet.
+
+```text
+Continue the existing legacy Roundlet run only to pin its activation-time contract. Do not invoke or load the currently installed `$roundlet` skill.
+
+Target repository: <OWNER/REPOSITORY>
+Authoritative checkout: <ABSOLUTE_PATH>
+Run ID and activation time: <RUN_ID> / <LEASE_ACTIVATED_AT>
+Expected Orchestrator task: <ORCHESTRATOR_TASK_ID>
+Owner-authorized activation source/ref: <EXACT_SOURCE_LOCATOR_AND_IMMUTABLE_REF>
+Expected activation-time Orchestrator model/effort: <MODEL> / <EFFORT>
+
+Pause the heartbeat and make no GitHub, Git, issue, pull-request, branch, worktree, review,
+or cleanup transition. Prove this run predates contract state and has no activation ID,
+legacy-activation record, contract bundle, prepared record, or committed record. Reconcile
+the lease/current files, original Orchestrator bootstrap and task metadata, durable Roundlet
+trace, activation timestamp, installation provenance, and the named source/ref. Require the
+complete source bytes and role configuration to agree with that evidence. Current installed
+bytes are not activation evidence.
+
+Build and read back the deterministic roundlet-contract/v1 bundle from the proven old ref.
+Create exactly one canonical `.roundlet/legacy-activation.json` using schema
+roundlet-legacy-activation/v1 with run ID, lease SHA-256, activation time, owner authorization
+event, source/ref, old contract ID, bundle-manifest hash, same task ID, task-metadata
+model/effort read-back, evidence digests, and timestamp. The record is valid only when every
+field and referenced byte reads back. A partial record has no effect; multiple valid records
+or contradictory evidence fail closed.
+
+After the one valid record exists, resolve it as the immutable activation ID, refresh only
+derived mirrors, and reply LEGACY_CONTRACT_PINNED with the run ID, task ID, source/ref,
+contract ID, record path/hash, retained resources, and repository_transition:none. Keep the
+heartbeat paused. Do not adopt the candidate in this turn. If exact activation identity is
+not provable, create no record and reply LEGACY_CONTRACT_IDENTITY_REQUIRES_OWNER.
+```
+
+Only after `LEGACY_CONTRACT_PINNED` is externally verified may the owner use the applicable between-issue adoption or active in-place migration protocol.
 
 ## Owner-authorized between-issue contract adoption
 

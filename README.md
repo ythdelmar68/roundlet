@@ -225,7 +225,8 @@ Roundlet creates only:
 
 - `.roundlet/lease.json`, containing stable run/task identity and immutable activation-contract identity without an expiry;
 - `.roundlet/current.md`, containing concise reconciliation pointers, a derived effective-contract mirror, pending adoption/migration identity, and bounded observation state;
-- `.roundlet/contracts/<contract-id>/`, containing read-only content-addressed snapshots of the exact skill, required references, resolved role configuration, source/ref/version, and canonical manifest; and
+- `.roundlet/contracts/<contract-id>/`, containing read-only content-addressed snapshots of the exact skill, required references, resolved role configuration, source/ref/version, and canonical manifest;
+- optional `.roundlet/legacy-activation.json`, used once to pin a provable pre-contract run; and
 - `.roundlet/migrations/<sequence>-<migration-id>/`, containing immutable prepared and committed records that form the recoverable active-contract chain.
 
 Add this one line to the authoritative checkout's local `.git/info/exclude`:
@@ -303,6 +304,7 @@ The [`operator guide`](skills/roundlet/references/operator-guide.md) contains th
 | Inspect without advancing | [Inspect status without advancing](skills/roundlet/references/operator-guide.md#inspect-status-without-advancing) |
 | Pause safely | [Pause at a safe checkpoint](skills/roundlet/references/operator-guide.md#pause-at-a-safe-checkpoint) |
 | Resume | [Resume the paused run](skills/roundlet/references/operator-guide.md#resume-the-paused-run) |
+| Pin a pre-contract active run before migration | [Owner-authorized legacy bootstrap](skills/roundlet/references/launcher.md#owner-authorized-legacy-run-contract-bootstrap) |
 | Adopt a reviewed contract between issues | [Owner-authorized between-issue adoption](skills/roundlet/references/launcher.md#owner-authorized-between-issue-contract-adoption) |
 | Migrate an active run to an owner-approved contract | [Owner-authorized in-place migration](skills/roundlet/references/launcher.md#owner-authorized-in-place-contract-migration) |
 | Finish current work, then stop | [Stop after the current issue](skills/roundlet/references/operator-guide.md#stop-after-the-current-issue) |
@@ -318,7 +320,7 @@ Important distinctions:
 - **Stop-after-current** completes the active issue and ordered cleanup, then stops. If idle, it stops immediately.
 - Without stop-after-current, cleanup returns to IDLE at the active interval and Roundlet continues selecting later issues automatically. Quiet IDLE ticks back off through 5/15/30/60 minutes; owner-input waits back off through 5/15/30 minutes.
 - There is no immediate destructive stop. Active work requires `resume`, `preserve-and-stop`, or an explicitly scoped `abandon-and-cleanup` owner decision.
-- **Between-issue adoption** handles an owner-approved candidate only when fully reconciled `IDLE` has no leaf resources. **In-place migration** handles every other phase and retains all active resources. Both use a same-task model/effort override verified from task metadata and make no repository transition.
+- **Legacy bootstrap** first pins the exact activation-time source/ref for a pre-contract run; it fails closed if the old identity cannot be proven and never treats the current installed copy as evidence. **Between-issue adoption** handles an owner-approved candidate only when fully reconciled `IDLE` has no leaf resources. **In-place migration** handles every other phase and retains all active resources. Both use a same-task model/effort override verified from task metadata and make no repository transition.
 - **Recovery** is only for an inaccessible Orchestrator or heartbeat. It reads the pinned active bundle; a stale-looking local file never authorizes takeover.
 - **GitHub CLI recovery** automatically escalates sandbox-blocked network access and retries bounded transient transport failures without changing Roundlet phase; it never launches browser authentication as an implicit workaround.
 

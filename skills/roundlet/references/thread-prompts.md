@@ -8,6 +8,7 @@ These are prompt contracts, not hidden role knowledge. The Launcher and Orchestr
 - [GitHub access recovery](#github-access-recovery)
 - [Long-lived Orchestrator bootstrap](#long-lived-orchestrator-bootstrap)
 - [Heartbeat tick](#heartbeat-tick)
+- [Legacy activation pin result](#legacy-activation-pin-result)
 - [Contract migration acknowledgement](#contract-migration-acknowledgement)
 - [Contract migration commit result](#contract-migration-commit-result)
 - [Worker contract](#worker-contract)
@@ -102,12 +103,16 @@ HEARTBEAT_BOUND run=<run-id> heartbeat=<heartbeat-id> interval=<minutes>m
 The recurring heartbeat sends:
 
 ```text
-Perform one idempotent Roundlet tick for the bound run. Always verify and read the active
-contract bundle named by the advisory pointers, then compute the phase-aware observation
-vector from live metadata. Hash the installed skill and configuration separately as a
-migration candidate without adopting their contents. If that fingerprint differs, enter
-CONTRACT_MIGRATION_REQUIRED before any repository transition. Hash the stable lease and
-reread other semantic sources only when a fingerprint differs or full reconciliation is required.
+Perform one idempotent Roundlet tick for the bound run. Resolve the effective contract from
+the immutable activation ID or valid legacy activation record plus the unique fully valid
+committed chain. Treat lease/current active values only as derived mirrors: if they disagree,
+pause and reconstruct them from the chain before any other transition. Verify and read only
+the effective bundle, then compute the phase-aware observation vector from live metadata.
+Hash installed skill/configuration separately without adopting them. If drift exists after
+full resource reconciliation, enter CONTRACT_ADOPTION_REQUIRED only when cleanly IDLE with
+no leaf resources; otherwise enter CONTRACT_MIGRATION_REQUIRED. Make no repository
+transition. Hash the stable lease and reread other semantic sources only when a fingerprint
+differs or full reconciliation is required.
 
 Treat the observation vector only as an unchanged proof. For IDLE, fingerprint every page
 of the open-issue graph, latest comment watermarks, formal parent/sub-issue membership,
@@ -157,6 +162,25 @@ noop_streak: <nonnegative-number>
 heartbeat_interval: <minutes>m
 next_safe_action: <one-line-action>
 ```
+
+## Legacy activation pin result
+
+A successful one-time bootstrap returns exactly:
+
+```text
+LEGACY_CONTRACT_PINNED
+run_id: <stable-run-id>
+orchestrator_task: <verified-same-task-id>
+activation_source_ref: <exact-immutable-source-and-ref>
+activation_contract_id: <verified-old-id>
+legacy_record: <absolute-path-and-sha256>
+orchestrator_model: <task-metadata-readback-model>
+reasoning_effort: <task-metadata-readback-effort>
+resources_retained: <heartbeat-worker-branch-worktree-pr-issue-and-sha>
+repository_transition: none
+```
+
+A self-reported setting, missing provenance, current-installed-copy assumption, partial/conflicting record, changed resource, or repository transition is invalid. Return `LEGACY_CONTRACT_IDENTITY_REQUIRES_OWNER`, create no valid legacy record, keep the heartbeat paused, and retain every resource.
 
 ## Contract migration acknowledgement
 
