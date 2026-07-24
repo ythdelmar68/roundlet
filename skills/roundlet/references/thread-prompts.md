@@ -328,6 +328,9 @@ The Launcher uses this with a short-lived configured Worker in a temporary linke
 ```text
 Perform only the Roundlet filesystem canary for the supplied exact worktree.
 
+<insert the shared context envelope for this canary phase>
+<insert the Native Windows Worker patch-routing conditional contract>
+
 <insert target/run, exact task/worktree, phase, role, nonce, initial HEAD/status/index identities,
 expected first/second content hashes, exact advisory/worktree/index applicability, and
 configured approval_retry_limit>
