@@ -63,8 +63,8 @@ role: <LAUNCHER|ORCHESTRATOR|WORKER>
 role_task: <metadata-read-exact-task-id>
 execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>
 source_contract: <verified-active-bundle-or-owner-supplied-literal-candidate/protocol>
-active_contract_id: <sha256-derived-id-or-none-before-contract>
-contract_bundle: <absolute-bundle-path-or-none-before-contract>
+active_contract_id: <sha256-derived-id-or-none-before-contract-or-none-for-benchmark>
+contract_bundle: <absolute-bundle-path-or-none-before-contract-or-none-for-benchmark>
 active_leaf: <number-and-url-or-none>
 branch: <exact-branch-or-none>
 worktree: <absolute-checkout-or-linked-worktree>
@@ -77,7 +77,7 @@ target_paths: <exact-canary-paths>
 approval_retry_limit: <configured-limit>
 ```
 
-Validate every field against live task, Git, and filesystem evidence. `none-before-contract` is valid only during pre-bundle activation. `active_leaf: none` and `branch: none` are valid only when that phase is intentionally leafless, including activation and between-issue adoption; issue claim requires the selected leaf and provisional branch, while recovery/bootstrap/migration must name every retained applicable resource. Review epoch/round/mode and pull-request fields are intentionally absent because a filesystem canary is not implementation or review. A role must return `CONTEXT_MISMATCH` for any other missing, invented, or contradictory value.
+Validate every field against live task, Git, and filesystem evidence. `none-before-contract` is valid only during pre-bundle activation; `none-for-benchmark` is valid only for a standalone `BENCHMARK` bound to an exact candidate in `source_contract`. `active_leaf: none` and `branch: none` are valid only when that phase is intentionally leafless, including activation, between-issue adoption, and a benchmark whose plan does not provision that resource; issue claim requires the selected leaf and provisional branch, while recovery/bootstrap/migration must name every retained applicable resource. Review epoch/round/mode and pull-request fields are intentionally absent because a filesystem canary is not implementation or review. A role must return `CONTEXT_MISMATCH` for any other missing, invented, or contradictory value.
 
 ## GitHub access recovery
 
