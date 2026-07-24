@@ -5,6 +5,7 @@ These are prompt contracts, not hidden role knowledge. The Launcher and Orchestr
 ## Contents
 
 - [Shared context envelope](#shared-context-envelope)
+- [Filesystem canary context envelope](#filesystem-canary-context-envelope)
 - [GitHub access recovery](#github-access-recovery)
 - [Filesystem mutation canary result](#filesystem-mutation-canary-result)
 - [Long-lived Orchestrator bootstrap](#long-lived-orchestrator-bootstrap)
@@ -17,7 +18,7 @@ These are prompt contracts, not hidden role knowledge. The Launcher and Orchestr
 
 ## Shared context envelope
 
-Begin every Worker and Supervisor turn with this fully populated envelope:
+Begin every non-canary Worker turn and every Supervisor turn with this fully populated envelope:
 
 ```text
 ROUNDLET CONTEXT
@@ -47,6 +48,36 @@ prior_trace_urls: <ordered-urls-or-none>
 ```
 
 The Orchestrator must validate this envelope against live evidence before sending it. A role must stop and report `CONTEXT_MISMATCH` if the envelope contradicts live GitHub, Git, repository instructions, or filesystem state.
+
+## Filesystem canary context envelope
+
+Begin every Launcher, Orchestrator, or Worker filesystem-canary turn with this separate envelope:
+
+```text
+ROUNDLET FILESYSTEM CANARY CONTEXT
+target_repository: <owner/repository>
+authoritative_checkout: <absolute-path>
+run_id: <stable-run-id-or-benchmark-nonce>
+phase: <filesystem-canary-phase>
+role: <LAUNCHER|ORCHESTRATOR|WORKER>
+role_task: <metadata-read-exact-task-id>
+execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>
+source_contract: <verified-active-bundle-or-owner-supplied-literal-candidate/protocol>
+active_contract_id: <sha256-derived-id-or-none-before-contract>
+contract_bundle: <absolute-bundle-path-or-none-before-contract>
+active_leaf: <number-and-url-or-none>
+branch: <exact-branch-or-none>
+worktree: <absolute-checkout-or-linked-worktree>
+worker_runtime: <NATIVE_WINDOWS|WSL|NON_WINDOWS|NOT_APPLICABLE>
+initial_head: <full-sha>
+initial_status_digest: <sha256>
+initial_index_tree: <full-tree-sha-or-not-applicable>
+initial_index_sha256: <sha256-or-not-applicable>
+target_paths: <exact-canary-paths>
+approval_retry_limit: <configured-limit>
+```
+
+Validate every field against live task, Git, and filesystem evidence. `none-before-contract` is valid only during pre-bundle activation. `active_leaf: none` and `branch: none` are valid only when that phase is intentionally leafless, including activation and between-issue adoption; issue claim requires the selected leaf and provisional branch, while recovery/bootstrap/migration must name every retained applicable resource. Review epoch/round/mode and pull-request fields are intentionally absent because a filesystem canary is not implementation or review. A role must return `CONTEXT_MISMATCH` for any other missing, invented, or contradictory value.
 
 ## GitHub access recovery
 
@@ -304,12 +335,14 @@ For every initial, repair, final-repair, integration, or other Worker turn that 
 ```text
 NATIVE_WINDOWS_PATCH_ROUTING
 Apply only when worker_runtime is NATIVE_WINDOWS:
-- Make source-file edits inside the assigned writable worktree only through the dedicated
+- Make every canary-artifact create, change, or deletion and every source-file edit inside
+  the assigned writable worktree only through the dedicated
   apply_patch tool in the normal sandbox.
 - Never invoke apply_patch through PowerShell, a shell command or pipeline, a here-string
   or here-document, a .bat or .cmd wrapper, or require_escalated.
 - If the dedicated apply_patch tool is unavailable or cannot mutate the assigned writable
-  root, make no shell fallback or elevated retry. Leave source and Git state unchanged and
+  root, make no shell fallback or elevated retry. Leave source and Git state unchanged,
+  preserve truthful cleanup state for any exact canary-created path, and
   report FILESYSTEM_CAPABILITY_UNAVAILABLE through the active typed filesystem contract;
   when that structure is not part of the current turn, return NEEDS_OWNER_INPUT and put the
   exact FILESYSTEM_CAPABILITY_UNAVAILABLE evidence in owner_input_required.
@@ -319,7 +352,7 @@ When worker_runtime is WSL or NON_WINDOWS, this conditional block imposes no add
 patch-routing rule; follow the normal tool, sandbox, and repository contracts.
 ```
 
-The Orchestrator rejects a native-Windows Worker handoff that used an elevated or shell-wrapped `apply_patch` route, even if the resulting diff is correct. Cleanup preflight remains read-only and does not need an edit route.
+The Orchestrator rejects a native-Windows Worker canary or implementation handoff that omitted direct-route evidence or used an elevated or shell-wrapped `apply_patch` route, even if the canary result or resulting diff is otherwise correct. Cleanup preflight remains read-only and does not need an edit route.
 
 ### Worker filesystem canary prompt
 
@@ -328,7 +361,7 @@ The Launcher uses this with a short-lived configured Worker in a temporary linke
 ```text
 Perform only the Roundlet filesystem canary for the supplied exact worktree.
 
-<insert the shared context envelope for this canary phase>
+<insert the filesystem canary context envelope>
 <insert the Native Windows Worker patch-routing conditional contract>
 
 <insert target/run, exact task/worktree, phase, role, nonce, initial HEAD/status/index identities,

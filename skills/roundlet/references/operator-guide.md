@@ -91,6 +91,8 @@ Every file-surface canary performs this sequence:
 2. Change that same artifact through the mutation route the role will use for real work; read it back and verify the distinct second expected bytes and hash.
 3. Remove only the canary artifact and any canary-created empty parent, then prove the exact path absent and the surrounding state equal to its captured initial identity.
 
+Every canary turn uses the canary-specific context envelope from `thread-prompts.md`, not the implementation/review envelope. Pre-bundle activation uses `none-before-contract` only for the not-yet-created contract fields; activation and between-issue adoption may use `none` only for intentionally absent leaf/branch resources. Issue claim and every recovery/bootstrap/migration phase must bind all provisional or retained applicable resources. This prevents a healthy pre-contract or leafless canary from failing on invented implementation context while preserving exact task, profile, runtime, route, target, and Git identities.
+
 Required surfaces are:
 
 - **Advisory state:** the Launcher and then the long-lived Orchestrator each use a new ignored path below the authoritative checkout's `.roundlet/`. The Orchestrator result, not the Launcher result, proves the live advisory route.
@@ -337,14 +339,14 @@ To claim one selected leaf:
 
 Use the same Worker task for every subsequent repair, final repair, and cleanup preflight. The Worker may read GitHub but must never create/edit comments, issues, pull requests, labels, reviews, merges, or branches on GitHub. It modifies the isolated worktree and returns structured handoffs to the Orchestrator.
 
-For every Worker turn, verify and bind the actual `worker_runtime` value from `thread-prompts.md`. On native Windows only, insert the complete native-Windows patch-routing block into each Worker prompt that may edit files. Source patches must stay on the dedicated `apply_patch` tool in the normal sandbox of the assigned writable worktree; a PowerShell, pipeline, here-string/here-document, batch-wrapper, or elevated-shell invocation is not an alternate patch route. If the dedicated route is absent or cannot write the assigned root, keep the exact issue resources and Git state unchanged, classify the result as `FILESYSTEM_CAPABILITY_UNAVAILABLE`, and stop through the active typed filesystem contract or `NEEDS_OWNER_INPUT` fallback defined by the Worker prompt. Do not reinterpret it as an approval denial or retry it through host elevation.
+For every Worker turn, verify and bind the actual `worker_runtime` value from `thread-prompts.md`. On native Windows only, insert the complete native-Windows patch-routing block into each Worker prompt that may edit files. Canary-artifact create/change/delete operations and source patches must stay on the dedicated `apply_patch` tool in the normal sandbox of the assigned writable worktree; a PowerShell, pipeline, here-string/here-document, batch-wrapper, or elevated-shell invocation is not an alternate patch route. If the dedicated route is absent or cannot write the assigned root, keep the exact issue resources and Git state unchanged, preserve truthful canary cleanup evidence, classify the result as `FILESYSTEM_CAPABILITY_UNAVAILABLE`, and stop through the active typed filesystem contract or `NEEDS_OWNER_INPUT` fallback defined by the Worker prompt. Do not reinterpret it as an approval denial or retry it through host elevation.
 
 This conditional route does not apply to WSL or non-Windows Workers and does not alter their normal editing behavior. It also does not prohibit a separately justified, narrowly approved host operation for GitHub, network, or an authorized out-of-root target when that operation is not a source patch.
 
 After a valid initial handoff:
 
 1. Verify the reported before/after SHAs, diff, status, tests, and issue scope independently.
-2. For a native-Windows Worker, verify the handoff used the dedicated normal-sandbox patch route and no shell-wrapped or elevated `apply_patch`; reject and fail closed on missing or contradictory route evidence.
+2. For a native-Windows Worker, verify every applicable canary artifact and source edit used the dedicated normal-sandbox patch route and no shell-wrapped or elevated `apply_patch`; reject and fail closed on missing or contradictory route evidence.
 3. Push the exact candidate commit without force.
 4. Append the Worker handoff to the leaf issue.
 5. Create a draft pull request linking the umbrella with a non-closing reference when present, linking the leaf, and including `Closes #<leaf>` for that active leaf only. Never couple `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, or `resolved` to an umbrella or any other non-terminal issue number, even inside a negated sentence.
