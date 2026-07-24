@@ -327,6 +327,7 @@ Important distinctions:
 - **Filesystem capability** is proven on the exact role/task/host/route. Every newly created persistent Worker repeats the worktree/index canary before implementation, and a canonical aggregate prevents one role or surface from overwriting another. A completed transition keeps immutable historical evidence after its clean short-lived resources are removed, but every later transition requires a fresh applicable set. An initial restriction gets at most one narrow host-supported approval retry. Direct execution failure, explicit denial, unavailable approval, approved execution failure, and final unproven capability remain distinct.
 - **Recovery and contract migration** rerun canaries before any checkpoint, Git, or GitHub transition. Failure retains every active resource in `FILESYSTEM_CAPABILITY_BLOCKED`.
 - **GitHub CLI recovery** automatically escalates sandbox-blocked network access and retries bounded transient transport failures without changing Roundlet phase; it never launches browser authentication as an implicit workaround.
+- **Native Windows Worker patch routing** keeps source edits on the dedicated `apply_patch` tool inside the assigned writable worktree's normal sandbox. It forbids PowerShell/pipeline/here-string/batch-wrapper and elevated-shell patch fallbacks because those host-specific helper routes can fail independently of worktree capability. This guard applies only to native Windows, not WSL or other platforms, and it does not prohibit narrowly approved elevation for genuinely host-bound GitHub, network, or out-of-root operations.
 
 ## Understand safety boundaries
 
@@ -338,6 +339,7 @@ Important distinctions:
 - Lightweight metadata is only an unchanged proof. Any changed, incomplete, overflowed, action-ready, or periodically due observation triggers full reconciliation in the same heartbeat before reasoning or mutation.
 - A filesystem tool's presence is not proof that it can mutate the exact advisory/worktree/index surface. A normal launched non-zero result is `DIRECT_EXECUTION_FAILED`; only a launched failure after approved escalation is `ESCALATED_EXECUTION_FAILED`, and neither is an approval denial; any incomplete mutation/read-back/restoration/cleanup is `FILESYSTEM_CAPABILITY_UNAVAILABLE`.
 - A GitHub CLI failure inside a network-restricted sandbox is not proof that its credential is invalid. Roundlet must reach GitHub before making that classification.
+- On native Windows, failure of a shell-wrapped or elevated patch helper is not proof that the assigned worktree is unwritable or that approval was denied. Workers must use the dedicated normal-sandbox patch route and fail closed as `FILESYSTEM_CAPABILITY_UNAVAILABLE` instead of retrying source edits through elevation. WSL and non-Windows Workers retain their existing platform-appropriate edit routes.
 - Every Worker and Supervisor turn is bound to exact live context and full commit SHAs.
 - Roundlet never rebases, force-pushes, bypasses protection, destroys unique work, or closes an umbrella.
 - A pull request may use a closing keyword only for its one active leaf. Use plain links for umbrellas and every other issue.

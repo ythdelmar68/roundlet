@@ -40,6 +40,7 @@ base_sha: <full-sha>
 candidate_sha: <full-sha-or-none>
 branch: <exact-codex-branch>
 worktree: <absolute-path>
+worker_runtime: <NATIVE_WINDOWS|WSL|NON_WINDOWS>
 allowed_scope: <issue-derived-scope-and-owner-amendments>
 dependency_basis: <canonical-note-and-ready-dependencies>
 prior_trace_urls: <ordered-urls-or-none>
@@ -294,6 +295,32 @@ Before **every** initial, repair, final-repair, integration, or cleanup-prefligh
 
 It must not rely on task memory in place of rereading those sources.
 
+### Native Windows Worker patch routing
+
+Before every Worker turn, the Orchestrator must verify the Worker's actual runtime and populate `worker_runtime`; a Windows-looking path is not sufficient evidence. `NATIVE_WINDOWS` means the Worker runs directly on Windows, not inside WSL.
+
+For every initial, repair, final-repair, integration, or other Worker turn that may create or change a worktree file, include this exact conditional contract after the shared context envelope:
+
+```text
+NATIVE_WINDOWS_PATCH_ROUTING
+Apply only when worker_runtime is NATIVE_WINDOWS:
+- Make source-file edits inside the assigned writable worktree only through the dedicated
+  apply_patch tool in the normal sandbox.
+- Never invoke apply_patch through PowerShell, a shell command or pipeline, a here-string
+  or here-document, a .bat or .cmd wrapper, or require_escalated.
+- If the dedicated apply_patch tool is unavailable or cannot mutate the assigned writable
+  root, make no shell fallback or elevated retry. Leave source and Git state unchanged and
+  report FILESYSTEM_CAPABILITY_UNAVAILABLE through the active typed filesystem contract;
+  when that structure is not part of the current turn, return NEEDS_OWNER_INPUT and put the
+  exact FILESYSTEM_CAPABILITY_UNAVAILABLE evidence in owner_input_required.
+- This guard does not prohibit the narrowest approved elevation for a genuinely host-bound
+  GitHub, network, or out-of-root operation that is not a source-file patch.
+When worker_runtime is WSL or NON_WINDOWS, this conditional block imposes no additional
+patch-routing rule; follow the normal tool, sandbox, and repository contracts.
+```
+
+The Orchestrator rejects a native-Windows Worker handoff that used an elevated or shell-wrapped `apply_patch` route, even if the resulting diff is correct. Cleanup preflight remains read-only and does not need an edit route.
+
 ### Worker filesystem canary prompt
 
 The Launcher uses this with a short-lived configured Worker in a temporary linked worktree during activation or between-issue adoption. Immediately after issue claim, the Orchestrator sends it to the newly created persistent Worker in its exact linked worktree before initial implementation. Recovery, legacy bootstrap, or active migration sends it to the same retained Worker and exact linked worktree. This turn never becomes issue implementation.
@@ -322,6 +349,7 @@ FILESYSTEM_CAPABILITY_UNAVAILABLE and the remaining exact canary path; do not br
 You are the persistent Roundlet Worker for one leaf issue.
 
 <insert the shared context envelope with review_mode INITIAL>
+<insert the Native Windows Worker patch-routing conditional contract>
 
 Reread every source required by the Worker contract. Confirm the issue remains open,
 actionable, dependency-ready, and inside the allowed scope. Inspect the existing
@@ -344,6 +372,7 @@ bounded factual summary for the Orchestrator to verify and publish; do not publi
 Continue as the same persistent Roundlet Worker.
 
 <insert the fresh shared context envelope with review_mode COMPLETE or CONVERGING>
+<insert the Native Windows Worker patch-routing conditional contract>
 
 Supervisor findings to address:
 <insert exact verified finding IDs, evidence, and required outcomes>
@@ -363,6 +392,7 @@ Return the structured Worker handoff. Every finding ID must have one disposition
 Continue as the same persistent Roundlet Worker for the one permitted final repair.
 
 <insert the fresh shared context envelope with review_mode FINAL_REPAIR and round 10>
+<insert the Native Windows Worker patch-routing conditional contract>
 
 Final Supervisor findings:
 <insert exact verified round-10 findings>
@@ -382,6 +412,7 @@ Use this only when live repository rules require the pull-request branch to be u
 Continue as the same persistent Roundlet Worker.
 
 <insert the fresh shared context envelope>
+<insert the Native Windows Worker patch-routing conditional contract>
 
 Reread every source required by the Worker contract. Fetch and inspect current
 origin/main. Integrate it into the issue branch with a normal merge commit, resolve only
