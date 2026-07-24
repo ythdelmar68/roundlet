@@ -55,6 +55,7 @@ Before activation, prove all of the following:
 - one recurring heartbeat can be created, inspected, paused/resumed, and stopped;
 - that same heartbeat can be updated through every configured active, IDLE, and owner-input interval without creating a replacement;
 - Git and the authoritative checkout are usable;
+- every Worker task can report whether its actual runtime is native Windows, WSL, or another non-Windows environment without inferring it only from a path string;
 - GitHub identity, repository identity, issues, comments, branches, pull requests, reviews, checks, mergeability, and merge operations can be inspected;
 - authorized GitHub mutations are available to the Orchestrator;
 - the exact installed candidate contract can be copied to a local content-addressed bundle and every copied path/hash can be read back;
@@ -291,13 +292,18 @@ To claim one selected leaf:
 
 Use the same Worker task for every subsequent repair, final repair, and cleanup preflight. The Worker may read GitHub but must never create/edit comments, issues, pull requests, labels, reviews, merges, or branches on GitHub. It modifies the isolated worktree and returns structured handoffs to the Orchestrator.
 
+For every Worker turn, verify and bind the actual `worker_runtime` value from `thread-prompts.md`. On native Windows only, insert the complete native-Windows patch-routing block into each Worker prompt that may edit files. Source patches must stay on the dedicated `apply_patch` tool in the normal sandbox of the assigned writable worktree; a PowerShell, pipeline, here-string/here-document, batch-wrapper, or elevated-shell invocation is not an alternate patch route. If the dedicated route is absent or cannot write the assigned root, keep the exact issue resources and Git state unchanged, classify the result as `FILESYSTEM_CAPABILITY_UNAVAILABLE`, and stop through the active typed filesystem contract or `NEEDS_OWNER_INPUT` fallback defined by the Worker prompt. Do not reinterpret it as an approval denial or retry it through host elevation.
+
+This conditional route does not apply to WSL or non-Windows Workers and does not alter their normal editing behavior. It also does not prohibit a separately justified, narrowly approved host operation for GitHub, network, or an authorized out-of-root target when that operation is not a source patch.
+
 After a valid initial handoff:
 
 1. Verify the reported before/after SHAs, diff, status, tests, and issue scope independently.
-2. Push the exact candidate commit without force.
-3. Append the Worker handoff to the leaf issue.
-4. Create a draft pull request linking the umbrella with a non-closing reference when present, linking the leaf, and including `Closes #<leaf>` for that active leaf only. Never couple `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, or `resolved` to an umbrella or any other non-terminal issue number, even inside a negated sentence.
-5. Append a draft-pull-request trace to the pull request and update the local recovery index.
+2. For a native-Windows Worker, verify the handoff used the dedicated normal-sandbox patch route and no shell-wrapped or elevated `apply_patch`; reject and fail closed on missing or contradictory route evidence.
+3. Push the exact candidate commit without force.
+4. Append the Worker handoff to the leaf issue.
+5. Create a draft pull request linking the umbrella with a non-closing reference when present, linking the leaf, and including `Closes #<leaf>` for that active leaf only. Never couple `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, or `resolved` to an umbrella or any other non-terminal issue number, even inside a negated sentence.
+6. Append a draft-pull-request trace to the pull request and update the local recovery index.
 
 If the initial handoff reveals a genuine owner-only decision, enter `NEEDS_OWNER_INPUT`; do not move to a different issue.
 
