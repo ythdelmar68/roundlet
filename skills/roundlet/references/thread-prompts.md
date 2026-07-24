@@ -63,8 +63,8 @@ role: <LAUNCHER|ORCHESTRATOR|WORKER>
 role_task: <metadata-read-exact-task-id>
 execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>
 source_contract: <verified-active-bundle-or-owner-supplied-literal-candidate/protocol>
-active_contract_id: <sha256-derived-id-or-none-before-contract-or-none-for-benchmark>
-contract_bundle: <absolute-bundle-path-or-none-before-contract-or-none-for-benchmark>
+active_contract_id: <sha256-derived-id-or-none-before-contract-or-none-before-legacy-contract-or-none-for-benchmark>
+contract_bundle: <absolute-bundle-path-or-none-before-contract-or-none-before-legacy-contract-or-none-for-benchmark>
 active_leaf: <number-and-url-or-none>
 branch: <exact-branch-or-none>
 worktree: <absolute-checkout-or-linked-worktree>
@@ -77,7 +77,9 @@ target_paths: <exact-canary-paths>
 approval_retry_limit: <configured-limit>
 ```
 
-Validate every field against live task, Git, and filesystem evidence. `none-before-contract` is valid only during pre-bundle activation; `none-for-benchmark` is valid only for a standalone `BENCHMARK` bound to an exact candidate in `source_contract`. `active_leaf: none` and `branch: none` are valid only when that phase is intentionally leafless, including activation, between-issue adoption, and a benchmark whose plan does not provision that resource; issue claim requires the selected leaf and provisional branch, while recovery/bootstrap/migration must name every retained applicable resource. Review epoch/round/mode and pull-request fields are intentionally absent because a filesystem canary is not implementation or review. A role must return `CONTEXT_MISMATCH` for any other missing, invented, or contradictory value.
+Validate every field against live task, Git, and filesystem evidence. `none-before-contract` is valid only during pre-bundle `ACTIVATION`. `none-before-legacy-contract` is valid only during `LEGACY_BOOTSTRAP`, when the owner-authorized literal bootstrap protocol is bound in `source_contract` and live reconciliation proves that no activation ID, legacy record, contract bundle, prepared record, or committed record exists. `none-for-benchmark` is valid only for a standalone `BENCHMARK` bound to an exact candidate in `source_contract`. `active_leaf: none` and `branch: none` are valid only when that resource is genuinely absent in the named phase, including activation, between-issue adoption, legacy bootstrap without retained leaf resources, and a benchmark whose plan does not provision that resource.
+
+For `ISSUE_CLAIM`, create and live-verify the provisional local branch and linked worktree before either same-phase role canary. Both role contexts bind the selected leaf and that existing provisional branch; the Orchestrator context names the authoritative checkout as its `worktree`, while the persistent Worker context names the provisional linked worktree. Recovery, bootstrap, and migration name every retained applicable leaf, branch, and role-specific worktree. Review epoch/round/mode and pull-request fields are intentionally absent because a filesystem canary is not implementation or review. A role must return `CONTEXT_MISMATCH` for any other missing, invented, or contradictory value.
 
 ## GitHub access recovery
 
