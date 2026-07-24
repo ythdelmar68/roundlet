@@ -6,6 +6,7 @@ This is the detailed operating contract for Roundlet. The Orchestrator must rere
 
 - [Operating envelope](#operating-envelope)
 - [Configuration and capability preflight](#configuration-and-capability-preflight)
+- [Filesystem mutation canaries and typed outcomes](#filesystem-mutation-canaries-and-typed-outcomes)
 - [Advisory local state](#advisory-local-state)
 - [Pinned run contract and migration](#pinned-run-contract-and-migration)
 - [Lightweight observation and heartbeat cadence](#lightweight-observation-and-heartbeat-cadence)
@@ -59,6 +60,7 @@ Before activation, prove all of the following:
 - GitHub identity, repository identity, issues, comments, branches, pull requests, reviews, checks, mergeability, and merge operations can be inspected;
 - authorized GitHub mutations are available to the Orchestrator;
 - the exact installed candidate contract can be copied to a local content-addressed bundle and every copied path/hash can be read back;
+- `filesystem_canary.required` is exactly `true`, `approval_retry_limit` is exactly `1`, and the role-specific advisory, linked-worktree, and Git-index canaries below pass with cleanup proof;
 - the root authority block on `origin/main` is valid;
 - the repository supports the configured merge method;
 - `HEAD`, local `main`, and `origin/main` initially name the same full commit;
@@ -79,6 +81,48 @@ Enter `NEEDS_OWNER_INPUT` only when approval is explicitly denied, the approval 
 
 If any capability cannot be proven, report the exact unsupported value or missing capability and stop. Capability preflight is performed through Codex/tool inspection; it is not an executable validator or cross-platform test matrix.
 
+## Filesystem mutation canaries and typed outcomes
+
+Tool presence, a permission declaration, or a zero-tool decision never proves filesystem mutation capability. Activation, issue claim, recovery, legacy bootstrap, contract adoption/migration, and mutation benchmarks must exercise the exact task, host, checkout/worktree, permission route, and mutation surface that the run will use. Use an unguessable nonce and a bounded artifact whose path is first proven absent. Record the exact target and initial identity before mutation.
+
+Every file-surface canary performs this sequence:
+
+1. Create one unique artifact containing the nonce, run/canary identity, surface, and first expected content; read it back and verify exact path, identity, bytes, and SHA-256.
+2. Change that same artifact through the mutation route the role will use for real work; read it back and verify the distinct second expected bytes and hash.
+3. Remove only the canary artifact and any canary-created empty parent, then prove the exact path absent and the surrounding state equal to its captured initial identity.
+
+Every canary turn uses the canary-specific context envelope from `thread-prompts.md`, not the implementation/review envelope. Pre-bundle activation uses `none-before-contract` only for the not-yet-created activation contract fields. Legacy bootstrap uses `none-before-legacy-contract` only for those same fields after proving the run has no activation ID, legacy record, contract bundle, prepared record, or committed record and binds the literal owner-authorized bootstrap protocol as `source_contract`. A standalone benchmark uses `none-for-benchmark` only when its exact candidate is bound separately. Activation, between-issue adoption, legacy bootstrap without retained leaf resources, and a benchmark plan may use `none` only for genuinely absent leaf/branch resources. Issue claim creates and verifies its provisional branch/worktree before the same-phase Orchestrator canary; both issue-claim roles bind that existing branch and selected leaf, while each binds its own role-specific checkout/worktree. Every recovery/bootstrap/migration phase binds all retained applicable resources. This prevents a healthy pre-contract, benchmark, or leafless canary from failing on invented implementation context while preserving exact task, profile, runtime, route, target, and Git identities.
+
+Required surfaces are:
+
+- **Advisory state:** the Launcher and then the long-lived Orchestrator each use a new ignored path below the authoritative checkout's `.roundlet/`. The Orchestrator result, not the Launcher result, proves the live advisory route.
+- **Linked Worker worktree:** at activation, a short-lived task with the configured Worker model/effort uses a temporary isolated linked worktree created from exact `origin/main`. After a leaf worktree and persistent Worker are created, that same Worker proves its own exact task/worktree route before initial implementation. During recovery, legacy bootstrap, or active migration, the same retained Worker uses its existing linked worktree. Capture and restore exact `HEAD`, worktree status, index tree, and pre-existing staged/unstaged/untracked identities.
+- **Linked-worktree Git index:** use a second unique, initially absent, unignored canary path. Stage only that path, inspect and verify its exact index path/mode/blob/content, unstage only that path, remove it, and prove the complete index/worktree identities equal their initial values. Never commit the canary.
+
+A canary must not touch an existing path, user work, an issue branch during activation, a GitHub object, or another task's artifact. A short-lived activation Worker is not the persistent issue Worker and its result cannot prove that later task's route. Archive it and normally remove its temporary linked worktree only after read-back and cleanup proof. Run a fresh canary in each newly created persistent Worker before sending implementation. Recovery never replaces an inaccessible retained Worker merely to run a canary.
+
+Classify the control path exactly:
+
+- `DIRECT_EXECUTION_FAILED`: the normal requested operation required no approval, launched, and returned non-zero or an equivalent launched-failure result.
+- `ESCALATION_DENIED`: the host explicitly reports that the requested approval was denied.
+- `ESCALATION_UNAVAILABLE`: the host exposes no supported approval path for the required operation.
+- `ESCALATED_EXECUTION_FAILED`: approval succeeded and the requested operation launched, but execution returned non-zero or an equivalent launched-failure result.
+- `FILESYSTEM_CAPABILITY_UNAVAILABLE`: the exact required create/edit/read-back/identity/restore/cleanup surface is not fully proven. Preserve the more specific approval or execution cause alongside this final capability result.
+
+An initial restricted or sandboxed attempt is evidence only. Request the narrowest host-supported approval for the same exact target and operation, at most `approval_retry_limit` times. Never convert a launched failure into an approval denial, switch to an unproven helper or broader target, prescribe host internals, or retry indefinitely. The contract is independent of operating system, shell, command syntax, and helper executable.
+
+`approval_retry_count` counts actual host-supported approval retries, not the initial normal attempt. Only these control tuples are valid: `(0, NOT_REQUIRED, SUCCEEDED)`, `(0, NOT_REQUIRED, DIRECT_EXECUTION_FAILED)`, `(1, APPROVED, SUCCEEDED)`, `(1, APPROVED, ESCALATED_EXECUTION_FAILED)`, `(1, ESCALATION_DENIED, NOT_LAUNCHED)`, and `(0, ESCALATION_UNAVAILABLE, NOT_LAUNCHED)`. `capability_outcome` is `PASS` only when execution succeeded, every required surface and read-back passed, and cleanup/restoration is `VERIFIED`; every other tuple produces `FILESYSTEM_CAPABILITY_UNAVAILABLE`. Cleanup remains independently truthful even when execution or capability fails.
+
+Any read-back mismatch, index mismatch, stale task/host/route identity, or cleanup/restoration failure yields `FILESYSTEM_CAPABILITY_UNAVAILABLE`. A Launcher/activation-Worker canary failure stops activation before contract creation or persistent run resources. A failure in the required live Orchestrator repeat leaves activation incomplete, attaches no heartbeat, selects no issue, retains truthful bounded evidence and any unclean resource, and removes only artifacts whose cleanup can be proven. A persistent issue Worker failure retains the read-only-selected leaf identity, provisional local branch/worktree/Worker resources, and local or failed-only task-response evidence in `FILESYSTEM_CAPABILITY_BLOCKED`; it creates no GitHub trace or selection, source edit, implementation commit, push, or pull request. Only after a valid aggregate is accepted and read back may the Orchestrator publish the selection trace. Recovery and migration retain all existing tasks, heartbeat, branch, worktree, pull request, issue, SHA, contract, and unique work; pause and enter `FILESYSTEM_CAPABILITY_BLOCKED` before any advisory, Git, or GitHub transition. Do not claim cleanup when an artifact remains.
+
+Store only bounded evidence: phase, role/task ID, task-metadata-verified execution profile in the exact string form `model=<exact-model-id>;reasoning_effort=<exact-effort>`, nonce digest, host/checkout/worktree identity, exact target paths in local recovery state (public traces use only path digests), initial/final state digests, expected/observed content hashes, index entry hash, approval request count, typed approval/execution/capability outcomes, cleanup status, and time. Raw tool output and private permission traces remain local. Before a transition set is accepted, any changed task, host, checkout/worktree, permission route, mutation tool class, or candidate role model/effort invalidates its result and requires a fresh canary. After exact aggregate read-back completes that transition, required archival/removal of a clean short-lived canary task/worktree does not rewrite or invalidate the immutable historical set. That set proves only its named transition and can never authorize a later transition; every later transition builds a fresh applicable set, and continuing live roles must still match their recorded route until that transition completes.
+
+Aggregate every transition's required role results as one canonical `roundlet-filesystem-canary-set/v1` JSON manifest. It contains exactly `schema`, `run_id`, `transition`, and `results`; `transition` is one of the phase values in the role result contract. Each `results` entry contains exactly `phase`, `role`, `role_task`, `execution_profile`, `host_route_fingerprint`, `advisory_surface`, `worktree_surface`, `index_surface`, `cleanup`, and `result_sha256`; `result_sha256` hashes the exact stored UTF-8 `FILESYSTEM_CANARY_RESULT` bytes without BOM or trailing newline. Decode those exact bytes and require the result's `run_id` to equal manifest `run_id`, its `phase` to equal manifest `transition`, its `repository_transition` to be `none`, and every projected phase/role/task/profile/route/surface/cleanup value to equal the entry exactly. Sort entries by the unsigned UTF-8 byte tuple `(phase, role, role_task, execution_profile, host_route_fingerprint)`, reject duplicate tuples, serialize with the contract manifest's RFC 8785 rules, and identify the set by `sha256:<lowercase-hex>` of those canonical bytes. A valid set includes every role/surface required for its transition. Every Launcher `execution_profile` must equal task metadata and the exact expected Launcher model/effort bound in the owner-delivered activation or recovery prompt; its `role_task` must equal the metadata-read actual task ID and the task ID independently read back by the external creator after dispatch. Every Orchestrator/Worker `execution_profile` must equal task metadata plus the effective resolved role configuration, or the candidate resolved role configuration for adoption/migration. The set marks every required surface `PASS`, marks only inapplicable surfaces `NOT_APPLICABLE`, records `cleanup: VERIFIED` for every entry, and verifies every result hash and decoded field. Missing, extra, duplicate, cross-run, cross-phase, stale, failed, overwritten, or projection-mismatched entries invalidate the whole set.
+
+Required sets are: activation = Launcher advisory, short-lived activation Worker worktree/index, and live Orchestrator advisory; issue claim = a fresh live Orchestrator advisory result immediately before selection plus the newly created persistent Worker worktree/index result; recovery = recovery Launcher when used plus the recovered live Orchestrator and, when an active leaf retains a Worker, that same Worker on its worktree/index surfaces; legacy bootstrap or active in-place migration = the same Orchestrator advisory plus, when an active leaf retains a Worker, that same Worker worktree/index; between-issue adoption = same Orchestrator advisory plus a short-lived candidate-configured Worker worktree/index; benchmark = every role and all three surfaces named by the benchmark plan. A required retained Worker that is inaccessible invalidates the set; a phase with no Worker does not invent one. Persist and bind only the aggregate digest where a single evidence reference is required. Store each accepted set at `.roundlet/canary-evidence/accepted/<aggregate-sha256-hex>/manifest.json` with its exact result bytes at `results/<zero-padded-ordinal>-<result-sha256-hex>.txt`; write and read back every result first and the canonical manifest last. Once accepted, those bytes are immutable. When the exact advisory route remains writable and readable, store every failed or incomplete attempt under `.roundlet/canary-evidence/failed/<run-id>/<attempt-id>/` with one bounded `attempt.json` plus any exact bounded result bytes. If the failed surface is the advisory route and that exact route cannot create and read back this store, preserve the exact bounded result only in the existing immutable task response, addressed by task ID, response/event ID, and result digest; do not switch helpers or routes merely to create local evidence. This no-write representation is failed evidence only, can never appear under `accepted`, and cannot authorize a transition. Failed evidence is immutable, is never promoted into `accepted`, and contains no raw tool output. An existing path with conflicting bytes fails closed. `current.md` points to the accepted or failed evidence paths and marks each accepted entry as currently applicable or completed-and-cleaned without changing the canonical manifest; only currently applicable live-role entries participate in route-freshness checks, while completed-and-cleaned entries remain immutable evidence for that transition. Activation, recovery, full reconciliation, migration preparation/commit, and stop must enumerate and verify every referenced manifest/result byte before relying on or removing evidence. External cleanup after a failed result is environment repair only and never changes that result or makes its set valid.
+
+Any future model, effort, permission, or contract change that can affect Orchestrator/Worker mutations requires a bounded live benchmark on a disposable authorized target. It must use real task/tool calls on all three surfaces, cover each typed outcome and successful cleanup, and read back no-transition behavior. A zero-tool synthetic benchmark can supplement but never replace this gate.
+
 ## Advisory local state
 
 Add `.roundlet/` to the authoritative checkout's local `.git/info/exclude`. Never commit the exclusion or local contract snapshots. Keep only:
@@ -86,6 +130,7 @@ Add `.roundlet/` to the authoritative checkout's local `.git/info/exclude`. Neve
 - `.roundlet/lease.json`: stable run ownership, task identities, and immutable activation contract ID; any active-contract value is only a derived mirror;
 - `.roundlet/current.md`: concise human-readable recovery index for current state and a derived effective-contract mirror;
 - `.roundlet/contracts/<contract-id>/`: read-only activation or adoption/migration snapshots containing `SKILL.md`, every required reference, the resolved role configuration, and the canonical manifest;
+- `.roundlet/canary-evidence/accepted/<aggregate-sha256-hex>/` and `.roundlet/canary-evidence/failed/<run-id>/<attempt-id>/`: immutable bounded canary manifests/results and failed-attempt evidence;
 - `.roundlet/legacy-activation.json`: optional one-time immutable activation record for a provably pre-contract run;
 - `.roundlet/migrations/<sequence>-<migration-id>/prepared.json` and `committed.json`: immutable two-phase records from which the effective contract is resolved.
 
@@ -107,7 +152,7 @@ The lease contains no expiry and authorizes no automatic takeover. A representat
 }
 ```
 
-`current.md` records only pointers and reconciliation facts: phase, immutable activation ID, derived effective-contract ID and bundle path, installed-candidate fingerprint, pending adoption/migration identity when present, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, current Supervisor task when one exists, branch, worktree, base and candidate full SHAs, review epoch/round/mode, Supervisor attempt number/profile, last durable GitHub event, blocking condition, last full reconciliation time, and the bounded semantic baseline plus cadence state defined below. Do not treat it as durable history or append a transcript.
+`current.md` records only pointers and reconciliation facts: phase, immutable activation ID, derived effective-contract ID and bundle path, installed-candidate fingerprint, pending adoption/migration identity when present, last verified filesystem-canary evidence-set digest and accepted/failed evidence paths plus every entry's phase/role/task/execution-profile/host/route identity, issue and umbrella URLs/numbers, pull-request URL/number, Worker task, current Supervisor task when one exists, branch, worktree, base and candidate full SHAs, review epoch/round/mode, Supervisor attempt number/profile, last durable GitHub event, blocking condition, last full reconciliation time, and the bounded semantic baseline plus cadence state defined below. Do not treat it as durable history or append a transcript.
 
 Before every tick or mutation, verify the active bundle and reconcile both files against GitHub, Git, Codex tasks, and the heartbeat. Prefer live authoritative evidence. When evidence conflicts, stop with `STATE_RECONCILIATION_REQUIRES_OWNER`; never guess or overwrite the conflict.
 
@@ -134,7 +179,7 @@ The hash-input manifest has exactly this JSON shape and no extra fields:
 
 Canonical JSON follows RFC 8785 JSON Canonicalization Scheme exactly and has no BOM or trailing newline. Floating-point values are forbidden; arrays retain source order except `files`, which uses the UTF-8-byte path order above. Compute the lowercase contract ID as SHA-256 of these bytes. Add top-level `"contract_id":"<64-lowercase-hex>"`, reserialize under the same rules, copy the exact files and stored manifest into `.roundlet/contracts/<contract-id>/`, and read back the complete bundle. An existing directory with that ID but different bytes is `CONTRACT_BUNDLE_CONFLICT`.
 
-Each `prepared.json` records schema, sequence, migration ID, run ID, mode, old/new contract IDs, candidate source/ref, allowlisted-owner authorization event, same Orchestrator task ID, task-metadata model/effort read-back, bundle-manifest hash, and timestamp. Its sibling `committed.json` contains exactly schema, migration ID, SHA-256 of the exact prepared bytes, SHA-256 of the externally verified `CONTRACT_MIGRATION_READY` bytes, SHA-256 of the truthful checkpoint bytes, old/new IDs, and commit timestamp. Both use the manifest's canonical JSON rules and are immutable after read-back.
+Each `prepared.json` is an RFC 8785 canonical JSON object with exactly `schema` (`roundlet-contract-migration-prepared/v1`), positive integer `sequence`, `migration_id`, `run_id`, `mode`, `old_contract_id`, `new_contract_id`, `candidate_source`, `candidate_ref`, `owner_authorization_event`, `orchestrator_task`, `orchestrator_model`, `reasoning_effort`, `model_readback_source`, `filesystem_canary_evidence_set_digest`, `filesystem_canary_evidence_path`, `bundle_manifest_sha256`, and `prepared_at`. Its sibling `committed.json` is an RFC 8785 canonical JSON object with exactly `schema` (`roundlet-contract-migration-committed/v1`), `migration_id`, `prepared_sha256`, `ready_evidence_sha256`, `truthful_checkpoint_sha256`, `old_contract_id`, `new_contract_id`, and `committed_at`. Hash fields use `sha256:<64-lowercase-hex>`; both records have no BOM or trailing newline and are immutable after exact read-back.
 
 For a legacy lease without an activation ID, accept exactly one fully verified `roundlet-legacy-activation/v1` record created from an owner-named immutable activation source/ref whose complete bytes agree with the original task/bootstrap metadata, activation time, installation provenance, durable trace, and role configuration. Current installed bytes alone are never evidence. A partial or conflicting record has no effect; multiple valid records fail closed. Once valid, its old contract ID is the immutable activation ID.
 
@@ -154,7 +199,7 @@ Use two tiers. The observation tier asks only whether the last full reconciliati
 
 After every successful full reconciliation, replace the prior semantic baseline in `current.md` with these bounded facts:
 
-- the verified active contract manifest, a complete bundled-file fingerprint, and the stable lease;
+- the verified active contract manifest, a complete bundled-file fingerprint, the stable lease, and the last valid filesystem-canary evidence-set digest, accepted evidence path, and every entry's task/execution-profile/host/route fingerprint;
 - authoritative `origin/main` full OID, phase, active contract ID and verified bundle fingerprint, separately fingerprinted installed candidate, and last-full-reconciliation time;
 - a repository-wide open-issue graph fingerprint and its open-issue count while IDLE;
 - active leaf, umbrella, dependency, branch, worktree, candidate-SHA, pull-request, check/review, and role-task fingerprints/cursors required by an active phase;
@@ -250,6 +295,7 @@ Explain the selected issue and its dependency/priority basis in the selection tr
 Use these logical phases:
 
 - `IDLE`
+- `FILESYSTEM_CAPABILITY_BLOCKED`
 - `LEGACY_CONTRACT_BOOTSTRAP_REQUIRED`
 - `LEGACY_CONTRACT_BOOTSTRAPPING`
 - `CONTRACT_ADOPTION_REQUIRED`
@@ -284,22 +330,23 @@ Do not start another issue while any phase other than `IDLE` or `STOPPED` retain
 To claim one selected leaf:
 
 1. Recheck that it remains open, eligible, dependency-ready, unignored, and not already claimed by a live Roundlet trace.
-2. Record the selection event on the leaf.
-3. Create a descriptive `codex/` branch from exact `origin/main` and an isolated worktree.
-4. Record the branch, worktree, base SHA, and phase in local state.
-5. Create one Worker task with the configured model and effort.
-6. Send the Worker the initial contract from `thread-prompts.md`.
+2. Provision a descriptive local `codex/` branch from exact `origin/main` and an isolated worktree solely as the provisional substrate required to test the exact persistent-Worker route. Read back the branch, worktree, `HEAD`, status, and index identities before any canary. Record their identities and phase only in local advisory state. This bounded setup exception is not a claim or implementation transition: make no commit, push, GitHub trace, pull request, or source edit.
+3. In the Orchestrator task, run a fresh `ISSUE_CLAIM` advisory canary whose context binds the read-only-selected leaf, the existing provisional branch, and the authoritative checkout as the Orchestrator worktree. Retain its exact verified result bytes. On failure, enter `FILESYSTEM_CAPABILITY_BLOCKED` with the provisional branch/worktree retained before recording selection.
+4. Create the intended persistent Worker task with the configured model and effort, but send no implementation contract.
+5. Send that Worker the `ISSUE_CLAIM` canary contract from `thread-prompts.md`; bind the same selected leaf and provisional branch, but bind the exact provisional linked worktree as this role's worktree. Require worktree/index PASS, cleanup VERIFIED, restored initial identities, and a valid aggregate evidence set with the fresh same-phase Orchestrator result. On failure, enter `FILESYSTEM_CAPABILITY_BLOCKED` with the read-only-selected leaf and provisional resources retained; make no GitHub selection, implementation, commit, push, or pull-request transition.
+6. Only after that exact-task canary, immutable aggregate persistence, and aggregate read-back pass, recheck leaf eligibility and record the selection event on GitHub. The provisional branch/worktree/Worker then become the claimed issue resources.
+7. Send that same Worker the initial implementation contract from `thread-prompts.md`.
 
 Use the same Worker task for every subsequent repair, final repair, and cleanup preflight. The Worker may read GitHub but must never create/edit comments, issues, pull requests, labels, reviews, merges, or branches on GitHub. It modifies the isolated worktree and returns structured handoffs to the Orchestrator.
 
-For every Worker turn, verify and bind the actual `worker_runtime` value from `thread-prompts.md`. On native Windows only, insert the complete native-Windows patch-routing block into each Worker prompt that may edit files. Source patches must stay on the dedicated `apply_patch` tool in the normal sandbox of the assigned writable worktree; a PowerShell, pipeline, here-string/here-document, batch-wrapper, or elevated-shell invocation is not an alternate patch route. If the dedicated route is absent or cannot write the assigned root, keep the exact issue resources and Git state unchanged, classify the result as `FILESYSTEM_CAPABILITY_UNAVAILABLE`, and stop through the active typed filesystem contract or `NEEDS_OWNER_INPUT` fallback defined by the Worker prompt. Do not reinterpret it as an approval denial or retry it through host elevation.
+For every Worker turn, verify and bind the actual `worker_runtime` value from `thread-prompts.md`. On native Windows only, insert the complete native-Windows patch-routing block into each Worker prompt that may edit files. Canary-artifact create/change/delete operations and source patches must stay on the dedicated `apply_patch` tool in the normal sandbox of the assigned writable worktree; a PowerShell, pipeline, here-string/here-document, batch-wrapper, or elevated-shell invocation is not an alternate patch route. If the dedicated route is absent or cannot write the assigned root, keep the exact issue resources and Git state unchanged, preserve truthful canary cleanup evidence, classify the result as `FILESYSTEM_CAPABILITY_UNAVAILABLE`, and stop through the active typed filesystem contract or `NEEDS_OWNER_INPUT` fallback defined by the Worker prompt. Do not reinterpret it as an approval denial or retry it through host elevation.
 
 This conditional route does not apply to WSL or non-Windows Workers and does not alter their normal editing behavior. It also does not prohibit a separately justified, narrowly approved host operation for GitHub, network, or an authorized out-of-root target when that operation is not a source patch.
 
 After a valid initial handoff:
 
 1. Verify the reported before/after SHAs, diff, status, tests, and issue scope independently.
-2. For a native-Windows Worker, verify the handoff used the dedicated normal-sandbox patch route and no shell-wrapped or elevated `apply_patch`; reject and fail closed on missing or contradictory route evidence.
+2. For a native-Windows Worker, verify every applicable canary artifact and source edit used the dedicated normal-sandbox patch route and no shell-wrapped or elevated `apply_patch`; reject and fail closed on missing or contradictory route evidence.
 3. Push the exact candidate commit without force.
 4. Append the Worker handoff to the leaf issue.
 5. Create a draft pull request linking the umbrella with a non-closing reference when present, linking the leaf, and including `Closes #<leaf>` for that active leaf only. Never couple `close`, `closes`, `closed`, `fix`, `fixes`, `fixed`, `resolve`, `resolves`, or `resolved` to an umbrella or any other non-terminal issue number, even inside a negated sentence.
@@ -379,7 +426,7 @@ When any round returns PASS, record terminal state `SUPERVISOR_PASS` and proceed
 - looks for a new comment by an identity in `owner_allowlist`; or
 - observes a direct instruction in the Orchestrator task.
 
-Do not enter this state for an initial sandbox denial or a transient GitHub CLI transport failure. First exhaust the automatic scoped-escalation and bounded recovery contract. A resulting explicit approval denial, unavailable approval mechanism, confirmed authentication rejection from reachable GitHub, or proven unavailable required connectivity is a valid blocking condition.
+Do not enter this state for an initial sandbox denial or a transient GitHub CLI transport failure. First apply the bounded GitHub recovery contract or filesystem-canary approval retry, as applicable. For filesystem capability, preserve the exact `DIRECT_EXECUTION_FAILED`, `ESCALATION_DENIED`, `ESCALATION_UNAVAILABLE`, or `ESCALATED_EXECUTION_FAILED` cause and use `FILESYSTEM_CAPABILITY_UNAVAILABLE` only as the final unproven-surface result. A resulting explicit approval denial, unavailable approval mechanism, confirmed authentication rejection from reachable GitHub, or proven unavailable required connectivity is a valid blocking condition.
 
 An issue-body edit alone never resolves the block. A non-owner comment, reaction, label change, Worker/Supervisor message, or unrelated owner comment never resolves it.
 
@@ -436,7 +483,7 @@ Cleanup remains part of the active issue and must be automatic when authorized.
 4. When `allow_delete_local_branch` is true, delete the local issue branch only after proving its unique work is merged or explicitly authorized for abandonment.
 5. When `allow_delete_remote_branch` is true, delete the exact remote issue branch only after proving its identity and merge/abandon state.
 6. Fetch origin, fast-forward local `main`, and verify the authoritative checkout is clean and `HEAD == main == origin/main`.
-7. Append the cleanup trace, clear the issue-specific pointers, reset the same heartbeat to `active_minutes`, and remove the advisory files, retained contract bundles, legacy activation record, and migration records only when stopping; while continuing, retain the lease and set `current.md` to `IDLE` with new observation counters. Do not stop after a completed issue unless stop-after-current is already recorded.
+7. Append the cleanup trace, clear the issue-specific pointers, reset the same heartbeat to `active_minutes`, and remove the advisory files, retained contract bundles, canary-evidence tree, legacy activation record, and migration records only when stopping; while continuing, retain the lease and set `current.md` to `IDLE` with new observation counters. Do not stop after a completed issue unless stop-after-current is already recorded.
 
 If any cleanup step fails, enter `CLEANUP_BLOCKED`, keep the leaf closed, retain the lease/current evidence, and select no next issue. Never reopen the leaf solely because cleanup failed.
 
@@ -453,7 +500,7 @@ There is no preserve-old-work-while-selecting-next option. Never infer abandon-a
 ## Pause, resume, and stop
 
 - `pause`: finish the current atomic mutation or stop before the next one, record `PAUSED`, pause the heartbeat so it performs no observations, and preserve all state/resources. Resume only in the same Orchestrator after reconciliation and an owner instruction.
-- `stop-after-current`: if active, finish the current issue including cleanup; if idle, stop immediately. Then stop the heartbeat, record `STOPPED`, remove advisory state, retained contract bundles, legacy activation record, and migration records after final reconciliation, and archive the Orchestrator.
+- `stop-after-current`: if active, finish the current issue including cleanup; if idle, stop immediately. Then stop the heartbeat, record `STOPPED`, remove advisory state, retained contract bundles, canary-evidence tree, legacy activation record, and migration records after final reconciliation, and archive the Orchestrator.
 - An immediate destructive stop is not defined. Use the explicit abort choices for active work.
 
 ## Copyable owner commands
@@ -517,7 +564,7 @@ In the existing Orchestrator task, set stop-after-current for the active Roundle
 Reconcile first and record STOP_AFTER_CURRENT. If an issue is active, finish only that
 issue through its normal review, merge gates, leaf closure, and ordered cleanup; select
 no next issue. If the run is idle, stop immediately. At the terminal safe state, stop the
-one heartbeat, record STOPPED, remove the advisory lease/current files, contract bundles, legacy activation record,
+one heartbeat, record STOPPED, remove the advisory lease/current files, contract bundles, canary-evidence tree, legacy activation record,
 and migration records after final reconciliation and read-back, and archive the Orchestrator. Never discard unique work to accelerate
 the stop.
 ```
@@ -544,9 +591,10 @@ If the original Orchestrator or heartbeat is inaccessible, do not use a routine 
 
 ## Recovery
 
-- If an ordinary Orchestrator turn fails but its task and heartbeat remain accessible, the next heartbeat reads the active bundle, reconciles, and resumes idempotently.
+- If an ordinary Orchestrator turn fails but its task and heartbeat remain accessible, the next heartbeat reads the active bundle, reconciles, and resumes idempotently only after current role-specific filesystem canaries remain valid or pass again.
+- Recovery runs the advisory canary through the recovering Orchestrator and, when an active leaf retains a Worker, the worktree/index canaries through that same Worker before any checkpoint, Git, or GitHub transition. It aggregates every applicable same-phase result into the canonical recovery set. A failure retains every resource in `FILESYSTEM_CAPABILITY_BLOCKED`.
 - If the Orchestrator or heartbeat is inaccessible, use the explicit recovery Launcher prompt. A stale-looking file is never enough to replace it.
 - If the persistent Worker is inaccessible, require owner direction before creating a replacement because same-thread context is part of the contract.
 - A failed Supervisor is disposable and may be retried under the bounded attempt rule.
 
-During recovery, verify and read the active contract bundle first, then reconstruct from GitHub trace, exact remote/local Git state, Codex task evidence, and advisory files. Treat installed files only as a migration candidate. Stop on contradictions. Never hide a recovery correction by editing old GitHub comments.
+During recovery, enumerate and verify every referenced accepted/failed canary-evidence manifest and result byte plus any failed no-write task-response identity/digest, verify and read the active contract bundle, then reconstruct from GitHub trace, exact remote/local Git state, Codex task evidence, and advisory files. Treat installed files only as a migration candidate. Stop on contradictions. Never hide a recovery correction by editing old GitHub comments.

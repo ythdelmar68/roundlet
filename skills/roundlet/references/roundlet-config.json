@@ -43,6 +43,10 @@
     ],
     "max_lightweight_ticks_before_full_reconciliation": 12
   },
+  "filesystem_canary": {
+    "required": true,
+    "approval_retry_limit": 1
+  },
   "review": {
     "complete_rounds": 3,
     "max_rounds": 10,
