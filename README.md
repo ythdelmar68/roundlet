@@ -323,6 +323,7 @@ Important distinctions:
 - **Legacy bootstrap** first pins the exact activation-time source/ref for a pre-contract run; it fails closed if the old identity cannot be proven and never treats the current installed copy as evidence. **Between-issue adoption** handles an owner-approved candidate only when fully reconciled `IDLE` has no leaf resources. **In-place migration** handles every other phase and retains all active resources. Both use a same-task model/effort override verified from task metadata and make no repository transition.
 - **Recovery** is only for an inaccessible Orchestrator or heartbeat. It reads the pinned active bundle; a stale-looking local file never authorizes takeover.
 - **GitHub CLI recovery** automatically escalates sandbox-blocked network access and retries bounded transient transport failures without changing Roundlet phase; it never launches browser authentication as an implicit workaround.
+- **Native Windows Worker patch routing** keeps source edits on the dedicated `apply_patch` tool inside the assigned writable worktree's normal sandbox. It forbids PowerShell/pipeline/here-string/batch-wrapper and elevated-shell patch fallbacks because those host-specific helper routes can fail independently of worktree capability. This guard applies only to native Windows, not WSL or other platforms, and it does not prohibit narrowly approved elevation for genuinely host-bound GitHub, network, or out-of-root operations.
 
 ## Understand safety boundaries
 
@@ -333,6 +334,7 @@ Important distinctions:
 - Only the Orchestrator mutates GitHub. Workers and Supervisors return proposals for verification.
 - Lightweight metadata is only an unchanged proof. Any changed, incomplete, overflowed, action-ready, or periodically due observation triggers full reconciliation in the same heartbeat before reasoning or mutation.
 - A GitHub CLI failure inside a network-restricted sandbox is not proof that its credential is invalid. Roundlet must reach GitHub before making that classification.
+- On native Windows, failure of a shell-wrapped or elevated patch helper is not proof that the assigned worktree is unwritable or that approval was denied. Workers must use the dedicated normal-sandbox patch route and fail closed as `FILESYSTEM_CAPABILITY_UNAVAILABLE` instead of retrying source edits through elevation. WSL and non-Windows Workers retain their existing platform-appropriate edit routes.
 - Every Worker and Supervisor turn is bound to exact live context and full commit SHAs.
 - Roundlet never rebases, force-pushes, bypasses protection, destroys unique work, or closes an umbrella.
 - A pull request may use a closing keyword only for its one active leaf. Use plain links for umbrellas and every other issue.
