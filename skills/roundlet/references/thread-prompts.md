@@ -372,9 +372,15 @@ configured approval_retry_limit>
 
 Prove each target path absent. Create and change the unique worktree artifact, read back
 exact identity/content, then remove it. For the separate unique unignored index artifact,
-stage only that path, verify its exact index mode/blob/content, unstage only it, and remove
-it. Prove final HEAD/status/index and all pre-existing path identities equal the initial
-values. Make no commit, branch, GitHub, source, user-work, or unrelated-index mutation.
+resolve the exact index path and capture its complete raw bytes before any operation that
+may lock or write it; require their SHA-256 to equal `initial_index_sha256`. Stage only
+the canary path, verify its exact index mode/blob/content, unstage only it, and remove it.
+Restore the exact captured bytes to the same index path through the bounded Git-index
+route, retain no backup artifact, and prove the final raw index length and SHA-256 still
+equal the preimage after all remaining HEAD/status/tree/entry reads. A semantic identity
+match does not substitute for raw index equality. Prove all pre-existing path identities
+equal the initial values. Make no commit, branch, GitHub, source, user-work, or unrelated-
+index mutation.
 Use at most the one narrow approval retry and preserve typed outcomes exactly.
 
 Return the exact FILESYSTEM_CANARY_RESULT structure. If cleanup is not verified, report
