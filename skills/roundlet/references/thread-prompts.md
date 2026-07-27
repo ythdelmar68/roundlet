@@ -425,7 +425,10 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   bytes, populates every named assignment exactly once from the already bound canary values,
   and supplies the three complete preflight assignment lines, ten complete compound
   assignment lines, and SHA-256 of each fully populated body in this prompt. Independently
-  re-extract and populate by replacing the same named assignment lines exactly once, then
+  extract each body from the first byte after its opening-fence line terminator up to but
+  excluding the CRLF or LF that introduces its closing fence. Preserve every internal byte
+  and internal line terminator without normalization. Re-populate by replacing the same
+  named assignment lines exactly once, then
   compare the resulting lines and body digests to those creator-supplied records. Never
   derive an expected line or digest from this Worker's own already populated body.
   Independently require the complete absolute path to end at
@@ -457,7 +460,10 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   restores the same raw bytes again after those reads, then verifies final raw
   length/SHA-256 and no index.lock using only raw filesystem read-back.
 - A path/preflight, assignment-literal read-back, or template parse failure occurs before canary mutation: create no
-  artifact, spend no approval, and return FILESYSTEM_CAPABILITY_UNAVAILABLE. Never rewrite,
+  artifact, spend no approval, and return FILESYSTEM_CAPABILITY_UNAVAILABLE. Without a Git
+  command, use raw filesystem reads to prove both files absent, the raw index length/SHA-256
+  unchanged, and index.lock absent; report cleanup VERIFIED when that exact proof passes.
+  Never rewrite,
   wrap, split, or substitute the template after its successful parse.
 - Every Git or subprocess non-zero exit must terminate that compound operation non-zero;
   later output, formatting, or object construction must not mask it. The operation is one
@@ -538,6 +544,7 @@ native_windows_operator_guide_sha256 from the verified installed candidate or ef
 pinned-bundle manifest. The external creator must also insert the three complete preflight
 assignment lines, ten complete compound assignment lines, and SHA-256 of each fully populated
 body, all derived before dispatch from those exact guide bytes and the bound canary values.
+Both sides use the native-Windows conditional's exact opening/closing-fence byte-boundary rule.
 The Worker independently reconstructs and compares them; it must not self-derive expected
 records from its own populated body. Require exact path/hash/body read-back before any mutation
 or approval. Do not insert or require these fields for WSL, NON_WINDOWS, or an ordinary
