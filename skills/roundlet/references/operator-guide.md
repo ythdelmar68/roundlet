@@ -110,7 +110,7 @@ Every file-surface canary performs this sequence:
 
 1. Create one unique artifact containing the nonce, run/canary identity, surface, and first expected content; read it back and verify exact path, identity, bytes, and SHA-256.
 2. Change that same artifact through the mutation route the role will use for real work; read it back and verify the distinct second expected bytes and hash.
-3. Remove only the canary artifact and any canary-created empty parent, then prove the exact path absent and the surrounding state equal to its captured initial identity. A native-Windows Worker uses the additional empty-parent finalization contract in the native-Windows subsection below; no other runtime receives that exception.
+3. Remove only the canary artifact and any canary-created empty parent, then prove the exact path absent and the surrounding state equal to its captured initial identity. A Launcher first satisfies the authoritative writable-workspace binding below. A native-Windows Worker uses the additional empty-parent finalization contract in the native-Windows subsection below; that exception never applies to a Launcher or another runtime.
 
 Every canary turn uses the canary-specific context envelope from `thread-prompts.md`, not the implementation/review envelope. Pre-bundle activation uses `none-before-contract` only for the not-yet-created activation contract fields. Legacy bootstrap uses `none-before-legacy-contract` only for those same fields after proving the run has no activation ID, legacy record, contract bundle, prepared record, or committed record and binds the literal owner-authorized bootstrap protocol as `source_contract`. A standalone benchmark uses `none-for-benchmark` only when its exact candidate is bound separately. Activation, between-issue adoption, legacy bootstrap without retained leaf resources, and a benchmark plan may use `none` only for genuinely absent leaf/branch resources. Both issue-claim roles bind the existing branch and selected leaf, while each binds its own role-specific checkout/worktree. Every recovery/bootstrap/migration phase binds all retained applicable resources. This prevents a healthy pre-contract, benchmark, or leafless canary from failing on invented implementation context while preserving exact task, profile, runtime, route, target, and Git identities.
 
@@ -122,6 +122,14 @@ Required surfaces are:
 
 A canary must not touch an existing path, user work, an issue branch during activation, a GitHub object, or another task's artifact. A short-lived activation Worker is not the persistent issue Worker and its result cannot prove that later task's route. Archive it and normally remove its temporary linked worktree only after read-back and cleanup proof. Run a fresh canary in each newly created persistent Worker before sending implementation. Recovery never replaces an inaccessible retained Worker merely to run a canary.
 
+### Launcher authoritative writable workspace
+
+This subsection applies to every activation and recovery Launcher on every host. It is a platform-neutral route invariant, not an extension of the native-Windows Worker exception below.
+
+Before the metadata-only handshake, the external creator creates the Launcher directly against the exact authoritative checkout as its canonical current directory and normal writable local-project workspace. Creator-side task read-back must prove the task ID, canonical CWD, workspace kind, and writable checkout equality before the populated turn. A projectless task, unrelated project, read-only route, or removable linked worktree is invalid and stops before run reservation or mutation. Scoped approval cannot convert that invalid topology into a valid Launcher.
+
+The Launcher advisory canary creates, changes, and deletes its file through direct `apply_patch` in that normal writable checkout sandbox. It removes a canary-created empty parent through the ordinary exact nonrecursive, non-force directory route and proves the complete surrounding state restored. An out-of-root restriction is `CONTEXT_MISMATCH`, not an approval attempt. A genuine initial restriction after correct binding may use only the configured typed retry. Do not use the native-Windows Worker two-turn empty-parent protocol for a Launcher. Recovery Launchers use the same binding before reading or mutating advisory state.
+
 ### Native Windows Worker task anchor
 
 This subsection applies only when `worker_runtime` is `NATIVE_WINDOWS`. It does not alter WSL, Linux, macOS, or any other host/runtime topology.
@@ -130,7 +138,7 @@ Create every new native-Windows Worker in a dedicated host-owned task anchor. Bi
 
 #### Native Windows canary empty-parent finalization
 
-This exception applies only to a canary running with `worker_runtime: NATIVE_WINDOWS`. It does not apply to WSL, Linux, macOS, any other host/runtime, an implementation or source-file edit, advisory run state, a task anchor, a linked-worktree root, or post-archive worktree cleanup.
+This exception applies only to a Worker canary running with `worker_runtime: NATIVE_WINDOWS`. It does not apply to a Launcher, WSL, Linux, macOS, any other host/runtime, an implementation or source-file edit, advisory run state, a task anchor, a linked-worktree root, or post-archive worktree cleanup.
 
 The Worker must still create, change, and delete every canary file through the dedicated `apply_patch` tool in its normal writable-worktree sandbox. If `apply_patch` removes every canary file but leaves the canary-created parent directory, use this two-turn protocol:
 
