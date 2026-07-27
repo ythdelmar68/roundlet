@@ -148,7 +148,58 @@ After the canary file exists through direct normal-sandbox `apply_patch`, an ini
 2. Within that same approved operation, run the required initial locking identity reads, stage only the canary, verify its exact index path/mode/blob/content, restore the captured raw bytes to remove only that staged entry, and run every required final HEAD/status/tree/pre-existing-entry read. Every Git or subprocess non-zero exit terminates the compound operation non-zero; later formatting or output must not mask it.
 3. After all Git identity reads, restore the same captured bytes once more, then perform only raw filesystem read-back: require the final index length/SHA-256 to equal the preimage and require `index.lock` absent. Retain no backup or helper artifact. Subsequent direct-`apply_patch` deletion of the two direct-child files must leave no canary-created parent and requires normal read-back of both file absences plus clean status.
 
-Use the following PowerShell body verbatim for that one approved operation. This is a native-Windows Worker template, not a cross-platform command. Because this route consumes the canary's sole approval, choose both canary paths as unique direct-child files of the linked-worktree root; neither path may contain `/`, `\`, whitespace, a single quote, or a newline, and this mode creates no canary parent directory. Before populating or parsing the body and before creating either file, derive both exact absolute files, prove them absent with literal-path filesystem reads, prove each immediate parent is exactly the pre-existing ordinary non-reparse linked-worktree root, and record one immutable initial-absence/root-identity digest. The nested-parent/two-turn finalization below is not used in this mode. Then populate only the ten placeholder assignment values at the top and parse the fully populated body without executing it. Do not rewrite its functions, control flow, Git calls, restoration order, or output. Its strict Git wrapper temporarily permits native stderr capture because Windows Git may emit a warning while returning exit 0, then restores stop-on-error behavior and judges the subprocess only by the captured exit code; a real non-zero still throws. A path/preflight or parse failure occurs before canary mutation and is `FILESYSTEM_CAPABILITY_UNAVAILABLE`; never consume the approval or create an artifact after it. After the direct-`apply_patch` files and exact content hashes are verified, submit that same parsed body as the single approved shell operation:
+This native-Windows out-of-root mode has a separate, read-only preflight template. It is not a cross-platform command and makes no Git call. Populate only its three assignments, reject a single quote or newline in the absolute worktree and reject `/`, `\`, whitespace, a single quote, or a newline in either direct-child filename. Parse the fully populated body, then execute it unchanged in the normal sandbox before creating either file. Do not substitute a Worker-authored shell preflight. Require its `PASS`, exact absolute paths, canonical worktree root, and `initial_absence_root_identity_sha256` output:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$Worktree = '<absolute-linked-worktree>'
+$WorktreeCanaryPath = '<direct-child-worktree-canary-filename>'
+$IndexCanaryPath = '<direct-child-index-canary-filename>'
+
+function Get-TextSha256 {
+    param([string]$Text)
+    $Hasher = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($Hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)))).Replace('-', '') }
+    finally { $Hasher.Dispose() }
+}
+
+if ($Worktree.Contains("'") -or $Worktree.Contains("`r") -or $Worktree.Contains("`n")) { throw 'worktree path contains forbidden literal' }
+if ([string]::IsNullOrWhiteSpace($WorktreeCanaryPath) -or [string]::IsNullOrWhiteSpace($IndexCanaryPath)) { throw 'canary filename is empty' }
+if ($WorktreeCanaryPath -match '[\\/''\s]' -or $IndexCanaryPath -match '[\\/''\s]') { throw 'canary path is not a direct-child filename' }
+if ($WorktreeCanaryPath -eq $IndexCanaryPath) { throw 'canary filenames alias' }
+
+$RootItem = Get-Item -LiteralPath ([IO.Path]::GetFullPath($Worktree)) -Force -ErrorAction Stop
+if (-not $RootItem.PSIsContainer) { throw 'worktree root is not a directory' }
+if (($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'worktree root is a reparse point' }
+$TrimChars = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+$CanonicalRoot = [IO.Path]::GetFullPath($RootItem.FullName).TrimEnd($TrimChars)
+$WorktreeCanaryAbsolute = [IO.Path]::GetFullPath([IO.Path]::Combine($CanonicalRoot, $WorktreeCanaryPath))
+$IndexCanaryAbsolute = [IO.Path]::GetFullPath([IO.Path]::Combine($CanonicalRoot, $IndexCanaryPath))
+$WorktreeCanaryParent = [IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($WorktreeCanaryAbsolute)).TrimEnd($TrimChars)
+$IndexCanaryParent = [IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($IndexCanaryAbsolute)).TrimEnd($TrimChars)
+if (-not [string]::Equals($WorktreeCanaryParent, $CanonicalRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'worktree canary parent mismatch' }
+if (-not [string]::Equals($IndexCanaryParent, $CanonicalRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'index canary parent mismatch' }
+if (Test-Path -LiteralPath $WorktreeCanaryAbsolute) { throw 'worktree canary pre-exists' }
+if (Test-Path -LiteralPath $IndexCanaryAbsolute) { throw 'index canary pre-exists' }
+
+$IdentityRecord = 'runtime=NATIVE_WINDOWS' + "`n" +
+    'root=' + $CanonicalRoot + "`n" +
+    'root_attributes=' + ([int]$RootItem.Attributes) + "`n" +
+    'worktree_canary=' + $WorktreeCanaryAbsolute + "`n" +
+    'worktree_canary_absent=True' + "`n" +
+    'index_canary=' + $IndexCanaryAbsolute + "`n" +
+    'index_canary_absent=True'
+$Result = [ordered]@{
+    outcome = 'PASS'
+    canonical_worktree_root = $CanonicalRoot
+    worktree_canary = $WorktreeCanaryAbsolute
+    index_canary = $IndexCanaryAbsolute
+    initial_absence_root_identity_sha256 = Get-TextSha256 $IdentityRecord
+}
+ConvertTo-Json -InputObject $Result -Compress
+```
+
+Use the next PowerShell body verbatim for the one approved compound operation. This is also a native-Windows Worker template, not a cross-platform command. Because this route consumes the canary's sole approval, choose both canary paths as the same unique direct-child files verified by the preflight; this mode creates no canary parent directory. The nested-parent/two-turn finalization below is not used in this mode. Populate only the ten placeholder assignment values at the top and parse the fully populated body without executing it. Do not rewrite its functions, control flow, Git calls, restoration order, or output. Its strict Git wrapper temporarily permits native stderr capture because Windows Git may emit a warning while returning exit 0, then restores stop-on-error behavior and judges the subprocess only by the captured exit code; a real non-zero still throws. A path/preflight or parse failure occurs before canary mutation and is `FILESYSTEM_CAPABILITY_UNAVAILABLE`; never consume the approval or create an artifact after it. After the direct-`apply_patch` files and exact content hashes are verified, submit that same parsed body as the single approved shell operation:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
