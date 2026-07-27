@@ -421,23 +421,32 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   inside the verified installed candidate before an activation contract exists, otherwise
   inside the verified effective pinned bundle. Bind native_windows_operator_guide_sha256
   to that exact file's SHA-256 from the verified candidate tree or bundle manifest.
+  The external creator, not this Worker, extracts both fixed bodies from those verified
+  bytes, populates every named assignment exactly once from the already bound canary values,
+  and supplies the three complete preflight assignment lines, ten complete compound
+  assignment lines, and SHA-256 of each fully populated body in this prompt. Independently
+  re-extract and populate by replacing the same named assignment lines exactly once, then
+  compare the resulting lines and body digests to those creator-supplied records. Never
+  derive an expected line or digest from this Worker's own already populated body.
   Independently require the complete absolute path to end at
   `references/operator-guide.md`, read back the exact path/bytes/hash, and extract both
   fixed bodies only from those bytes. A missing file, root-level `operator-guide.md`
-  guess, alternate copy, path/hash mismatch, or ambiguous body extraction fails before
+  guess, alternate copy, path/hash mismatch, ambiguous body extraction, missing
+  creator-supplied canonical record, assignment mismatch, or body-digest mismatch fails before
   artifact creation or approval as FILESYSTEM_CAPABILITY_UNAVAILABLE. Choose both canaries as
   unique direct-child filenames of worktree: no slash, backslash, whitespace, single quote,
   newline, or canary-created parent is permitted. Encode every exact path assignment for both
   Windows-only bodies as validated standard padded Base64 of its UTF-8 bytes; never insert a
   raw path into a PowerShell literal. Before any artifact, populate only the three encoded
   assignments in the operator guide's read-only preflight body, read back exactly three
-  complete canonical single-literal assignment lines with no placeholder or expression, parse it,
+  complete canonical single-literal assignment lines and the full body digest against the
+  creator-supplied records with no placeholder or expression, parse it,
   and execute it unchanged in the normal sandbox. Require its PASS result to prove both exact
   absolute files absent, each immediate parent exactly the pre-existing ordinary non-reparse
   worktree root, and one immutable initial-absence/root-identity digest. Do not substitute an
   ad hoc shell preflight. Then populate only the separate compound body's ten validated
   assignment values. Before canary creation, read back exactly ten complete lines byte-for-byte
-  against the canonical bound assignments; reject every placeholder, concatenation, interpolation,
+  and the full body digest against the creator-supplied canonical records; reject every placeholder, concatenation, interpolation,
   variable reference, method call, or other right-hand-side expression; parse the fully populated
   body; and bind its SHA-256. After the direct patch files exist, require the retained bytes to
   match that digest and submit those exact same parsed bytes as the one compound operation
@@ -479,7 +488,8 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
 - This guard does not prohibit the narrowest approved elevation for a genuinely host-bound
   GitHub, network, or out-of-root operation that is not a source-file patch.
 When worker_runtime is WSL or NON_WINDOWS, this conditional block imposes no additional
-topology, patch-routing, guide-path/fixed-body extraction, Git-index-approval, or
+topology, patch-routing, guide-path/fixed-body extraction, canonical-assignment/body-digest,
+Git-index-approval, or
 empty-parent-finalization rule; follow the normal tool, sandbox, and repository contracts.
 ```
 
@@ -525,8 +535,13 @@ configured approval_retry_limit>
 For the NATIVE_WINDOWS out-of-root index route only, also insert the complete absolute
 native_windows_operator_guide path ending in `references/operator-guide.md` and its exact
 native_windows_operator_guide_sha256 from the verified installed candidate or effective
-pinned-bundle manifest. Require exact path/hash/body read-back before any mutation or approval.
-Do not insert or require these fields for WSL, NON_WINDOWS, or an ordinary writable-index route.
+pinned-bundle manifest. The external creator must also insert the three complete preflight
+assignment lines, ten complete compound assignment lines, and SHA-256 of each fully populated
+body, all derived before dispatch from those exact guide bytes and the bound canary values.
+The Worker independently reconstructs and compares them; it must not self-derive expected
+records from its own populated body. Require exact path/hash/body read-back before any mutation
+or approval. Do not insert or require these fields for WSL, NON_WINDOWS, or an ordinary
+writable-index route.
 
 Prove each target path absent. Create and change the unique worktree artifact, read back
 exact identity/content, then remove it. For the separate unique unignored index artifact,
