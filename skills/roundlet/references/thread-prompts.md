@@ -473,7 +473,12 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   through a bounded short command that reads the file. A command-line-embedded body, another
   path, another helper, or a parse that does not read those exact file bytes is invalid.
   After the direct patch canary files exist, re-read the transport and require the retained
-  bytes to match that digest, then submit that exact file as the one compound operation
+  bytes to match that digest, then submit exactly
+  powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File
+  <native_windows_compound_transport> as the one compound operation, with the verified
+  absolute transport path as the final and only script argument. Never invoke the .ps1
+  directly, use -Command, change persistent or session policy, or substitute another
+  executable/path. This process-scoped bypass is native-Windows-only. The operation remains
   bound to the exact worktree, resolved index, and unique canary paths. It captures the complete raw index bytes
   in memory before its first potentially locking command, creates no backup artifact, performs
   initial locking identity reads, stages and verifies only the canary entry/mode/blob/content,
@@ -578,6 +583,10 @@ only that structural terminal LF before emitting one patch record per logical li
 extra terminal empty record. Keep these transport
 records distinct from the source-body length/digest. The transport is invalid for every other runtime
 or writable-index route.
+Also bind the exact native-Windows execution argv
+`powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <native_windows_compound_transport>`;
+the verified absolute transport path is its final and only script argument. Do not apply this
+process-scoped bypass to another runtime or operation.
 Both sides use the native-Windows conditional's exact opening/closing-fence byte-boundary rule.
 The Worker independently reconstructs and compares them; it must not self-derive expected
 records from its own populated body. Require exact path/hash/body read-back before any mutation
