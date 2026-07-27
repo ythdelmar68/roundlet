@@ -416,7 +416,16 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   locking identity command in the normal sandbox or spend the configured retry before the
   actual canary sequence.
 - If that exact out-of-root route is initially restricted, use the sole configured approval
-  retry for the operator guide's native-Windows PowerShell body. Choose both canaries as
+  retry for the operator guide's native-Windows PowerShell body. Bind
+  native_windows_operator_guide to the exact absolute `references/operator-guide.md`
+  inside the verified installed candidate before an activation contract exists, otherwise
+  inside the verified effective pinned bundle. Bind native_windows_operator_guide_sha256
+  to that exact file's SHA-256 from the verified candidate tree or bundle manifest.
+  Independently require the complete absolute path to end at
+  `references/operator-guide.md`, read back the exact path/bytes/hash, and extract both
+  fixed bodies only from those bytes. A missing file, root-level `operator-guide.md`
+  guess, alternate copy, path/hash mismatch, or ambiguous body extraction fails before
+  artifact creation or approval as FILESYSTEM_CAPABILITY_UNAVAILABLE. Choose both canaries as
   unique direct-child filenames of worktree: no slash, backslash, whitespace, single quote,
   newline, or canary-created parent is permitted. Encode every exact path assignment for both
   Windows-only bodies as validated standard padded Base64 of its UTF-8 bytes; never insert a
@@ -470,8 +479,8 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
 - This guard does not prohibit the narrowest approved elevation for a genuinely host-bound
   GitHub, network, or out-of-root operation that is not a source-file patch.
 When worker_runtime is WSL or NON_WINDOWS, this conditional block imposes no additional
-topology, patch-routing, Git-index-approval, or empty-parent-finalization rule; follow the
-normal tool, sandbox, and repository contracts.
+topology, patch-routing, guide-path/fixed-body extraction, Git-index-approval, or
+empty-parent-finalization rule; follow the normal tool, sandbox, and repository contracts.
 ```
 
 The Orchestrator rejects a native-Windows Worker canary or implementation handoff that omitted direct-route evidence or used an elevated or shell-wrapped `apply_patch` route, even if the canary result or resulting diff is otherwise correct. Cleanup preflight remains read-only and does not need an edit route.
@@ -512,6 +521,12 @@ Perform only the Roundlet filesystem canary for the supplied exact worktree.
 <insert target/run, exact task/worktree, phase, role, nonce, initial HEAD/status/index identities,
 expected first/second content hashes, exact advisory/worktree/index applicability, and
 configured approval_retry_limit>
+
+For the NATIVE_WINDOWS out-of-root index route only, also insert the complete absolute
+native_windows_operator_guide path ending in `references/operator-guide.md` and its exact
+native_windows_operator_guide_sha256 from the verified installed candidate or effective
+pinned-bundle manifest. Require exact path/hash/body read-back before any mutation or approval.
+Do not insert or require these fields for WSL, NON_WINDOWS, or an ordinary writable-index route.
 
 Prove each target path absent. Create and change the unique worktree artifact, read back
 exact identity/content, then remove it. For the separate unique unignored index artifact,
