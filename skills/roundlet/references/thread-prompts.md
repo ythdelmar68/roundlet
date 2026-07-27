@@ -421,19 +421,24 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   newline, or canary-created parent is permitted. Encode every exact path assignment for both
   Windows-only bodies as validated standard padded Base64 of its UTF-8 bytes; never insert a
   raw path into a PowerShell literal. Before any artifact, populate only the three encoded
-  assignments in the operator guide's read-only preflight body, parse it,
+  assignments in the operator guide's read-only preflight body, read back exactly three
+  complete canonical single-literal assignment lines with no placeholder or expression, parse it,
   and execute it unchanged in the normal sandbox. Require its PASS result to prove both exact
   absolute files absent, each immediate parent exactly the pre-existing ordinary non-reparse
   worktree root, and one immutable initial-absence/root-identity digest. Do not substitute an
   ad hoc shell preflight. Then populate only the separate compound body's ten validated
-  assignment values, parse the fully populated body, and submit that same parsed body unchanged as the one compound operation
+  assignment values. Before canary creation, read back exactly ten complete lines byte-for-byte
+  against the canonical bound assignments; reject every placeholder, concatenation, interpolation,
+  variable reference, method call, or other right-hand-side expression; parse the fully populated
+  body; and bind its SHA-256. After the direct patch files exist, require the retained bytes to
+  match that digest and submit those exact same parsed bytes as the one compound operation
   bound to the exact worktree, resolved index, and unique canary paths. It captures the complete raw index bytes
   in memory before its first potentially locking command, creates no backup artifact, performs
   initial locking identity reads, stages and verifies only the canary entry/mode/blob/content,
   restores the raw preimage, performs every final HEAD/status/tree/pre-existing-entry read,
   restores the same raw bytes again after those reads, then verifies final raw
   length/SHA-256 and no index.lock using only raw filesystem read-back.
-- A path/preflight or template parse failure occurs before canary mutation: create no
+- A path/preflight, assignment-literal read-back, or template parse failure occurs before canary mutation: create no
   artifact, spend no approval, and return FILESYSTEM_CAPABILITY_UNAVAILABLE. Never rewrite,
   wrap, split, or substitute the template after its successful parse.
 - Every Git or subprocess non-zero exit must terminate that compound operation non-zero;
