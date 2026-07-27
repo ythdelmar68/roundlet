@@ -5,6 +5,8 @@ These are prompt contracts, not hidden role knowledge. The Launcher and Orchestr
 ## Contents
 
 - [Shared context envelope](#shared-context-envelope)
+- [Immutable task-metadata handshake](#immutable-task-metadata-handshake)
+- [Populated role-turn metadata gate](#populated-role-turn-metadata-gate)
 - [Filesystem canary context envelope](#filesystem-canary-context-envelope)
 - [GitHub access recovery](#github-access-recovery)
 - [Filesystem mutation canary result](#filesystem-mutation-canary-result)
@@ -25,6 +27,8 @@ ROUNDLET CONTEXT
 target_repository: <owner/repository>
 authoritative_checkout: <absolute-path>
 run_id: <stable-run-id>
+role_task: <metadata-read-exact-task-id>
+execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>
 active_contract_id: <sha256-derived-id>
 contract_bundle: <absolute-bundle-path>
 filesystem_canary_evidence_set: <sha256-and-ordered-entry-identities-or-none>
@@ -48,6 +52,50 @@ prior_trace_urls: <ordered-urls-or-none>
 ```
 
 The Orchestrator must validate this envelope against live evidence before sending it. A role must stop and report `CONTEXT_MISMATCH` if the envelope contradicts live GitHub, Git, repository instructions, or filesystem state.
+
+## Immutable task-metadata handshake
+
+Every new Launcher, Orchestrator, Worker, or Supervisor task receives this as its first and only prompt before a populated role or canary prompt:
+
+```text
+Perform only the Roundlet immutable task-metadata handshake. Make no filesystem, Git,
+GitHub, heartbeat, contract, issue, pull-request, role, canary, implementation, review,
+or cleanup mutation.
+
+Resolve the complete deferred tool catalog before deciding whether task metadata is
+available. Locate and invoke the immutable metadata route for this exact turn. Do not use
+self-reported profile text. Return exactly:
+TASK_METADATA_READY
+role: <LAUNCHER|ORCHESTRATOR|WORKER|SUPERVISOR>
+role_task: <immutable-thread-or-session-id>
+metadata_turn: <immutable-turn-id>
+execution_profile: model=<immutable-model>;reasoning_effort=<immutable-effort>
+metadata_route: <exact-discovered-route>
+creator_readback_required: true
+```
+
+Resolve `role_task` only when top-level `threadId` and every present immutable `thread_id` and `session_id` field are mutually equal. Return the route's immutable `turn_id` only as `metadata_turn`; it never satisfies `role_task`. The external creator independently reads an immutable creator-side task/turn record and verifies task ID, turn ID, and profile against the requested values. Only then may it send the task's first populated turn.
+
+Before dispatching every populated turn after that handshake, the creator must independently reread the stable task record and require the same `role_task` and configured profile, then put both exact values in the applicable context envelope. At the start of the populated turn, before mutation or review, the role must invoke the immutable metadata route, require exact task/profile equality with that envelope, and bind the route's new exact `turn_id` separately as `metadata_turn`. After the role returns, the creator must independently read back that exact populated task/turn record and require the same task ID, turn ID, model, and effort before accepting the result, publishing its trace, or allowing any downstream transition. A populated turn does not reuse the metadata-only turn ID. Missing eager exposure is inconclusive; exhaustive discovery failure, invocation failure, task/session-field conflict, task/turn substitution, pre-dispatch stable-task read-back failure, post-return exact-turn read-back failure, or any mismatch stops before action or rejects the result before transition.
+
+## Populated role-turn metadata gate
+
+Insert this gate immediately after the applicable context envelope in every populated Worker or Supervisor prompt:
+
+```text
+ROUNDLET POPULATED TURN METADATA GATE
+Before this turn was dispatched, the external creator independently reread the stable task
+record and required it to equal the populated role_task and execution_profile. Before any
+filesystem, Git, GitHub, implementation, cleanup, or review action, exhaust deferred tool
+discovery, invoke the immutable metadata route for this exact turn, require mutually equal
+task/session fields to equal role_task, require model and reasoning effort to equal
+execution_profile, and bind only the new turn_id as metadata_turn. On missing or conflicting
+identity, unavailable route, task/turn substitution, or profile mismatch, make no mutation
+or review and return CONTEXT_MISMATCH with bounded evidence. Include role_task,
+metadata_turn, and execution_profile in the structured result. The external creator must
+independently read back this exact populated turn after return and reject the result before
+publication or downstream transition on any mismatch.
+```
 
 ## Filesystem canary context envelope
 
@@ -77,7 +125,7 @@ target_paths: <exact-canary-paths>
 approval_retry_limit: <configured-limit>
 ```
 
-Validate every field against live task, Git, and filesystem evidence. `none-before-contract` is valid only during pre-bundle `ACTIVATION`. `none-before-legacy-contract` is valid only during `LEGACY_BOOTSTRAP`, when the owner-authorized literal bootstrap protocol is bound in `source_contract` and live reconciliation proves that no activation ID, legacy record, contract bundle, prepared record, or committed record exists. `none-for-benchmark` is valid only for a standalone `BENCHMARK` bound to an exact candidate in `source_contract`. `active_leaf: none` and `branch: none` are valid only when that resource is genuinely absent in the named phase, including activation, between-issue adoption, legacy bootstrap without retained leaf resources, and a benchmark whose plan does not provision that resource.
+Before validating any other field or mutating, repeat the immutable task-metadata read on this exact populated turn and require equality with the creator-verified `role_task` and `execution_profile`. Then validate every field against live task, Git, and filesystem evidence. `none-before-contract` is valid only during pre-bundle `ACTIVATION`. `none-before-legacy-contract` is valid only during `LEGACY_BOOTSTRAP`, when the owner-authorized literal bootstrap protocol is bound in `source_contract` and live reconciliation proves that no activation ID, legacy record, contract bundle, prepared record, or committed record exists. `none-for-benchmark` is valid only for a standalone `BENCHMARK` bound to an exact candidate in `source_contract`. `active_leaf: none` and `branch: none` are valid only when that resource is genuinely absent in the named phase, including activation, between-issue adoption, legacy bootstrap without retained leaf resources, and a benchmark whose plan does not provision that resource.
 
 For `ISSUE_CLAIM`, create and live-verify the provisional local branch and linked worktree before either same-phase role canary. Both role contexts bind the selected leaf and that existing provisional branch; the Orchestrator context names the authoritative checkout as its `worktree`, while the persistent Worker context names the provisional linked worktree. Recovery, bootstrap, and migration name every retained applicable leaf, branch, and role-specific worktree. Review epoch/round/mode and pull-request fields are intentionally absent because a filesystem canary is not implementation or review. A role must return `CONTEXT_MISMATCH` for any other missing, invented, or contradictory value.
 
@@ -97,6 +145,7 @@ phase: <ACTIVATION|ISSUE_CLAIM|RECOVERY|LEGACY_BOOTSTRAP|BETWEEN_ISSUES_ADOPTION
 role: <LAUNCHER|ORCHESTRATOR|WORKER>
 run_id: <stable-run-id-or-benchmark-nonce>
 role_task: <exact-task-id>
+metadata_turn: <metadata-read-exact-populated-turn-id>
 execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>
 host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>
 target_paths: <exact-local-canary-paths-or-none>
@@ -117,7 +166,7 @@ The Orchestrator must hash and aggregate the exact result bytes into the operato
 
 ## Long-lived Orchestrator bootstrap
 
-The Launcher creates the Orchestrator with this contract:
+After the immutable task-metadata handshake and creator-side read-back pass, the Launcher sends the Orchestrator this populated contract:
 
 ```text
 Act as the only long-lived Roundlet Orchestrator for the exact target and run below. Do not invoke or load the installed `$roundlet` skill; read only the supplied pinned bundle.
@@ -328,7 +377,7 @@ Before **every** initial, repair, final-repair, integration, or cleanup-prefligh
 
 It must not rely on task memory in place of rereading those sources.
 
-### Native Windows Worker patch routing
+### Native Windows Worker topology and patch routing
 
 Before every Worker turn, the Orchestrator must verify the Worker's actual runtime and populate `worker_runtime`; a Windows-looking path is not sufficient evidence. `NATIVE_WINDOWS` means the Worker runs directly on Windows, not inside WSL.
 
@@ -337,6 +386,10 @@ For every initial, repair, final-repair, integration, or other Worker turn that 
 ```text
 NATIVE_WINDOWS_PATCH_ROUTING
 Apply only when worker_runtime is NATIVE_WINDOWS:
+- Bind native_windows_task_anchor to this task's exact canonical current directory, require worktree
+  to be a distinct writable descendant, and fail before mutation if native_windows_task_anchor
+  equals or is inside worktree. Host-retained native_windows_task_anchor state never substitutes
+  for worktree cleanup.
 - Make every canary-artifact create, change, or deletion and every source-file edit inside
   the assigned writable worktree only through the dedicated
   apply_patch tool in the normal sandbox.
@@ -358,13 +411,14 @@ The Orchestrator rejects a native-Windows Worker canary or implementation handof
 
 ### Worker filesystem canary prompt
 
-The Launcher uses this with a short-lived configured Worker in a temporary linked worktree during activation or between-issue adoption. Immediately after issue claim, the Orchestrator sends it to the newly created persistent Worker in its exact linked worktree before initial implementation. Recovery, legacy bootstrap, or active migration sends it to the same retained Worker and exact linked worktree. This turn never becomes issue implementation.
+The Launcher uses this with a short-lived configured Worker in a temporary linked worktree during activation or between-issue adoption. Every newly created Worker first completes the immutable task-metadata handshake and creator-side read-back; the populated canary turn rereads metadata before mutation. Immediately after issue claim, the Orchestrator sends it to the newly created persistent Worker in its exact linked worktree before initial implementation. Recovery, legacy bootstrap, or active migration sends it to the same retained Worker and exact linked worktree. This turn never becomes issue implementation.
 
 ```text
 Perform only the Roundlet filesystem canary for the supplied exact worktree.
 
 <insert the filesystem canary context envelope>
-<insert the Native Windows Worker patch-routing conditional contract>
+<insert the populated role-turn metadata gate>
+<insert the Native Windows Worker topology and patch-routing conditional contract>
 
 <insert target/run, exact task/worktree, phase, role, nonce, initial HEAD/status/index identities,
 expected first/second content hashes, exact advisory/worktree/index applicability, and
@@ -393,7 +447,8 @@ FILESYSTEM_CAPABILITY_UNAVAILABLE and the remaining exact canary path; do not br
 You are the persistent Roundlet Worker for one leaf issue.
 
 <insert the shared context envelope with review_mode INITIAL>
-<insert the Native Windows Worker patch-routing conditional contract>
+<insert the populated role-turn metadata gate>
+<insert the Native Windows Worker topology and patch-routing conditional contract>
 
 Reread every source required by the Worker contract. Confirm the issue remains open,
 actionable, dependency-ready, and inside the allowed scope. Inspect the existing
@@ -416,7 +471,8 @@ bounded factual summary for the Orchestrator to verify and publish; do not publi
 Continue as the same persistent Roundlet Worker.
 
 <insert the fresh shared context envelope with review_mode COMPLETE or CONVERGING>
-<insert the Native Windows Worker patch-routing conditional contract>
+<insert the populated role-turn metadata gate>
+<insert the Native Windows Worker topology and patch-routing conditional contract>
 
 Supervisor findings to address:
 <insert exact verified finding IDs, evidence, and required outcomes>
@@ -436,7 +492,8 @@ Return the structured Worker handoff. Every finding ID must have one disposition
 Continue as the same persistent Roundlet Worker for the one permitted final repair.
 
 <insert the fresh shared context envelope with review_mode FINAL_REPAIR and round 10>
-<insert the Native Windows Worker patch-routing conditional contract>
+<insert the populated role-turn metadata gate>
+<insert the Native Windows Worker topology and patch-routing conditional contract>
 
 Final Supervisor findings:
 <insert exact verified round-10 findings>
@@ -456,7 +513,8 @@ Use this only when live repository rules require the pull-request branch to be u
 Continue as the same persistent Roundlet Worker.
 
 <insert the fresh shared context envelope>
-<insert the Native Windows Worker patch-routing conditional contract>
+<insert the populated role-turn metadata gate>
+<insert the Native Windows Worker topology and patch-routing conditional contract>
 
 Reread every source required by the Worker contract. Fetch and inspect current
 origin/main. Integrate it into the issue branch with a normal merge commit, resolve only
@@ -472,6 +530,7 @@ a new COMPLETE review epoch; do not claim prior review applies.
 Continue as the same persistent Roundlet Worker for cleanup preflight only.
 
 <insert the fresh shared context envelope with review_mode CLEANUP_PREFLIGHT>
+<insert the populated role-turn metadata gate>
 
 Reread every source required by the Worker contract. Make no source edit and perform no
 GitHub mutation. Verify and report:
@@ -482,6 +541,8 @@ GitHub mutation. Verify and report:
 - live pull-request state and merge commit, when applicable;
 - live leaf closed state;
 - any process, task, nested worktree, unpushed commit, or file that makes cleanup unsafe.
+- any live process whose exact canonical current directory is the worktree, plus the exact
+  Git worktree registration and physical candidate-path state.
 
 Do not remove your own worktree, delete a local or remote branch, archive your own task,
 or hide/discard any change. Return the structured handoff with terminal
@@ -495,6 +556,9 @@ Return exactly these headings with bounded content:
 ```text
 WORKER_HANDOFF
 phase: <phase>
+role_task: <metadata-read-exact-task-id>
+metadata_turn: <metadata-read-exact-populated-turn-id>
+execution_profile: model=<metadata-read-model>;reasoning_effort=<metadata-read-effort>
 review_epoch: <number>
 review_round: <number-or-0>
 terminal: <IMPLEMENTED|REPAIRED|FINAL_REPAIRED|INTEGRATED|NEEDS_OWNER_INPUT|CLEANUP_SAFE|CLEANUP_BLOCKED>
@@ -522,7 +586,7 @@ The Orchestrator rejects a handoff if SHAs, scope, files, tests, findings, or li
 
 ## Supervisor contract
 
-Create a fresh Supervisor task for each attempt using the exact configured attempt profile at that one-based position. Give it read-only access. It must not edit files, create commits, push, or mutate any GitHub object. Bind its prompt and result to the attempt number and profile as well as the review epoch/round/mode and candidate SHA. Archive it after a valid result or invalid attempt.
+Create a fresh Supervisor task for each attempt using the exact configured attempt profile at that one-based position. Complete the immutable task-metadata handshake and creator-side immutable task/turn-record read-back before sending the populated review prompt; reread metadata on the exact review turn. Give it read-only access. It must not edit files, create commits, push, or mutate any GitHub object. Bind its prompt and result to the attempt number and profile as well as the review epoch/round/mode and candidate SHA. Archive it after a valid result or invalid attempt, then apply bounded external task cleanup read-back.
 
 Before every attempt, the Supervisor must verify the context envelope, read the complete active pinned contract bundle, and freshly read:
 
@@ -542,6 +606,7 @@ Before every attempt, the Supervisor must verify the context envelope, read the 
 You are a fresh read-only Roundlet Supervisor for one review attempt.
 
 <insert the shared context envelope with review_mode COMPLETE or CONVERGING>
+<insert the populated role-turn metadata gate>
 
 Read every source required by the Supervisor contract. Verify that the pull-request
 remote head equals candidate_sha and that all reviewed evidence is bound to it. If not,
@@ -573,6 +638,9 @@ Remain read-only. Return the structured Supervisor result and do not publish it.
 ```text
 SUPERVISOR_RESULT
 attempt_status: <VALID|INVALID_CONTEXT|FAILED>
+role_task: <metadata-read-exact-task-id>
+metadata_turn: <metadata-read-exact-populated-turn-id>
+execution_profile: model=<metadata-read-model>;reasoning_effort=<metadata-read-effort>
 supervisor_attempt: <positive-number>
 supervisor_profile: <configured-profile-name>
 review_epoch: <number>
