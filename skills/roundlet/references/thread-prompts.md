@@ -422,13 +422,16 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   inside the verified effective pinned bundle. Bind native_windows_operator_guide_sha256
   to that exact file's SHA-256 from the verified candidate tree or bundle manifest.
   The external creator, not this Worker, extracts both fixed bodies from those verified
-  bytes, populates every named assignment exactly once from the already bound canary values,
+  bytes, populates every named assignment exactly once from the already bound canary values
+  by replacing only the exact value byte range before its existing CRLF or LF while leaving
+  that terminator and every non-replaced source byte untouched,
   and supplies the three complete preflight assignment lines, ten complete compound
   assignment lines, and SHA-256 of each fully populated body in this prompt. Independently
   extract each body from the first byte after its opening-fence line terminator up to but
   excluding the CRLF or LF that introduces its closing fence. Preserve every internal source
   byte and internal line terminator without normalization. Re-populate by replacing the same
-  named assignment lines exactly once, then
+  named assignment value byte ranges exactly once without consuming any terminal CR, then
+  verify all non-replaced bytes and line-terminator positions remain identical and
   compare the resulting lines and body digests to those creator-supplied records. Never
   derive an expected line or digest from this Worker's own already populated body.
   Independently require the complete absolute path to end at
@@ -564,7 +567,8 @@ native_windows_operator_guide path ending in `references/operator-guide.md` and 
 native_windows_operator_guide_sha256 from the verified installed candidate or effective
 pinned-bundle manifest. The external creator must also insert the three complete preflight
 assignment lines, ten complete compound assignment lines, and SHA-256 of each fully populated
-body, all derived before dispatch from those exact guide bytes and the bound canary values.
+body, all derived before dispatch from those exact guide bytes and the bound canary values by
+replacing only the assignment value byte ranges and preserving their original CRLF or LF bytes.
 Also insert the exact nonce-bound `native_windows_compound_transport` path under the verified
 task anchor, its initially-absent/ordinary-parent evidence, and the creator-computed byte length
 and SHA-256 of the compound body's patch-canonical transport representation after the separately
