@@ -426,8 +426,8 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   and supplies the three complete preflight assignment lines, ten complete compound
   assignment lines, and SHA-256 of each fully populated body in this prompt. Independently
   extract each body from the first byte after its opening-fence line terminator up to but
-  excluding the CRLF or LF that introduces its closing fence. Preserve every internal byte
-  and internal line terminator without normalization. Re-populate by replacing the same
+  excluding the CRLF or LF that introduces its closing fence. Preserve every internal source
+  byte and internal line terminator without normalization. Re-populate by replacing the same
   named assignment lines exactly once, then
   compare the resulting lines and body digests to those creator-supplied records. Never
   derive an expected line or digest from this Worker's own already populated body.
@@ -450,13 +450,19 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   ad hoc shell preflight. Then populate only the separate compound body's ten validated
   assignment values. Before canary creation, read back exactly ten complete lines byte-for-byte
   and the full body digest against the creator-supplied canonical records; reject every placeholder, concatenation, interpolation,
-  variable reference, method call, or other right-hand-side expression; parse the fully populated
-  body; and bind its SHA-256. Never place that populated body in a process command line.
+  variable reference, method call, or other right-hand-side expression; validate the fully populated
+  source body and bind its original-byte SHA-256. Never place that populated body in a process command line.
+  Reject a lone CR and any terminal line break, then derive the patch-canonical transport
+  representation by replacing every internal CRLF with LF, leaving an already-LF source
+  otherwise unchanged, and appending exactly one terminal LF. This native-Windows
+  source-to-transport conversion is the only permitted normalization. Independently require its byte length and SHA-256 to
+  equal separate creator-supplied transport records before creating any file.
   Bind native_windows_compound_transport to one nonce-qualified direct-child `.ps1` path
   under native_windows_task_anchor and outside worktree, and bind its expected byte length
-  and SHA-256 to the creator-supplied populated compound record. Require the path initially
+  and SHA-256 to the creator-supplied patch-canonical transport record, not the original source-body
+  record. Require the path initially
   absent and its parent to be exactly the ordinary non-reparse task anchor. Before either
-  canary file exists, create the transport with exactly those bytes only through direct
+  canary file exists, create the transport with exactly those patch-canonical bytes only through direct
   apply_patch in the normal sandbox, read back its exact bytes/length/digest, and parse it
   through a bounded short command that reads the file. A command-line-embedded body, another
   path, another helper, or a parse that does not read those exact file bytes is invalid.
@@ -474,7 +480,7 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   FILESYSTEM_CAPABILITY_UNAVAILABLE. Without a Git
   command, use raw filesystem reads to prove both files absent, the raw index length/SHA-256
   unchanged, and index.lock absent; report cleanup VERIFIED when that exact proof passes.
-  Never rewrite, wrap, split, normalize, or substitute the template or transport after its
+  Never rewrite, wrap, split, further normalize, or substitute the template or transport after its
   successful parse.
 - Every Git or subprocess non-zero exit must terminate that compound operation non-zero;
   later output, formatting, or object construction must not mask it. The operation is one
@@ -557,8 +563,11 @@ pinned-bundle manifest. The external creator must also insert the three complete
 assignment lines, ten complete compound assignment lines, and SHA-256 of each fully populated
 body, all derived before dispatch from those exact guide bytes and the bound canary values.
 Also insert the exact nonce-bound `native_windows_compound_transport` path under the verified
-task anchor, its initially-absent/ordinary-parent evidence, and the populated compound body's
-creator-computed byte length and SHA-256. The transport is invalid for every other runtime
+task anchor, its initially-absent/ordinary-parent evidence, and the creator-computed byte length
+and SHA-256 of the compound body's patch-canonical transport representation after the separately
+verified source body rejects lone CR and a terminal line break, converts internal CRLF to LF,
+and appends exactly one terminal LF. Keep these transport
+records distinct from the source-body length/digest. The transport is invalid for every other runtime
 or writable-index route.
 Both sides use the native-Windows conditional's exact opening/closing-fence byte-boundary rule.
 The Worker independently reconstructs and compares them; it must not self-derive expected
