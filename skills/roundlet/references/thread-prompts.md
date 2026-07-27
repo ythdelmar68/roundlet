@@ -441,8 +441,9 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   mismatch, raw-byte mismatch, lock residue, or incomplete read-back is
   FILESYSTEM_CAPABILITY_UNAVAILABLE.
 - After that out-of-root compound operation passes, delete both direct-child files through
-  apply_patch and prove both files absent plus clean status. No external directory-removal
-  turn is expected or authorized in this mode.
+  apply_patch. Run no later Git command. Prove both files absent, repeat only raw index
+  length/SHA-256 and index.lock reads, and bind the patch tool's exact-path evidence to prove
+  no unrelated path changed. No external directory-removal turn is expected or authorized.
 - Only for a different NATIVE_WINDOWS canary whose index route used no approval, after
   apply_patch has deleted every nested canary file, if the sole residue is the exact
   canary-created parent directory, follow NATIVE_WINDOWS_CANARY_EMPTY_PARENT_FINALIZATION:
@@ -524,8 +525,9 @@ for every potentially locking identity/stage operation and perform final raw rea
 after its last Git identity read. WSL and NON_WINDOWS keep the ordinary index route.
 
 Return the exact FILESYSTEM_CANARY_RESULT structure. In the NATIVE_WINDOWS out-of-root index
-mode, require the two direct-child files absent and clean status, then return the canonical
-result in the same turn; there is no canary-created parent or external cleanup. Only for a
+mode, require the two direct-child files absent plus exact patch-tool and raw index/lock
+read-back without a post-deletion Git command, then return the canonical result in the same
+turn; there is no canary-created parent or external cleanup. Only for a
 different NATIVE_WINDOWS canary whose index route used no approval, when direct apply_patch
 file cleanup leaves a qualifying proven-empty canary-created nested parent, return the bounded
 WINDOWS_CANARY_EMPTY_PARENT_READY intermediate record required by the conditional contract

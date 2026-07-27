@@ -146,7 +146,7 @@ After the canary file exists through direct normal-sandbox `apply_patch`, an ini
 
 1. Bind the operation to the exact canonical linked worktree, resolved index path, unique canary path, expected raw preimage length/SHA-256, and initial HEAD/status/tree/pre-existing-entry identities. Capture the complete raw index bytes in memory before the first potentially locking or writing command; create no backup artifact.
 2. Within that same approved operation, run the required initial locking identity reads, stage only the canary, verify its exact index path/mode/blob/content, restore the captured raw bytes to remove only that staged entry, and run every required final HEAD/status/tree/pre-existing-entry read. Every Git or subprocess non-zero exit terminates the compound operation non-zero; later formatting or output must not mask it.
-3. After all Git identity reads, restore the same captured bytes once more, then perform only raw filesystem read-back: require the final index length/SHA-256 to equal the preimage and require `index.lock` absent. Retain no backup or helper artifact. Subsequent direct-`apply_patch` deletion of the two direct-child files must leave no canary-created parent and requires normal read-back of both file absences plus clean status.
+3. After all Git identity reads, restore the same captured bytes once more inside an unconditional restoration guard, then perform only raw filesystem read-back: require the final index length/SHA-256 to equal the preimage and require `index.lock` absent. Retain no backup or helper artifact. Subsequent direct-`apply_patch` deletion of the two direct-child files must leave no canary-created parent. After deletion, run no Git command; prove both file absences, repeat only raw index length/SHA-256 and lock-file reads, and bind the dedicated patch tool's exact-path change/delete evidence to show that no unrelated worktree path was mutated.
 
 This native-Windows out-of-root mode has a separate, read-only preflight template. It is not a cross-platform command and makes no Git call. Populate only its three assignments, reject a single quote or newline in the absolute worktree and reject `/`, `\`, whitespace, a single quote, or a newline in either direct-child filename. Parse the fully populated body, then execute it unchanged in the normal sandbox before creating either file. Do not substitute a Worker-authored shell preflight. Require its `PASS`, exact absolute paths, canonical worktree root, and `initial_absence_root_identity_sha256` output:
 
@@ -199,7 +199,7 @@ $Result = [ordered]@{
 ConvertTo-Json -InputObject $Result -Compress
 ```
 
-Use the next PowerShell body verbatim for the one approved compound operation. This is also a native-Windows Worker template, not a cross-platform command. Because this route consumes the canary's sole approval, choose both canary paths as the same unique direct-child files verified by the preflight; this mode creates no canary parent directory. The nested-parent/two-turn finalization below is not used in this mode. Populate only the ten placeholder assignment values at the top and parse the fully populated body without executing it. Do not rewrite its functions, control flow, Git calls, restoration order, or output. Its strict Git wrapper temporarily permits native stderr capture because Windows Git may emit a warning while returning exit 0, then restores stop-on-error behavior and judges the subprocess only by the captured exit code; a real non-zero still throws. A path/preflight or parse failure occurs before canary mutation and is `FILESYSTEM_CAPABILITY_UNAVAILABLE`; never consume the approval or create an artifact after it. After the direct-`apply_patch` files and exact content hashes are verified, submit that same parsed body as the single approved shell operation:
+Use the next PowerShell body verbatim for the one approved compound operation. This is also a native-Windows Worker template, not a cross-platform command. Because this route consumes the canary's sole approval, choose both canary paths as the same unique direct-child files verified by the preflight; this mode creates no canary parent directory. The nested-parent/two-turn finalization below is not used in this mode. Populate only the ten placeholder assignment values at the top and parse the fully populated body without executing it. Do not rewrite its functions, control flow, Git calls, restoration guard, or output. Its strict Git wrapper keeps native stderr diagnostics separate from returned stdout identities: an exit-zero warning is recorded but cannot contaminate a HEAD/tree/status/entry/blob value, while a real non-zero still throws. After the raw preimage is captured, an encompassing `try`/`catch`/`finally` restores and verifies the exact index bytes on every success, native failure, or validation throw; it rethrows the primary failure after restoration and never masks it with later output. A path/preflight or parse failure occurs before canary mutation and is `FILESYSTEM_CAPABILITY_UNAVAILABLE`; never consume the approval or create an artifact after it. After the direct-`apply_patch` files and exact content hashes are verified, submit that same parsed body as the single approved shell operation:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
@@ -226,24 +226,36 @@ function Get-TextSha256 {
     return Get-BytesSha256 ([Text.Encoding]::UTF8.GetBytes($Text))
 }
 
+$script:RoundletGitDiagnostics = New-Object 'System.Collections.Generic.List[string]'
+
 function Invoke-GitStrict {
     param([string[]]$CommandArgs)
     $PriorErrorActionPreference = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
     try {
-        $CommandOutput = @(& git @CommandArgs 2>&1)
+        $CommandCombined = @(& git @CommandArgs 2>&1)
         $CommandExit = $LASTEXITCODE
     }
     finally {
         $ErrorActionPreference = $PriorErrorActionPreference
     }
-    for ($Index = 0; $Index -lt $CommandOutput.Count; $Index++) {
-        $CommandOutput[$Index] = $CommandOutput[$Index].ToString()
+    $CommandStdout = New-Object 'System.Collections.Generic.List[string]'
+    $CommandStderr = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($Item in $CommandCombined) {
+        if ($Item -is [System.Management.Automation.ErrorRecord]) {
+            $CommandStderr.Add($Item.ToString())
+        }
+        else {
+            $CommandStdout.Add($Item.ToString())
+        }
+    }
+    if ($CommandStderr.Count -gt 0) {
+        $script:RoundletGitDiagnostics.Add(('args=' + ($CommandArgs -join ' ') + ' stderr=' + ($CommandStderr -join ' | ')))
     }
     if ($CommandExit -ne 0) {
-        throw ('git failed exit=' + $CommandExit + ' args=' + ($CommandArgs -join ' ') + ' output=' + ($CommandOutput -join ' | '))
+        throw ('git failed exit=' + $CommandExit + ' args=' + ($CommandArgs -join ' ') + ' stdout=' + ($CommandStdout -join ' | ') + ' stderr=' + ($CommandStderr -join ' | '))
     }
-    return $CommandOutput
+    return [string[]]$CommandStdout.ToArray()
 }
 
 if ([IO.Path]::GetFullPath($IndexPath) -eq [IO.Path]::GetFullPath($Worktree)) { throw 'index/worktree alias' }
@@ -251,50 +263,72 @@ if ($IndexCanaryPath -match '[\\/''\s]' -or $WorktreeCanaryPath -match '[\\/''\s
 $IndexPreimage = [IO.File]::ReadAllBytes($IndexPath)
 $PreimageHash = Get-BytesSha256 $IndexPreimage
 if ($IndexPreimage.Length -ne $ExpectedIndexLength -or $PreimageHash -ne $ExpectedIndexSha256) { throw 'raw index preimage mismatch' }
+if (Test-Path -LiteralPath ($IndexPath + '.lock')) { throw 'index.lock pre-exists' }
 
 $GitBase = [string[]]@('-c', ('safe.directory=' + $Worktree), '-C', $Worktree)
-$InitialHead = ((Invoke-GitStrict ($GitBase + @('rev-parse', 'HEAD'))) -join "`n").Trim()
-if ($InitialHead -ne $ExpectedHead) { throw 'initial HEAD mismatch' }
-$InitialStatus = [string[]]@(Invoke-GitStrict ($GitBase + @('status', '--porcelain=v1', '--untracked-files=all')))
-$ExpectedStatus = [string[]]@(('?? ' + $WorktreeCanaryPath), ('?? ' + $IndexCanaryPath))
-[Array]::Sort($ExpectedStatus, [StringComparer]::Ordinal)
-if (($InitialStatus -join "`n") -ne ($ExpectedStatus -join "`n")) { throw ('initial status mismatch: ' + ($InitialStatus -join ' | ')) }
-$InitialTree = ((Invoke-GitStrict ($GitBase + @('write-tree'))) -join "`n").Trim()
-if ($InitialTree -ne $ExpectedTree) { throw 'initial tree mismatch' }
-$InitialEntries = (Invoke-GitStrict ($GitBase + @('ls-files', '--stage'))) -join "`n"
-if ((Get-TextSha256 $InitialEntries) -ne $ExpectedEntriesSha256) { throw 'initial entries mismatch' }
-[IO.File]::WriteAllBytes($IndexPath, $IndexPreimage)
+$PrimaryFailure = $null
+$RestorationFailure = $null
+try {
+    $InitialHead = ((Invoke-GitStrict ($GitBase + @('rev-parse', 'HEAD'))) -join "`n").Trim()
+    if ($InitialHead -ne $ExpectedHead) { throw 'initial HEAD mismatch' }
+    $InitialStatus = [string[]]@(Invoke-GitStrict ($GitBase + @('status', '--porcelain=v1', '--untracked-files=all')))
+    $ExpectedStatus = [string[]]@(('?? ' + $WorktreeCanaryPath), ('?? ' + $IndexCanaryPath))
+    [Array]::Sort($ExpectedStatus, [StringComparer]::Ordinal)
+    if (($InitialStatus -join "`n") -ne ($ExpectedStatus -join "`n")) { throw ('initial status mismatch: ' + ($InitialStatus -join ' | ')) }
+    $InitialTree = ((Invoke-GitStrict ($GitBase + @('write-tree'))) -join "`n").Trim()
+    if ($InitialTree -ne $ExpectedTree) { throw 'initial tree mismatch' }
+    $InitialEntries = (Invoke-GitStrict ($GitBase + @('ls-files', '--stage'))) -join "`n"
+    if ((Get-TextSha256 $InitialEntries) -ne $ExpectedEntriesSha256) { throw 'initial entries mismatch' }
+    [IO.File]::WriteAllBytes($IndexPath, $IndexPreimage)
 
-$Null = Invoke-GitStrict ($GitBase + @('add', '--', $IndexCanaryPath))
-$EntryLines = [string[]]@(Invoke-GitStrict ($GitBase + @('ls-files', '--stage', '--', $IndexCanaryPath)))
-if ($EntryLines.Count -ne 1) { throw 'staged entry count mismatch' }
-$EntryParts = $EntryLines[0] -split '\s+', 4
-if ($EntryParts.Count -ne 4 -or $EntryParts[0] -ne '100644' -or $EntryParts[2] -ne '0' -or $EntryParts[3] -ne $IndexCanaryPath) { throw ('staged entry mismatch: ' + $EntryLines[0]) }
-$Blob = ((Invoke-GitStrict ($GitBase + @('hash-object', '--no-filters', '--', $IndexCanaryPath))) -join "`n").Trim()
-if ($EntryParts[1] -ne $Blob) { throw 'staged blob mismatch' }
-$IndexCanaryAbsolute = Join-Path $Worktree ($IndexCanaryPath.Replace('/', [IO.Path]::DirectorySeparatorChar))
-$CanaryFileHash = (Get-FileHash -LiteralPath $IndexCanaryAbsolute -Algorithm SHA256).Hash
-if ($CanaryFileHash -ne $ExpectedIndexCanaryFileSha256) { throw 'canary file hash mismatch' }
-$BlobSize = [int](((Invoke-GitStrict ($GitBase + @('cat-file', '-s', $Blob))) -join "`n").Trim())
-if ($BlobSize -ne (Get-Item -LiteralPath $IndexCanaryAbsolute).Length) { throw 'blob size mismatch' }
+    $Null = Invoke-GitStrict ($GitBase + @('add', '--', $IndexCanaryPath))
+    $EntryLines = [string[]]@(Invoke-GitStrict ($GitBase + @('ls-files', '--stage', '--', $IndexCanaryPath)))
+    if ($EntryLines.Count -ne 1) { throw 'staged entry count mismatch' }
+    $EntryParts = $EntryLines[0] -split '\s+', 4
+    if ($EntryParts.Count -ne 4 -or $EntryParts[0] -ne '100644' -or $EntryParts[2] -ne '0' -or $EntryParts[3] -ne $IndexCanaryPath) { throw ('staged entry mismatch: ' + $EntryLines[0]) }
+    $Blob = ((Invoke-GitStrict ($GitBase + @('hash-object', '--no-filters', '--', $IndexCanaryPath))) -join "`n").Trim()
+    if ($EntryParts[1] -ne $Blob) { throw 'staged blob mismatch' }
+    $IndexCanaryAbsolute = Join-Path $Worktree ($IndexCanaryPath.Replace('/', [IO.Path]::DirectorySeparatorChar))
+    $CanaryFileHash = (Get-FileHash -LiteralPath $IndexCanaryAbsolute -Algorithm SHA256).Hash
+    if ($CanaryFileHash -ne $ExpectedIndexCanaryFileSha256) { throw 'canary file hash mismatch' }
+    $BlobSize = [int](((Invoke-GitStrict ($GitBase + @('cat-file', '-s', $Blob))) -join "`n").Trim())
+    if ($BlobSize -ne (Get-Item -LiteralPath $IndexCanaryAbsolute).Length) { throw 'blob size mismatch' }
 
-[IO.File]::WriteAllBytes($IndexPath, $IndexPreimage)
-$FinalHead = ((Invoke-GitStrict ($GitBase + @('rev-parse', 'HEAD'))) -join "`n").Trim()
-if ($FinalHead -ne $ExpectedHead) { throw 'final HEAD mismatch' }
-$FinalStatus = [string[]]@(Invoke-GitStrict ($GitBase + @('status', '--porcelain=v1', '--untracked-files=all')))
-if (($FinalStatus -join "`n") -ne ($InitialStatus -join "`n")) { throw 'final status mismatch' }
-$FinalEntries = (Invoke-GitStrict ($GitBase + @('ls-files', '--stage'))) -join "`n"
-$FinalEntriesHash = Get-TextSha256 $FinalEntries
-if ($FinalEntriesHash -ne $ExpectedEntriesSha256) { throw 'final entries mismatch' }
-$FinalTree = ((Invoke-GitStrict ($GitBase + @('write-tree'))) -join "`n").Trim()
-if ($FinalTree -ne $ExpectedTree) { throw 'final tree mismatch' }
-
-[IO.File]::WriteAllBytes($IndexPath, $IndexPreimage)
-$FinalIndexLength = (Get-Item -LiteralPath $IndexPath).Length
-$FinalIndexSha256 = (Get-FileHash -LiteralPath $IndexPath -Algorithm SHA256).Hash
-if ($FinalIndexLength -ne $ExpectedIndexLength -or $FinalIndexSha256 -ne $ExpectedIndexSha256) { throw 'final raw index mismatch' }
-if (Test-Path -LiteralPath ($IndexPath + '.lock')) { throw 'index.lock remains' }
-$Result = [ordered]@{ outcome = 'PASS'; entry = $EntryLines[0]; blob = $Blob; blob_size = $BlobSize; canary_file_sha256 = $CanaryFileHash; initial_head = $InitialHead; final_head = $FinalHead; initial_tree = $InitialTree; final_tree = $FinalTree; final_entries_sha256 = $FinalEntriesHash; final_index_length = $FinalIndexLength; final_index_sha256 = $FinalIndexSha256; index_lock_exists = $false }
+    [IO.File]::WriteAllBytes($IndexPath, $IndexPreimage)
+    $FinalHead = ((Invoke-GitStrict ($GitBase + @('rev-parse', 'HEAD'))) -join "`n").Trim()
+    if ($FinalHead -ne $ExpectedHead) { throw 'final HEAD mismatch' }
+    $FinalStatus = [string[]]@(Invoke-GitStrict ($GitBase + @('status', '--porcelain=v1', '--untracked-files=all')))
+    if (($FinalStatus -join "`n") -ne ($InitialStatus -join "`n")) { throw 'final status mismatch' }
+    $FinalEntries = (Invoke-GitStrict ($GitBase + @('ls-files', '--stage'))) -join "`n"
+    $FinalEntriesHash = Get-TextSha256 $FinalEntries
+    if ($FinalEntriesHash -ne $ExpectedEntriesSha256) { throw 'final entries mismatch' }
+    $FinalTree = ((Invoke-GitStrict ($GitBase + @('write-tree'))) -join "`n").Trim()
+    if ($FinalTree -ne $ExpectedTree) { throw 'final tree mismatch' }
+}
+catch {
+    $PrimaryFailure = $_
+}
+finally {
+    try {
+        [IO.File]::WriteAllBytes($IndexPath, $IndexPreimage)
+        $FinalIndexLength = (Get-Item -LiteralPath $IndexPath).Length
+        $FinalIndexSha256 = (Get-FileHash -LiteralPath $IndexPath -Algorithm SHA256).Hash
+        if ($FinalIndexLength -ne $ExpectedIndexLength -or $FinalIndexSha256 -ne $ExpectedIndexSha256) { throw 'final raw index mismatch' }
+        if (Test-Path -LiteralPath ($IndexPath + '.lock')) { throw 'index.lock remains' }
+    }
+    catch {
+        $RestorationFailure = $_
+    }
+}
+if ($null -ne $PrimaryFailure) {
+    if ($null -ne $RestorationFailure) {
+        throw ('primary failure: ' + $PrimaryFailure.Exception.Message + '; restoration failure: ' + $RestorationFailure.Exception.Message)
+    }
+    throw $PrimaryFailure
+}
+if ($null -ne $RestorationFailure) { throw $RestorationFailure }
+$DiagnosticsText = $script:RoundletGitDiagnostics -join "`n"
+$Result = [ordered]@{ outcome = 'PASS'; entry = $EntryLines[0]; blob = $Blob; blob_size = $BlobSize; canary_file_sha256 = $CanaryFileHash; initial_head = $InitialHead; final_head = $FinalHead; initial_tree = $InitialTree; final_tree = $FinalTree; final_entries_sha256 = $FinalEntriesHash; final_index_length = $FinalIndexLength; final_index_sha256 = $FinalIndexSha256; index_lock_exists = $false; git_diagnostics_count = $script:RoundletGitDiagnostics.Count; git_diagnostics_sha256 = Get-TextSha256 $DiagnosticsText }
 ConvertTo-Json -InputObject $Result -Compress
 ```
 
