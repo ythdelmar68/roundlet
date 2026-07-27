@@ -4,6 +4,8 @@ The Launcher is a short-lived Codex task. It preflights one target repository, c
 
 Replace every `<PLACEHOLDER>` before use. Do not add an implementation request to the Launcher prompt.
 
+For every Worker canary in this file, when creator-verified `worker_runtime` is `NATIVE_WINDOWS` and the separated linked-worktree index route is outside that Worker's normal writable roots, the Launcher must include the complete native-Windows conditional from `thread-prompts.md`. The Worker populates only the eleven assignments in the operator guide's PowerShell body, validates every literal/path constraint, and parses the fully populated body before either canary artifact is created. It then submits that same body unchanged as the sole approved compound Git-index operation. A parse failure creates no artifact, consumes no approval, and fails closed. This rule never applies to the Launcher itself, WSL, Linux, macOS, another non-Windows host, or an index already writable through the ordinary normal-sandbox route.
+
 ## New activation
 
 After the new Launcher task's metadata-only handshake and independent creator-side immutable task/turn-record read-back pass, copy and paste this entire prompt into that same task:
