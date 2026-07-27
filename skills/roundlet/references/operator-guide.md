@@ -90,11 +90,11 @@ Eager task tool exposure is not a complete capability catalog. Before a Launcher
 Every newly created Launcher, Orchestrator, Worker, and Supervisor uses this two-stage handshake before a canary, implementation, or review turn:
 
 1. Create the task with only the metadata-probe prompt from `thread-prompts.md`. It performs no filesystem, Git, GitHub, heartbeat, contract, issue, or pull-request mutation.
-2. In that task, exhaust deferred discovery, invoke the discovered immutable metadata route, and return the exact task ID plus `model=<id>;reasoning_effort=<effort>` and the route identity. Self-reported profile prose is invalid.
-3. The external creator independently reads an immutable creator-side task/turn record and requires the task ID, model, and reasoning effort to equal both the requested profile and the probe result. A task ID copied only from the child response is not independent evidence.
+2. In that task, exhaust deferred discovery and invoke the discovered immutable metadata route. Resolve the task ID only when the route's top-level `threadId` and any present immutable `thread_id` and `session_id` fields are mutually equal. Return that value as `role_task`, return the exact immutable turn field separately as `metadata_turn`, and return `model=<id>;reasoning_effort=<effort>` plus the route identity. `turn_id` is never a task ID. Missing or conflicting task/session fields and self-reported profile prose are invalid.
+3. The external creator independently reads an immutable creator-side task/turn record and requires the task ID, turn ID, model, and reasoning effort to equal both the requested profile and the probe result. The creator-provided task ID must equal `role_task`, while the creator-provided turn ID must equal only `metadata_turn`. A value copied only from the child response is not independent evidence.
 4. Only after that match may the creator send the fully populated role or filesystem-canary prompt. On that exact turn, the role invokes the immutable metadata route again and requires the current task ID/model/effort to equal the populated envelope and the creator-side read-back before any mutation or review.
 
-Classify the route as unavailable only after exhaustive discovery or invocation fails, or independent read-back cannot be completed. A mismatch, malformed result, substituted profile, or route that exposes only self-report fails closed before the role acts. Preserve only bounded task, route, profile, and typed failure evidence.
+Classify the route as unavailable only after exhaustive discovery or invocation fails, or independent read-back cannot be completed. A task/turn substitution, mismatch, malformed result, substituted profile, or route that exposes only self-report fails closed before the role acts. Preserve only bounded task, turn, route, profile, and typed failure evidence.
 
 ## Filesystem mutation canaries and typed outcomes
 

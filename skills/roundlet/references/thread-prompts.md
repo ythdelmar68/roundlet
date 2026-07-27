@@ -64,13 +64,14 @@ available. Locate and invoke the immutable metadata route for this exact turn. D
 self-reported profile text. Return exactly:
 TASK_METADATA_READY
 role: <LAUNCHER|ORCHESTRATOR|WORKER|SUPERVISOR>
-role_task: <immutable-task-id>
+role_task: <immutable-thread-or-session-id>
+metadata_turn: <immutable-turn-id>
 execution_profile: model=<immutable-model>;reasoning_effort=<immutable-effort>
 metadata_route: <exact-discovered-route>
 creator_readback_required: true
 ```
 
-The external creator independently reads an immutable creator-side task/turn record and verifies the returned task ID and profile against the requested values. Only then may it send a populated next turn. At the start of that next turn, the role must invoke the immutable metadata route again and require exact equality with the populated `role_task`, `execution_profile`, and creator read-back. Missing eager exposure is inconclusive; exhaustive discovery failure, invocation failure, independent read-back failure, or any mismatch stops before action.
+Resolve `role_task` only when top-level `threadId` and every present immutable `thread_id` and `session_id` field are mutually equal. Return the route's immutable `turn_id` only as `metadata_turn`; it never satisfies `role_task`. The external creator independently reads an immutable creator-side task/turn record and verifies task ID, turn ID, and profile against the requested values. Only then may it send a populated next turn. At the start of that next turn, the role must invoke the immutable metadata route again and require exact task/profile equality with the populated `role_task`, while binding the new exact turn separately; the creator must independently read back that populated turn as well. Missing eager exposure is inconclusive; exhaustive discovery failure, invocation failure, task/session-field conflict, task/turn substitution, independent read-back failure, or any mismatch stops before action.
 
 ## Filesystem canary context envelope
 
