@@ -462,7 +462,10 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   and SHA-256 to the creator-supplied patch-canonical transport record, not the original source-body
   record. Require the path initially
   absent and its parent to be exactly the ordinary non-reparse task anchor. Before either
-  canary file exists, create the transport with exactly those patch-canonical bytes only through direct
+  canary file exists, serialize its direct Add File patch by removing only the target's one
+  structural terminal LF, emitting exactly one +<line> record per remaining logical line
+  including internal empty lines, and emitting no additional terminal empty + record.
+  Create the transport with exactly those patch-canonical bytes only through direct
   apply_patch in the normal sandbox, read back its exact bytes/length/digest, and parse it
   through a bounded short command that reads the file. A command-line-embedded body, another
   path, another helper, or a parse that does not read those exact file bytes is invalid.
@@ -566,7 +569,9 @@ Also insert the exact nonce-bound `native_windows_compound_transport` path under
 task anchor, its initially-absent/ordinary-parent evidence, and the creator-computed byte length
 and SHA-256 of the compound body's patch-canonical transport representation after the separately
 verified source body rejects lone CR and a terminal line break, converts internal CRLF to LF,
-and appends exactly one terminal LF. Keep these transport
+and appends exactly one terminal LF. Also require the direct Add File serialization to remove
+only that structural terminal LF before emitting one patch record per logical line and no
+extra terminal empty record. Keep these transport
 records distinct from the source-body length/digest. The transport is invalid for every other runtime
 or writable-index route.
 Both sides use the native-Windows conditional's exact opening/closing-fence byte-boundary rule.
