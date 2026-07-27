@@ -148,13 +148,29 @@ After the canary file exists through direct normal-sandbox `apply_patch`, an ini
 2. Within that same approved operation, run the required initial locking identity reads, stage only the canary, verify its exact index path/mode/blob/content, restore the captured raw bytes to remove only that staged entry, and run every required final HEAD/status/tree/pre-existing-entry read. Every Git or subprocess non-zero exit terminates the compound operation non-zero; later formatting or output must not mask it.
 3. After all Git identity reads, restore the same captured bytes once more inside an unconditional restoration guard, then perform only raw filesystem read-back: require the final index length/SHA-256 to equal the preimage and require `index.lock` absent. Retain no backup or helper artifact. Subsequent direct-`apply_patch` deletion of the two direct-child files must leave no canary-created parent. After deletion, run no Git command; prove both file absences, repeat only raw index length/SHA-256 and lock-file reads, and bind the dedicated patch tool's exact-path change/delete evidence to show that no unrelated worktree path was mutated.
 
-This native-Windows out-of-root mode has a separate, read-only preflight template. It is not a cross-platform command and makes no Git call. Populate only its three assignments, reject a single quote or newline in the absolute worktree and reject `/`, `\`, whitespace, a single quote, or a newline in either direct-child filename. Parse the fully populated body, then execute it unchanged in the normal sandbox before creating either file. Do not substitute a Worker-authored shell preflight. Require its `PASS`, exact absolute paths, canonical worktree root, and `initial_absence_root_identity_sha256` output:
+This native-Windows out-of-root mode has a separate, read-only preflight template. It is not a cross-platform command and makes no Git call. Convert each of the three exact path values to standard padded Base64 of its UTF-8 bytes, validate the encoded value against the template's Base64 grammar and an encode/decode round trip before substitution, and populate only those three encoded assignments. Never insert a raw path into a PowerShell literal. Parse the fully populated body, then execute it unchanged in the normal sandbox before creating either file. The body decodes the values as strict UTF-8 and, before any path access, rejects a single quote or newline in the absolute worktree and rejects `/`, `\`, whitespace, a single quote, or a newline in either direct-child filename. Do not substitute a Worker-authored shell preflight. Require its `PASS`, exact absolute paths, canonical worktree root, and `initial_absence_root_identity_sha256` output:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$Worktree = '<absolute-linked-worktree>'
-$WorktreeCanaryPath = '<direct-child-worktree-canary-filename>'
-$IndexCanaryPath = '<direct-child-index-canary-filename>'
+$WorktreeBase64 = '<base64-utf8-absolute-linked-worktree>'
+$WorktreeCanaryPathBase64 = '<base64-utf8-direct-child-worktree-canary-filename>'
+$IndexCanaryPathBase64 = '<base64-utf8-direct-child-index-canary-filename>'
+
+function ConvertFrom-RoundletBase64 {
+    param([string]$Value)
+    if ($Value -notmatch '^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$') { throw 'invalid Base64 assignment' }
+    try { $Bytes = [Convert]::FromBase64String($Value) }
+    catch { throw 'invalid Base64 assignment' }
+    $Utf8 = [Text.UTF8Encoding]::new($false, $true)
+    try { $Decoded = $Utf8.GetString($Bytes) }
+    catch { throw 'invalid UTF-8 assignment' }
+    if ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Decoded)) -ne $Value) { throw 'noncanonical Base64 assignment' }
+    return $Decoded
+}
+
+$Worktree = ConvertFrom-RoundletBase64 $WorktreeBase64
+$WorktreeCanaryPath = ConvertFrom-RoundletBase64 $WorktreeCanaryPathBase64
+$IndexCanaryPath = ConvertFrom-RoundletBase64 $IndexCanaryPathBase64
 
 function Get-TextSha256 {
     param([string]$Text)
@@ -163,6 +179,7 @@ function Get-TextSha256 {
     finally { $Hasher.Dispose() }
 }
 
+if ([string]::IsNullOrWhiteSpace($Worktree)) { throw 'worktree path is empty' }
 if ($Worktree.Contains("'") -or $Worktree.Contains("`r") -or $Worktree.Contains("`n")) { throw 'worktree path contains forbidden literal' }
 if ([string]::IsNullOrWhiteSpace($WorktreeCanaryPath) -or [string]::IsNullOrWhiteSpace($IndexCanaryPath)) { throw 'canary filename is empty' }
 if ($WorktreeCanaryPath -match '[\\/''\s]' -or $IndexCanaryPath -match '[\\/''\s]') { throw 'canary path is not a direct-child filename' }
@@ -199,20 +216,37 @@ $Result = [ordered]@{
 ConvertTo-Json -InputObject $Result -Compress
 ```
 
-Use the next PowerShell body verbatim for the one approved compound operation. This is also a native-Windows Worker template, not a cross-platform command. Because this route consumes the canary's sole approval, choose both canary paths as the same unique direct-child files verified by the preflight; this mode creates no canary parent directory. The nested-parent/two-turn finalization below is not used in this mode. Populate only the ten placeholder assignment values at the top and parse the fully populated body without executing it. Do not rewrite its functions, control flow, Git calls, restoration guard, or output. Its strict Git wrapper keeps native stderr diagnostics separate from returned stdout identities: an exit-zero warning is recorded but cannot contaminate a HEAD/tree/status/entry/blob value, while a real non-zero still throws. After the raw preimage is captured, an encompassing `try`/`catch`/`finally` restores and verifies the exact index bytes on every success, native failure, or validation throw; it rethrows the primary failure after restoration and never masks it with later output. A path/preflight or parse failure occurs before canary mutation and is `FILESYSTEM_CAPABILITY_UNAVAILABLE`; never consume the approval or create an artifact after it. After the direct-`apply_patch` files and exact content hashes are verified, submit that same parsed body as the single approved shell operation:
+Use the next PowerShell body verbatim for the one approved compound operation. This is also a native-Windows Worker template, not a cross-platform command. Because this route consumes the canary's sole approval, choose both canary paths as the same unique direct-child files verified by the preflight; this mode creates no canary parent directory. The nested-parent/two-turn finalization below is not used in this mode. Populate only the ten placeholder assignment values at the top: the four path values are the same validated standard padded Base64 UTF-8 encodings used or derived during preflight, the length is decimal, and every identity is exact fixed-width hexadecimal. Never insert a raw path into a PowerShell literal. Parse the fully populated body without executing it. The body decodes and validates every path before reading the index. Do not rewrite its functions, control flow, Git calls, restoration guard, or output. Its strict Git wrapper keeps native stderr diagnostics separate from returned stdout identities: an exit-zero warning is recorded but cannot contaminate a HEAD/tree/status/entry/blob value, while a real non-zero still throws. After the raw preimage is captured, an encompassing `try`/`catch`/`finally` restores and verifies the exact index bytes on every success, native failure, or validation throw; it rethrows the primary failure after restoration and never masks it with later output. A path/preflight or parse failure occurs before canary mutation and is `FILESYSTEM_CAPABILITY_UNAVAILABLE`; never consume the approval or create an artifact after it. After the direct-`apply_patch` files and exact content hashes are verified, submit that same parsed body as the single approved shell operation:
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$Worktree = '<absolute-linked-worktree>'
-$IndexPath = '<absolute-resolved-index>'
-$WorktreeCanaryPath = '<posix-relative-worktree-canary-path>'
-$IndexCanaryPath = '<posix-relative-index-canary-path>'
+$WorktreeBase64 = '<base64-utf8-absolute-linked-worktree>'
+$IndexPathBase64 = '<base64-utf8-absolute-resolved-index>'
+$WorktreeCanaryPathBase64 = '<base64-utf8-posix-relative-worktree-canary-path>'
+$IndexCanaryPathBase64 = '<base64-utf8-posix-relative-index-canary-path>'
 $ExpectedIndexLength = <decimal-integer>
 $ExpectedIndexSha256 = '<64-hex>'
 $ExpectedHead = '<40-lowercase-hex>'
 $ExpectedTree = '<40-lowercase-hex>'
 $ExpectedEntriesSha256 = '<64-hex>'
 $ExpectedIndexCanaryFileSha256 = '<64-hex>'
+
+function ConvertFrom-RoundletBase64 {
+    param([string]$Value)
+    if ($Value -notmatch '^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$') { throw 'invalid Base64 assignment' }
+    try { $Bytes = [Convert]::FromBase64String($Value) }
+    catch { throw 'invalid Base64 assignment' }
+    $Utf8 = [Text.UTF8Encoding]::new($false, $true)
+    try { $Decoded = $Utf8.GetString($Bytes) }
+    catch { throw 'invalid UTF-8 assignment' }
+    if ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Decoded)) -ne $Value) { throw 'noncanonical Base64 assignment' }
+    return $Decoded
+}
+
+$Worktree = ConvertFrom-RoundletBase64 $WorktreeBase64
+$IndexPath = ConvertFrom-RoundletBase64 $IndexPathBase64
+$WorktreeCanaryPath = ConvertFrom-RoundletBase64 $WorktreeCanaryPathBase64
+$IndexCanaryPath = ConvertFrom-RoundletBase64 $IndexCanaryPathBase64
 
 function Get-BytesSha256 {
     param([byte[]]$Bytes)
@@ -258,6 +292,9 @@ function Invoke-GitStrict {
     return [string[]]$CommandStdout.ToArray()
 }
 
+if ([string]::IsNullOrWhiteSpace($Worktree) -or [string]::IsNullOrWhiteSpace($IndexPath)) { throw 'worktree or index path is empty' }
+if ($Worktree.Contains("'") -or $Worktree.Contains("`r") -or $Worktree.Contains("`n")) { throw 'worktree path contains forbidden literal' }
+if ($IndexPath.Contains("'") -or $IndexPath.Contains("`r") -or $IndexPath.Contains("`n")) { throw 'index path contains forbidden literal' }
 if ([IO.Path]::GetFullPath($IndexPath) -eq [IO.Path]::GetFullPath($Worktree)) { throw 'index/worktree alias' }
 if ($IndexCanaryPath -match '[\\/''\s]' -or $WorktreeCanaryPath -match '[\\/''\s]') { throw 'canary path is not a direct-child filename' }
 $IndexPreimage = [IO.File]::ReadAllBytes($IndexPath)

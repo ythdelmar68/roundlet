@@ -418,12 +418,14 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
 - If that exact out-of-root route is initially restricted, use the sole configured approval
   retry for the operator guide's native-Windows PowerShell body. Choose both canaries as
   unique direct-child filenames of worktree: no slash, backslash, whitespace, single quote,
-  newline, or canary-created parent is permitted. Before any artifact, populate only the
-  three assignments in the operator guide's Windows-only read-only preflight body, parse it,
+  newline, or canary-created parent is permitted. Encode every exact path assignment for both
+  Windows-only bodies as validated standard padded Base64 of its UTF-8 bytes; never insert a
+  raw path into a PowerShell literal. Before any artifact, populate only the three encoded
+  assignments in the operator guide's read-only preflight body, parse it,
   and execute it unchanged in the normal sandbox. Require its PASS result to prove both exact
   absolute files absent, each immediate parent exactly the pre-existing ordinary non-reparse
   worktree root, and one immutable initial-absence/root-identity digest. Do not substitute an
-  ad hoc shell preflight. Then populate only the separate compound body's ten placeholder
+  ad hoc shell preflight. Then populate only the separate compound body's ten validated
   assignment values, parse the fully populated body, and submit that same parsed body unchanged as the one compound operation
   bound to the exact worktree, resolved index, and unique canary paths. It captures the complete raw index bytes
   in memory before its first potentially locking command, creates no backup artifact, performs
