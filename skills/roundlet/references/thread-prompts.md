@@ -385,7 +385,7 @@ Before **every** initial, repair, final-repair, integration, or cleanup-prefligh
 
 It must not rely on task memory in place of rereading those sources.
 
-### Native Windows Worker topology, patch routing, and canary empty-parent finalization
+### Native Windows Worker topology, patch routing, Git-index approval, and canary empty-parent finalization
 
 Before every Worker turn, the Orchestrator must verify the Worker's actual runtime and populate `worker_runtime`; a Windows-looking path is not sufficient evidence. `NATIVE_WINDOWS` means the Worker runs directly on Windows, not inside WSL.
 
@@ -409,7 +409,50 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   report FILESYSTEM_CAPABILITY_UNAVAILABLE through the active typed filesystem contract;
   when that structure is not part of the current turn, return NEEDS_OWNER_INPUT and put the
   exact FILESYSTEM_CAPABILITY_UNAVAILABLE evidence in owner_input_required.
-- Only after apply_patch has deleted every canary file, if the sole residue is the exact
+- Resolve the linked-worktree Git index and possible index.lock before the first operation
+  that may lock or write them. When they are outside this Worker's normal writable roots,
+  treat git write-tree, index refresh, stage/unstage, and every command that may create
+  index.lock as one native-Windows out-of-root Git-index route. Do not run a preliminary
+  locking identity command in the normal sandbox or spend the configured retry before the
+  actual canary sequence.
+- If that exact out-of-root route is initially restricted, use the sole configured approval
+  retry for the operator guide's native-Windows PowerShell body. Choose both canaries as
+  unique direct-child filenames of worktree: no slash, backslash, whitespace, single quote,
+  newline, or canary-created parent is permitted. Encode every exact path assignment for both
+  Windows-only bodies as validated standard padded Base64 of its UTF-8 bytes; never insert a
+  raw path into a PowerShell literal. Before any artifact, populate only the three encoded
+  assignments in the operator guide's read-only preflight body, read back exactly three
+  complete canonical single-literal assignment lines with no placeholder or expression, parse it,
+  and execute it unchanged in the normal sandbox. Require its PASS result to prove both exact
+  absolute files absent, each immediate parent exactly the pre-existing ordinary non-reparse
+  worktree root, and one immutable initial-absence/root-identity digest. Do not substitute an
+  ad hoc shell preflight. Then populate only the separate compound body's ten validated
+  assignment values. Before canary creation, read back exactly ten complete lines byte-for-byte
+  against the canonical bound assignments; reject every placeholder, concatenation, interpolation,
+  variable reference, method call, or other right-hand-side expression; parse the fully populated
+  body; and bind its SHA-256. After the direct patch files exist, require the retained bytes to
+  match that digest and submit those exact same parsed bytes as the one compound operation
+  bound to the exact worktree, resolved index, and unique canary paths. It captures the complete raw index bytes
+  in memory before its first potentially locking command, creates no backup artifact, performs
+  initial locking identity reads, stages and verifies only the canary entry/mode/blob/content,
+  restores the raw preimage, performs every final HEAD/status/tree/pre-existing-entry read,
+  restores the same raw bytes again after those reads, then verifies final raw
+  length/SHA-256 and no index.lock using only raw filesystem read-back.
+- A path/preflight, assignment-literal read-back, or template parse failure occurs before canary mutation: create no
+  artifact, spend no approval, and return FILESYSTEM_CAPABILITY_UNAVAILABLE. Never rewrite,
+  wrap, split, or substitute the template after its successful parse.
+- Every Git or subprocess non-zero exit must terminate that compound operation non-zero;
+  later output, formatting, or object construction must not mask it. The operation is one
+  approval retry and may not be split, broadened, reused for source/file edits, or followed
+  by a second approval. Any denial, unavailable approval, parse/launched failure, identity
+  mismatch, raw-byte mismatch, lock residue, or incomplete read-back is
+  FILESYSTEM_CAPABILITY_UNAVAILABLE.
+- After that out-of-root compound operation passes, delete both direct-child files through
+  apply_patch. Run no later Git command. Prove both files absent, repeat only raw index
+  length/SHA-256 and index.lock reads, and bind the patch tool's exact-path evidence to prove
+  no unrelated path changed. No external directory-removal turn is expected or authorized.
+- Only for a different NATIVE_WINDOWS canary whose index route used no approval, after
+  apply_patch has deleted every nested canary file, if the sole residue is the exact
   canary-created parent directory, follow NATIVE_WINDOWS_CANARY_EMPTY_PARENT_FINALIZATION:
   prove that parent was initially absent, is the nonce-bound expected descendant inside but
   not equal to worktree, is an ordinary non-reparse directory, and has zero entries including
@@ -427,8 +470,8 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
 - This guard does not prohibit the narrowest approved elevation for a genuinely host-bound
   GitHub, network, or out-of-root operation that is not a source-file patch.
 When worker_runtime is WSL or NON_WINDOWS, this conditional block imposes no additional
-patch-routing or empty-parent-finalization rule; follow the normal tool, sandbox, and
-repository contracts.
+topology, patch-routing, Git-index-approval, or empty-parent-finalization rule; follow the
+normal tool, sandbox, and repository contracts.
 ```
 
 The Orchestrator rejects a native-Windows Worker canary or implementation handoff that omitted direct-route evidence or used an elevated or shell-wrapped `apply_patch` route, even if the canary result or resulting diff is otherwise correct. Cleanup preflight remains read-only and does not need an edit route.
@@ -481,16 +524,25 @@ equal the preimage after all remaining HEAD/status/tree/entry reads. A semantic 
 match does not substitute for raw index equality. Prove all pre-existing path identities
 equal the initial values. Make no commit, branch, GitHub, source, user-work, or unrelated-
 index mutation.
-Use at most the one narrow approval retry and preserve typed outcomes exactly.
+Use at most the one narrow approval retry and preserve typed outcomes exactly. Every shell
+wrapper must return non-zero on the first failing Git/subprocess operation; later output must
+not mask it. On NATIVE_WINDOWS only, when the resolved index/index.lock are outside the
+Worker's normal writable roots, follow the conditional block's one compound approval route
+for every potentially locking identity/stage operation and perform final raw read-back only
+after its last Git identity read. WSL and NON_WINDOWS keep the ordinary index route.
 
-Return the exact FILESYSTEM_CANARY_RESULT structure. On NATIVE_WINDOWS only, when direct
-apply_patch file cleanup leaves only the qualifying proven-empty canary-created parent, return
-the bounded WINDOWS_CANARY_EMPTY_PARENT_READY intermediate record required by the conditional
-contract instead; it is not an aggregate result. After the external creator removes and reads
-back only that exact empty directory, process one fresh metadata-gated read-only finalization
-turn and return the canonical result only after re-verification. If cleanup is otherwise not
-verified, report FILESYSTEM_CAPABILITY_UNAVAILABLE and the remaining exact canary path; do not
-broaden cleanup.
+Return the exact FILESYSTEM_CANARY_RESULT structure. In the NATIVE_WINDOWS out-of-root index
+mode, require the two direct-child files absent plus exact patch-tool and raw index/lock
+read-back without a post-deletion Git command, then return the canonical result in the same
+turn; there is no canary-created parent or external cleanup. Only for a
+different NATIVE_WINDOWS canary whose index route used no approval, when direct apply_patch
+file cleanup leaves a qualifying proven-empty canary-created nested parent, return the bounded
+WINDOWS_CANARY_EMPTY_PARENT_READY intermediate record required by the conditional contract
+instead; it is not an aggregate result. After the external creator removes and reads back only
+that exact empty directory, process one fresh metadata-gated read-only finalization turn and
+return the canonical result only after re-verification. If cleanup is otherwise not verified,
+report FILESYSTEM_CAPABILITY_UNAVAILABLE and the remaining exact canary path; do not broaden
+cleanup.
 ```
 
 ### Initial implementation prompt

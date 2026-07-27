@@ -136,9 +136,244 @@ This subsection applies only when `worker_runtime` is `NATIVE_WINDOWS`. It does 
 
 Create every new native-Windows Worker in a dedicated host-owned task anchor. Bind `native_windows_task_anchor` inside the native-Windows conditional prompt to the task's exact canonical CWD, and create the Roundlet-owned linked worktree as a distinct writable descendant. The task CWD must never equal or be inside the removable worktree. A surviving Codex/Node process whose exact CWD is the distinct anchor is recorded host lifecycle evidence, but it is not a worktree holder after task inactivity, Git-registration absence, unique-work absence, and physical linked-worktree-path absence are independently proven. Never store run state or unique work in the anchor, treat the anchor as the worktree, use it to excuse a surviving linked worktree, force-remove it, or kill a process to release it.
 
+#### Native Windows linked-worktree Git-index approval route
+
+This subsection applies only to a Worker canary with `worker_runtime: NATIVE_WINDOWS` whose separated linked-worktree Git index and possible `index.lock` resolve outside that Worker's normal writable roots. It does not apply to a Launcher, WSL, Linux, macOS, another host/runtime, an index already writable through the normal sandbox route, source-file edits, advisory state, or post-archive cleanup. Those routes keep their existing platform-appropriate behavior.
+
+Treat `git write-tree`, index refresh, stage/unstage, and every other command that may create `index.lock` as index-writing operations on this topology. Do not execute a preliminary locking identity command in the normal sandbox merely to discover the expected restriction, and do not spend the one configured retry before the actual canary sequence. Non-locking reads may run normally, but they cannot substitute for the required initial/final tree and index identities.
+
+After the canary file exists through direct normal-sandbox `apply_patch`, an initial restriction on this exact out-of-root index route may receive the sole configured approval retry as one compound operation:
+
+1. Bind the operation to the exact canonical linked worktree, resolved index path, unique canary path, expected raw preimage length/SHA-256, and initial HEAD/status/tree/pre-existing-entry identities. Capture the complete raw index bytes in memory before the first potentially locking or writing command; create no backup artifact.
+2. Within that same approved operation, run the required initial locking identity reads, stage only the canary, verify its exact index path/mode/blob/content, restore the captured raw bytes to remove only that staged entry, and run every required final HEAD/status/tree/pre-existing-entry read. Every Git or subprocess non-zero exit terminates the compound operation non-zero; later formatting or output must not mask it.
+3. After all Git identity reads, restore the same captured bytes once more inside an unconditional restoration guard, then perform only raw filesystem read-back: require the final index length/SHA-256 to equal the preimage and require `index.lock` absent. Retain no backup or helper artifact. Subsequent direct-`apply_patch` deletion of the two direct-child files must leave no canary-created parent. After deletion, run no Git command; prove both file absences, repeat only raw index length/SHA-256 and lock-file reads, and bind the dedicated patch tool's exact-path change/delete evidence to show that no unrelated worktree path was mutated.
+
+This native-Windows out-of-root mode has a separate, read-only preflight template. It is not a cross-platform command and makes no Git call. Convert each of the three exact path values to standard padded Base64 of its UTF-8 bytes, validate the encoded value against the template's Base64 grammar and an encode/decode round trip before substitution, and populate only those three encoded assignments. Never insert a raw path into a PowerShell literal. Before parsing or execution, read back the three populated assignment lines and require each complete line to equal the canonical single-quoted literal assignment constructed from the validated value; require exactly three such assignments and no placeholder, concatenation, interpolation, variable reference, method call, or other expression in any right-hand side. Parse the fully populated body, then execute it unchanged in the normal sandbox before creating either file. The body decodes the values as strict UTF-8 and, before any path access, rejects a single quote or newline in the absolute worktree and rejects `/`, `\`, whitespace, a single quote, or a newline in either direct-child filename. Do not substitute a Worker-authored shell preflight. Require its `PASS`, exact absolute paths, canonical worktree root, and `initial_absence_root_identity_sha256` output:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$WorktreeBase64 = '<base64-utf8-absolute-linked-worktree>'
+$WorktreeCanaryPathBase64 = '<base64-utf8-direct-child-worktree-canary-filename>'
+$IndexCanaryPathBase64 = '<base64-utf8-direct-child-index-canary-filename>'
+
+function ConvertFrom-RoundletBase64 {
+    param([string]$Value)
+    if ($Value -notmatch '^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$') { throw 'invalid Base64 assignment' }
+    try { $Bytes = [Convert]::FromBase64String($Value) }
+    catch { throw 'invalid Base64 assignment' }
+    $Utf8 = [Text.UTF8Encoding]::new($false, $true)
+    try { $Decoded = $Utf8.GetString($Bytes) }
+    catch { throw 'invalid UTF-8 assignment' }
+    if ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Decoded)) -ne $Value) { throw 'noncanonical Base64 assignment' }
+    return $Decoded
+}
+
+$Worktree = ConvertFrom-RoundletBase64 $WorktreeBase64
+$WorktreeCanaryPath = ConvertFrom-RoundletBase64 $WorktreeCanaryPathBase64
+$IndexCanaryPath = ConvertFrom-RoundletBase64 $IndexCanaryPathBase64
+
+function Get-TextSha256 {
+    param([string]$Text)
+    $Hasher = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($Hasher.ComputeHash([Text.Encoding]::UTF8.GetBytes($Text)))).Replace('-', '') }
+    finally { $Hasher.Dispose() }
+}
+
+if ([string]::IsNullOrWhiteSpace($Worktree)) { throw 'worktree path is empty' }
+if ($Worktree.Contains("'") -or $Worktree.Contains("`r") -or $Worktree.Contains("`n")) { throw 'worktree path contains forbidden literal' }
+if ([string]::IsNullOrWhiteSpace($WorktreeCanaryPath) -or [string]::IsNullOrWhiteSpace($IndexCanaryPath)) { throw 'canary filename is empty' }
+if ($WorktreeCanaryPath -match '[\\/''\s]' -or $IndexCanaryPath -match '[\\/''\s]') { throw 'canary path is not a direct-child filename' }
+if ($WorktreeCanaryPath -eq $IndexCanaryPath) { throw 'canary filenames alias' }
+
+$RootItem = Get-Item -LiteralPath ([IO.Path]::GetFullPath($Worktree)) -Force -ErrorAction Stop
+if (-not $RootItem.PSIsContainer) { throw 'worktree root is not a directory' }
+if (($RootItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'worktree root is a reparse point' }
+$TrimChars = [char[]]@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
+$CanonicalRoot = [IO.Path]::GetFullPath($RootItem.FullName).TrimEnd($TrimChars)
+$WorktreeCanaryAbsolute = [IO.Path]::GetFullPath([IO.Path]::Combine($CanonicalRoot, $WorktreeCanaryPath))
+$IndexCanaryAbsolute = [IO.Path]::GetFullPath([IO.Path]::Combine($CanonicalRoot, $IndexCanaryPath))
+$WorktreeCanaryParent = [IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($WorktreeCanaryAbsolute)).TrimEnd($TrimChars)
+$IndexCanaryParent = [IO.Path]::GetFullPath([IO.Path]::GetDirectoryName($IndexCanaryAbsolute)).TrimEnd($TrimChars)
+if (-not [string]::Equals($WorktreeCanaryParent, $CanonicalRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'worktree canary parent mismatch' }
+if (-not [string]::Equals($IndexCanaryParent, $CanonicalRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'index canary parent mismatch' }
+if (Test-Path -LiteralPath $WorktreeCanaryAbsolute) { throw 'worktree canary pre-exists' }
+if (Test-Path -LiteralPath $IndexCanaryAbsolute) { throw 'index canary pre-exists' }
+
+$IdentityRecord = 'runtime=NATIVE_WINDOWS' + "`n" +
+    'root=' + $CanonicalRoot + "`n" +
+    'root_attributes=' + ([int]$RootItem.Attributes) + "`n" +
+    'worktree_canary=' + $WorktreeCanaryAbsolute + "`n" +
+    'worktree_canary_absent=True' + "`n" +
+    'index_canary=' + $IndexCanaryAbsolute + "`n" +
+    'index_canary_absent=True'
+$Result = [ordered]@{
+    outcome = 'PASS'
+    canonical_worktree_root = $CanonicalRoot
+    worktree_canary = $WorktreeCanaryAbsolute
+    index_canary = $IndexCanaryAbsolute
+    initial_absence_root_identity_sha256 = Get-TextSha256 $IdentityRecord
+}
+ConvertTo-Json -InputObject $Result -Compress
+```
+
+Use the next PowerShell body verbatim for the one approved compound operation. This is also a native-Windows Worker template, not a cross-platform command. Because this route consumes the canary's sole approval, choose both canary paths as the same unique direct-child files verified by the preflight; this mode creates no canary parent directory. The nested-parent/two-turn finalization below is not used in this mode. Populate only the ten placeholder assignment values at the top: the four path values are the same validated standard padded Base64 UTF-8 encodings used or derived during preflight, the length is decimal, and every identity is exact fixed-width hexadecimal. Never insert a raw path into a PowerShell literal. Before parsing or creating either canary file, read back all ten populated assignment lines and compare each complete line byte-for-byte with the canonical assignment constructed from the bound value. Require exactly ten assignment lines, every placeholder absent, the four path right-hand sides to be single-quoted Base64 literals, the length right-hand side to be only the bound decimal integer, and the five identity right-hand sides to be only their bound single-quoted hexadecimal literals. A concatenation, interpolation, variable reference, method call such as `.Replace(...)`, or any other expression is invalid even when PowerShell can parse or evaluate it. Parse the fully populated body without executing it only after this literal read-back passes, and bind the populated-body SHA-256 before canary creation so the exact same bytes are submitted later. The body decodes and validates every path before reading the index. Do not rewrite its functions, control flow, Git calls, restoration guard, or output. Its strict Git wrapper keeps native stderr diagnostics separate from returned stdout identities: an exit-zero warning is recorded but cannot contaminate a HEAD/tree/status/entry/blob value, while a real non-zero still throws. After the raw preimage is captured, an encompassing `try`/`catch`/`finally` restores and verifies the exact index bytes on every success, native failure, or validation throw; it rethrows the primary failure after restoration and never masks it with later output. A path/preflight, literal-read-back, or parse failure occurs before canary mutation and is `FILESYSTEM_CAPABILITY_UNAVAILABLE`; never consume the approval or create an artifact after it. After the direct-`apply_patch` files and exact content hashes are verified, require the retained body's SHA-256 to equal the pre-creation populated-body digest and submit those exact same parsed bytes as the single approved shell operation:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$WorktreeBase64 = '<base64-utf8-absolute-linked-worktree>'
+$IndexPathBase64 = '<base64-utf8-absolute-resolved-index>'
+$WorktreeCanaryPathBase64 = '<base64-utf8-posix-relative-worktree-canary-path>'
+$IndexCanaryPathBase64 = '<base64-utf8-posix-relative-index-canary-path>'
+$ExpectedIndexLength = <decimal-integer>
+$ExpectedIndexSha256 = '<64-hex>'
+$ExpectedHead = '<40-lowercase-hex>'
+$ExpectedTree = '<40-lowercase-hex>'
+$ExpectedEntriesSha256 = '<64-hex>'
+$ExpectedIndexCanaryFileSha256 = '<64-hex>'
+
+function ConvertFrom-RoundletBase64 {
+    param([string]$Value)
+    if ($Value -notmatch '^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$') { throw 'invalid Base64 assignment' }
+    try { $Bytes = [Convert]::FromBase64String($Value) }
+    catch { throw 'invalid Base64 assignment' }
+    $Utf8 = [Text.UTF8Encoding]::new($false, $true)
+    try { $Decoded = $Utf8.GetString($Bytes) }
+    catch { throw 'invalid UTF-8 assignment' }
+    if ([Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($Decoded)) -ne $Value) { throw 'noncanonical Base64 assignment' }
+    return $Decoded
+}
+
+$Worktree = ConvertFrom-RoundletBase64 $WorktreeBase64
+$IndexPath = ConvertFrom-RoundletBase64 $IndexPathBase64
+$WorktreeCanaryPath = ConvertFrom-RoundletBase64 $WorktreeCanaryPathBase64
+$IndexCanaryPath = ConvertFrom-RoundletBase64 $IndexCanaryPathBase64
+
+function Get-BytesSha256 {
+    param([byte[]]$Bytes)
+    $Hasher = [Security.Cryptography.SHA256]::Create()
+    try { return ([BitConverter]::ToString($Hasher.ComputeHash($Bytes))).Replace('-', '') }
+    finally { $Hasher.Dispose() }
+}
+
+function Get-TextSha256 {
+    param([string]$Text)
+    return Get-BytesSha256 ([Text.Encoding]::UTF8.GetBytes($Text))
+}
+
+$script:RoundletGitDiagnostics = New-Object 'System.Collections.Generic.List[string]'
+
+function Invoke-GitStrict {
+    param([string[]]$CommandArgs)
+    $PriorErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $CommandCombined = @(& git @CommandArgs 2>&1)
+        $CommandExit = $LASTEXITCODE
+    }
+    finally {
+        $ErrorActionPreference = $PriorErrorActionPreference
+    }
+    $CommandStdout = New-Object 'System.Collections.Generic.List[string]'
+    $CommandStderr = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($Item in $CommandCombined) {
+        if ($Item -is [System.Management.Automation.ErrorRecord]) {
+            $CommandStderr.Add($Item.ToString())
+        }
+        else {
+            $CommandStdout.Add($Item.ToString())
+        }
+    }
+    if ($CommandStderr.Count -gt 0) {
+        $script:RoundletGitDiagnostics.Add(('args=' + ($CommandArgs -join ' ') + ' stderr=' + ($CommandStderr -join ' | ')))
+    }
+    if ($CommandExit -ne 0) {
+        throw ('git failed exit=' + $CommandExit + ' args=' + ($CommandArgs -join ' ') + ' stdout=' + ($CommandStdout -join ' | ') + ' stderr=' + ($CommandStderr -join ' | '))
+    }
+    return [string[]]$CommandStdout.ToArray()
+}
+
+if ([string]::IsNullOrWhiteSpace($Worktree) -or [string]::IsNullOrWhiteSpace($IndexPath)) { throw 'worktree or index path is empty' }
+if ($Worktree.Contains("'") -or $Worktree.Contains("`r") -or $Worktree.Contains("`n")) { throw 'worktree path contains forbidden literal' }
+if ($IndexPath.Contains("'") -or $IndexPath.Contains("`r") -or $IndexPath.Contains("`n")) { throw 'index path contains forbidden literal' }
+if ([IO.Path]::GetFullPath($IndexPath) -eq [IO.Path]::GetFullPath($Worktree)) { throw 'index/worktree alias' }
+if ($IndexCanaryPath -match '[\\/''\s]' -or $WorktreeCanaryPath -match '[\\/''\s]') { throw 'canary path is not a direct-child filename' }
+$IndexPreimage = [IO.File]::ReadAllBytes($IndexPath)
+$PreimageHash = Get-BytesSha256 $IndexPreimage
+if ($IndexPreimage.Length -ne $ExpectedIndexLength -or $PreimageHash -ne $ExpectedIndexSha256) { throw 'raw index preimage mismatch' }
+if (Test-Path -LiteralPath ($IndexPath + '.lock')) { throw 'index.lock pre-exists' }
+
+$GitBase = [string[]]@('-c', ('safe.directory=' + $Worktree), '-C', $Worktree)
+$PrimaryFailure = $null
+$RestorationFailure = $null
+try {
+    $InitialHead = ((Invoke-GitStrict ($GitBase + @('rev-parse', 'HEAD'))) -join "`n").Trim()
+    if ($InitialHead -ne $ExpectedHead) { throw 'initial HEAD mismatch' }
+    $InitialStatus = [string[]]@(Invoke-GitStrict ($GitBase + @('status', '--porcelain=v1', '--untracked-files=all')))
+    $ExpectedStatus = [string[]]@(('?? ' + $WorktreeCanaryPath), ('?? ' + $IndexCanaryPath))
+    [Array]::Sort($ExpectedStatus, [StringComparer]::Ordinal)
+    if (($InitialStatus -join "`n") -ne ($ExpectedStatus -join "`n")) { throw ('initial status mismatch: ' + ($InitialStatus -join ' | ')) }
+    $InitialTree = ((Invoke-GitStrict ($GitBase + @('write-tree'))) -join "`n").Trim()
+    if ($InitialTree -ne $ExpectedTree) { throw 'initial tree mismatch' }
+    $InitialEntries = (Invoke-GitStrict ($GitBase + @('ls-files', '--stage'))) -join "`n"
+    if ((Get-TextSha256 $InitialEntries) -ne $ExpectedEntriesSha256) { throw 'initial entries mismatch' }
+    [IO.File]::WriteAllBytes($IndexPath, $IndexPreimage)
+
+    $Null = Invoke-GitStrict ($GitBase + @('add', '--', $IndexCanaryPath))
+    $EntryLines = [string[]]@(Invoke-GitStrict ($GitBase + @('ls-files', '--stage', '--', $IndexCanaryPath)))
+    if ($EntryLines.Count -ne 1) { throw 'staged entry count mismatch' }
+    $EntryParts = $EntryLines[0] -split '\s+', 4
+    if ($EntryParts.Count -ne 4 -or $EntryParts[0] -ne '100644' -or $EntryParts[2] -ne '0' -or $EntryParts[3] -ne $IndexCanaryPath) { throw ('staged entry mismatch: ' + $EntryLines[0]) }
+    $Blob = ((Invoke-GitStrict ($GitBase + @('hash-object', '--no-filters', '--', $IndexCanaryPath))) -join "`n").Trim()
+    if ($EntryParts[1] -ne $Blob) { throw 'staged blob mismatch' }
+    $IndexCanaryAbsolute = Join-Path $Worktree ($IndexCanaryPath.Replace('/', [IO.Path]::DirectorySeparatorChar))
+    $CanaryFileHash = (Get-FileHash -LiteralPath $IndexCanaryAbsolute -Algorithm SHA256).Hash
+    if ($CanaryFileHash -ne $ExpectedIndexCanaryFileSha256) { throw 'canary file hash mismatch' }
+    $BlobSize = [int](((Invoke-GitStrict ($GitBase + @('cat-file', '-s', $Blob))) -join "`n").Trim())
+    if ($BlobSize -ne (Get-Item -LiteralPath $IndexCanaryAbsolute).Length) { throw 'blob size mismatch' }
+
+    [IO.File]::WriteAllBytes($IndexPath, $IndexPreimage)
+    $FinalHead = ((Invoke-GitStrict ($GitBase + @('rev-parse', 'HEAD'))) -join "`n").Trim()
+    if ($FinalHead -ne $ExpectedHead) { throw 'final HEAD mismatch' }
+    $FinalStatus = [string[]]@(Invoke-GitStrict ($GitBase + @('status', '--porcelain=v1', '--untracked-files=all')))
+    if (($FinalStatus -join "`n") -ne ($InitialStatus -join "`n")) { throw 'final status mismatch' }
+    $FinalEntries = (Invoke-GitStrict ($GitBase + @('ls-files', '--stage'))) -join "`n"
+    $FinalEntriesHash = Get-TextSha256 $FinalEntries
+    if ($FinalEntriesHash -ne $ExpectedEntriesSha256) { throw 'final entries mismatch' }
+    $FinalTree = ((Invoke-GitStrict ($GitBase + @('write-tree'))) -join "`n").Trim()
+    if ($FinalTree -ne $ExpectedTree) { throw 'final tree mismatch' }
+}
+catch {
+    $PrimaryFailure = $_
+}
+finally {
+    try {
+        [IO.File]::WriteAllBytes($IndexPath, $IndexPreimage)
+        $FinalIndexLength = (Get-Item -LiteralPath $IndexPath).Length
+        $FinalIndexSha256 = (Get-FileHash -LiteralPath $IndexPath -Algorithm SHA256).Hash
+        if ($FinalIndexLength -ne $ExpectedIndexLength -or $FinalIndexSha256 -ne $ExpectedIndexSha256) { throw 'final raw index mismatch' }
+        if (Test-Path -LiteralPath ($IndexPath + '.lock')) { throw 'index.lock remains' }
+    }
+    catch {
+        $RestorationFailure = $_
+    }
+}
+if ($null -ne $PrimaryFailure) {
+    if ($null -ne $RestorationFailure) {
+        throw ('primary failure: ' + $PrimaryFailure.Exception.Message + '; restoration failure: ' + $RestorationFailure.Exception.Message)
+    }
+    throw $PrimaryFailure
+}
+if ($null -ne $RestorationFailure) { throw $RestorationFailure }
+$DiagnosticsText = $script:RoundletGitDiagnostics -join "`n"
+$Result = [ordered]@{ outcome = 'PASS'; entry = $EntryLines[0]; blob = $Blob; blob_size = $BlobSize; canary_file_sha256 = $CanaryFileHash; initial_head = $InitialHead; final_head = $FinalHead; initial_tree = $InitialTree; final_tree = $FinalTree; final_entries_sha256 = $FinalEntriesHash; final_index_length = $FinalIndexLength; final_index_sha256 = $FinalIndexSha256; index_lock_exists = $false; git_diagnostics_count = $script:RoundletGitDiagnostics.Count; git_diagnostics_sha256 = Get-TextSha256 $DiagnosticsText }
+ConvertTo-Json -InputObject $Result -Compress
+```
+
+The compound operation is one retry and one typed outcome. It may not be split into multiple approval requests, broadened to another worktree/index/path, reused for implementation or source edits, or treated as permission for file cleanup. Denial, unavailable approval, parse failure, any launched non-zero suboperation, identity mismatch, raw-byte mismatch, lock residue, or incomplete read-back is the corresponding typed failure and `FILESYSTEM_CAPABILITY_UNAVAILABLE`.
+
 #### Native Windows canary empty-parent finalization
 
-This exception applies only to a Worker canary running with `worker_runtime: NATIVE_WINDOWS`. It does not apply to a Launcher, WSL, Linux, macOS, any other host/runtime, an implementation or source-file edit, advisory run state, a task anchor, a linked-worktree root, or post-archive worktree cleanup.
+This exception applies only to a Worker canary running with `worker_runtime: NATIVE_WINDOWS` whose index route did not consume the configured approval and whose direct patch route left a qualifying nested parent. It does not apply to the out-of-root direct-child-file index mode above, a Launcher, WSL, Linux, macOS, any other host/runtime, an implementation or source-file edit, advisory run state, a task anchor, a linked-worktree root, or post-archive worktree cleanup.
 
 The Worker must still create, change, and delete every canary file through the dedicated `apply_patch` tool in its normal writable-worktree sandbox. If `apply_patch` removes every canary file but leaves the canary-created parent directory, use this two-turn protocol:
 
@@ -158,7 +393,7 @@ Classify the control path exactly:
 - `ESCALATED_EXECUTION_FAILED`: approval succeeded and the requested operation launched, but execution returned non-zero or an equivalent launched-failure result.
 - `FILESYSTEM_CAPABILITY_UNAVAILABLE`: the exact required create/edit/read-back/identity/restore/cleanup surface is not fully proven. Preserve the more specific approval or execution cause alongside this final capability result.
 
-An initial restricted or sandboxed attempt is evidence only. Request the narrowest host-supported approval for the same exact target and operation, at most `approval_retry_limit` times. Never convert a launched failure into an approval denial, switch to an unproven helper or broader target, prescribe host internals, or retry indefinitely. The contract is independent of operating system, shell, command syntax, and helper executable.
+An initial restricted or sandboxed attempt is evidence only. Request the narrowest host-supported approval for the same exact target and operation, at most `approval_retry_limit` times. Never convert a launched failure into an approval denial, switch to an unproven helper or broader target, prescribe host internals, or retry indefinitely. Every shell wrapper must preserve the first failing Git/subprocess exit as the operation's non-zero result; later output, formatting, or object construction cannot turn it into success. Except for the explicitly runtime-gated native-Windows Worker contracts above, the control taxonomy is independent of operating system, shell, command syntax, and helper executable.
 
 `approval_retry_count` counts actual host-supported approval retries, not the initial normal attempt. Only these control tuples are valid: `(0, NOT_REQUIRED, SUCCEEDED)`, `(0, NOT_REQUIRED, DIRECT_EXECUTION_FAILED)`, `(1, APPROVED, SUCCEEDED)`, `(1, APPROVED, ESCALATED_EXECUTION_FAILED)`, `(1, ESCALATION_DENIED, NOT_LAUNCHED)`, and `(0, ESCALATION_UNAVAILABLE, NOT_LAUNCHED)`. `capability_outcome` is `PASS` only when execution succeeded, every required surface and read-back passed, and cleanup/restoration is `VERIFIED`; every other tuple produces `FILESYSTEM_CAPABILITY_UNAVAILABLE`. Cleanup remains independently truthful even when execution or capability fails.
 
