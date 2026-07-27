@@ -385,7 +385,7 @@ Before **every** initial, repair, final-repair, integration, or cleanup-prefligh
 
 It must not rely on task memory in place of rereading those sources.
 
-### Native Windows Worker topology, patch routing, and canary empty-parent finalization
+### Native Windows Worker topology, patch routing, Git-index approval, and canary empty-parent finalization
 
 Before every Worker turn, the Orchestrator must verify the Worker's actual runtime and populate `worker_runtime`; a Windows-looking path is not sufficient evidence. `NATIVE_WINDOWS` means the Worker runs directly on Windows, not inside WSL.
 
@@ -409,6 +409,26 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   report FILESYSTEM_CAPABILITY_UNAVAILABLE through the active typed filesystem contract;
   when that structure is not part of the current turn, return NEEDS_OWNER_INPUT and put the
   exact FILESYSTEM_CAPABILITY_UNAVAILABLE evidence in owner_input_required.
+- Resolve the linked-worktree Git index and possible index.lock before the first operation
+  that may lock or write them. When they are outside this Worker's normal writable roots,
+  treat git write-tree, index refresh, stage/unstage, and every command that may create
+  index.lock as one native-Windows out-of-root Git-index route. Do not run a preliminary
+  locking identity command in the normal sandbox or spend the configured retry before the
+  actual canary sequence.
+- If that exact out-of-root route is initially restricted, use the sole configured approval
+  retry for one compound operation bound to the exact worktree, resolved index, and unique
+  canary path. Capture the complete raw index bytes in memory before its first potentially
+  locking command; create no backup artifact. In the same approved operation perform initial
+  locking identity reads, stage and verify only the canary entry/mode/blob/content, restore
+  the raw preimage, perform every final HEAD/status/tree/pre-existing-entry read, restore the
+  same raw bytes again after those reads, then verify final raw length/SHA-256 and no
+  index.lock using only raw filesystem read-back.
+- Every Git or subprocess non-zero exit must terminate that compound operation non-zero;
+  later output, formatting, or object construction must not mask it. The operation is one
+  approval retry and may not be split, broadened, reused for source/file edits, or followed
+  by a second approval. Any denial, unavailable approval, parse/launched failure, identity
+  mismatch, raw-byte mismatch, lock residue, or incomplete read-back is
+  FILESYSTEM_CAPABILITY_UNAVAILABLE.
 - Only after apply_patch has deleted every canary file, if the sole residue is the exact
   canary-created parent directory, follow NATIVE_WINDOWS_CANARY_EMPTY_PARENT_FINALIZATION:
   prove that parent was initially absent, is the nonce-bound expected descendant inside but
@@ -427,8 +447,8 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
 - This guard does not prohibit the narrowest approved elevation for a genuinely host-bound
   GitHub, network, or out-of-root operation that is not a source-file patch.
 When worker_runtime is WSL or NON_WINDOWS, this conditional block imposes no additional
-patch-routing or empty-parent-finalization rule; follow the normal tool, sandbox, and
-repository contracts.
+topology, patch-routing, Git-index-approval, or empty-parent-finalization rule; follow the
+normal tool, sandbox, and repository contracts.
 ```
 
 The Orchestrator rejects a native-Windows Worker canary or implementation handoff that omitted direct-route evidence or used an elevated or shell-wrapped `apply_patch` route, even if the canary result or resulting diff is otherwise correct. Cleanup preflight remains read-only and does not need an edit route.
@@ -481,7 +501,12 @@ equal the preimage after all remaining HEAD/status/tree/entry reads. A semantic 
 match does not substitute for raw index equality. Prove all pre-existing path identities
 equal the initial values. Make no commit, branch, GitHub, source, user-work, or unrelated-
 index mutation.
-Use at most the one narrow approval retry and preserve typed outcomes exactly.
+Use at most the one narrow approval retry and preserve typed outcomes exactly. Every shell
+wrapper must return non-zero on the first failing Git/subprocess operation; later output must
+not mask it. On NATIVE_WINDOWS only, when the resolved index/index.lock are outside the
+Worker's normal writable roots, follow the conditional block's one compound approval route
+for every potentially locking identity/stage operation and perform final raw read-back only
+after its last Git identity read. WSL and NON_WINDOWS keep the ordinary index route.
 
 Return the exact FILESYSTEM_CANARY_RESULT structure. On NATIVE_WINDOWS only, when direct
 apply_patch file cleanup leaves only the qualifying proven-empty canary-created parent, return
