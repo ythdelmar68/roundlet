@@ -377,7 +377,7 @@ Before **every** initial, repair, final-repair, integration, or cleanup-prefligh
 
 It must not rely on task memory in place of rereading those sources.
 
-### Native Windows Worker topology and patch routing
+### Native Windows Worker topology, patch routing, and canary empty-parent finalization
 
 Before every Worker turn, the Orchestrator must verify the Worker's actual runtime and populate `worker_runtime`; a Windows-looking path is not sufficient evidence. `NATIVE_WINDOWS` means the Worker runs directly on Windows, not inside WSL.
 
@@ -401,13 +401,51 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   report FILESYSTEM_CAPABILITY_UNAVAILABLE through the active typed filesystem contract;
   when that structure is not part of the current turn, return NEEDS_OWNER_INPUT and put the
   exact FILESYSTEM_CAPABILITY_UNAVAILABLE evidence in owner_input_required.
+- Only after apply_patch has deleted every canary file, if the sole residue is the exact
+  canary-created parent directory, follow NATIVE_WINDOWS_CANARY_EMPTY_PARENT_FINALIZATION:
+  prove that parent was initially absent, is the nonce-bound expected descendant inside but
+  not equal to worktree, is an ordinary non-reparse directory, and has zero entries including
+  hidden/system entries. Return WINDOWS_CANARY_EMPTY_PARENT_READY and stop without returning
+  FILESYSTEM_CANARY_RESULT. The external creator, never this Worker mutation turn, may remove
+  only that exact parent through a nonrecursive, non-force exact-path directory operation.
+  After creator-side absence read-back, accept one fresh metadata-gated read-only finalization
+  turn; bind the original mutation turn and external-cleanup evidence, reprove parent/artifact
+  absence plus exact worktree/raw-index restoration, and only then return the canonical
+  FILESYSTEM_CANARY_RESULT with cleanup VERIFIED.
+- This empty-parent exception never authorizes a shell or elevated file deletion, source edit,
+  ancestor/sibling removal, worktree-root removal, task-anchor removal, .roundlet-state removal,
+  recursive/force operation, or target broadening. Any ambiguity or incomplete finalization is
+  FILESYSTEM_CAPABILITY_UNAVAILABLE.
 - This guard does not prohibit the narrowest approved elevation for a genuinely host-bound
   GitHub, network, or out-of-root operation that is not a source-file patch.
 When worker_runtime is WSL or NON_WINDOWS, this conditional block imposes no additional
-patch-routing rule; follow the normal tool, sandbox, and repository contracts.
+patch-routing or empty-parent-finalization rule; follow the normal tool, sandbox, and
+repository contracts.
 ```
 
 The Orchestrator rejects a native-Windows Worker canary or implementation handoff that omitted direct-route evidence or used an elevated or shell-wrapped `apply_patch` route, even if the canary result or resulting diff is otherwise correct. Cleanup preflight remains read-only and does not need an edit route.
+
+For the native-Windows canary exception, the mutation turn's intermediate response has exactly these lines in this order:
+
+```text
+WINDOWS_CANARY_EMPTY_PARENT_READY
+phase: <ACTIVATION|ISSUE_CLAIM|RECOVERY|LEGACY_BOOTSTRAP|BETWEEN_ISSUES_ADOPTION|ACTIVE_IN_PLACE_MIGRATION|BENCHMARK>
+role: WORKER
+run_id: <exact-run-id>
+role_task: <exact-task-id>
+mutation_metadata_turn: <metadata-read-exact-mutation-turn-id>
+execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>
+worker_runtime: NATIVE_WINDOWS
+worktree: <exact-canonical-linked-worktree-path>
+empty_parent: <exact-canonical-canary-created-parent-path>
+initial_absence_digest: <sha256>
+empty_parent_identity_digest: <sha256>
+restored_state_digest: <sha256>
+approval_retry_count: <0|1>
+repository_transition: none
+```
+
+The external creator must verify this exact mutation turn and profile before acting. The finalization prompt binds every field above plus the exact external operation/outcome/absence evidence and the independently reread stable Worker task/profile. The finalization turn is read-only, repeats immutable metadata first, and records its own turn as the canonical result's `metadata_turn`. Its `host_route_fingerprint` and `cleanup` evidence digests bind the mutation turn, finalization turn, exact parent, typed external operation outcome, absence read-back, and final restored identities. The combined `approval_retry_count` cannot exceed the configured limit. This intermediate structure is invalid for WSL and `NON_WINDOWS`, is never stored as an accepted result, and cannot authorize an aggregate or transition.
 
 ### Worker filesystem canary prompt
 
@@ -437,8 +475,14 @@ equal the initial values. Make no commit, branch, GitHub, source, user-work, or 
 index mutation.
 Use at most the one narrow approval retry and preserve typed outcomes exactly.
 
-Return the exact FILESYSTEM_CANARY_RESULT structure. If cleanup is not verified, report
-FILESYSTEM_CAPABILITY_UNAVAILABLE and the remaining exact canary path; do not broaden cleanup.
+Return the exact FILESYSTEM_CANARY_RESULT structure. On NATIVE_WINDOWS only, when direct
+apply_patch file cleanup leaves only the qualifying proven-empty canary-created parent, return
+the bounded WINDOWS_CANARY_EMPTY_PARENT_READY intermediate record required by the conditional
+contract instead; it is not an aggregate result. After the external creator removes and reads
+back only that exact empty directory, process one fresh metadata-gated read-only finalization
+turn and return the canonical result only after re-verification. If cleanup is otherwise not
+verified, report FILESYSTEM_CAPABILITY_UNAVAILABLE and the remaining exact canary path; do not
+broaden cleanup.
 ```
 
 ### Initial implementation prompt
