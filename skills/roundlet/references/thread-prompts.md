@@ -117,6 +117,8 @@ active_leaf: <number-and-url-or-none>
 branch: <exact-branch-or-none>
 worktree: <absolute-checkout-or-linked-worktree>
 worker_runtime: <NATIVE_WINDOWS|WSL|NON_WINDOWS|NOT_APPLICABLE>
+launcher_canonical_cwd: <absolute-authoritative-checkout-or-not-applicable>
+launcher_workspace_kind: <writable-local-project-or-not-applicable>
 initial_head: <full-sha>
 initial_status_digest: <sha256>
 initial_index_tree: <full-tree-sha-or-not-applicable>
@@ -125,9 +127,15 @@ target_paths: <exact-canary-paths>
 approval_retry_limit: <configured-limit>
 ```
 
-Before validating any other field or mutating, repeat the immutable task-metadata read on this exact populated turn and require equality with the creator-verified `role_task` and `execution_profile`. Then validate every field against live task, Git, and filesystem evidence. `none-before-contract` is valid only during pre-bundle `ACTIVATION`. `none-before-legacy-contract` is valid only during `LEGACY_BOOTSTRAP`, when the owner-authorized literal bootstrap protocol is bound in `source_contract` and live reconciliation proves that no activation ID, legacy record, contract bundle, prepared record, or committed record exists. `none-for-benchmark` is valid only for a standalone `BENCHMARK` bound to an exact candidate in `source_contract`. `active_leaf: none` and `branch: none` are valid only when that resource is genuinely absent in the named phase, including activation, between-issue adoption, legacy bootstrap without retained leaf resources, and a benchmark whose plan does not provision that resource.
+Before validating any other field or mutating, repeat the immutable task-metadata read on this exact populated turn and require equality with the creator-verified `role_task` and `execution_profile`. Then validate every field against live task, Git, and filesystem evidence. A Launcher requires `launcher_canonical_cwd` to equal `authoritative_checkout` and `launcher_workspace_kind: writable-local-project`; every other role uses `not-applicable` for both fields. `none-before-contract` is valid only during pre-bundle `ACTIVATION`. `none-before-legacy-contract` is valid only during `LEGACY_BOOTSTRAP`, when the owner-authorized literal bootstrap protocol is bound in `source_contract` and live reconciliation proves that no activation ID, legacy record, contract bundle, prepared record, or committed record exists. `none-for-benchmark` is valid only for a standalone `BENCHMARK` bound to an exact candidate in `source_contract`. `active_leaf: none` and `branch: none` are valid only when that resource is genuinely absent in the named phase, including activation, between-issue adoption, legacy bootstrap without retained leaf resources, and a benchmark whose plan does not provision that resource.
 
 For `ISSUE_CLAIM`, create and live-verify the provisional local branch and linked worktree before either same-phase role canary. Both role contexts bind the selected leaf and that existing provisional branch; the Orchestrator context names the authoritative checkout as its `worktree`, while the persistent Worker context names the provisional linked worktree. Recovery, bootstrap, and migration name every retained applicable leaf, branch, and role-specific worktree. Review epoch/round/mode and pull-request fields are intentionally absent because a filesystem canary is not implementation or review. A role must return `CONTEXT_MISMATCH` for any other missing, invented, or contradictory value.
+
+## Launcher authoritative writable route
+
+The external creator creates every activation or recovery Launcher directly against the exact authoritative checkout as its canonical CWD and normal writable local-project workspace before the metadata-only handshake. Creator-side read-back binds that CWD and workspace kind in the populated envelope. A projectless task, unrelated project, read-only route, removable linked worktree, or out-of-root advisory target returns `CONTEXT_MISMATCH` before reservation or mutation; scoped approval is not a topology repair.
+
+The correctly bound Launcher uses direct normal-sandbox `apply_patch` for advisory canary file creation, change, and deletion, then the ordinary exact nonrecursive, non-force route for a canary-created empty parent. The configured retry remains available only for a genuine initial restriction on that correctly bound route. This platform-neutral invariant does not apply the native-Windows Worker anchor or two-turn empty-parent exception to a Launcher, WSL, Linux, macOS, or another host.
 
 ## GitHub access recovery
 
