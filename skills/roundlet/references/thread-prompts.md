@@ -6,6 +6,7 @@ These are prompt contracts, not hidden role knowledge. The Launcher and Orchestr
 
 - [Shared context envelope](#shared-context-envelope)
 - [Immutable task-metadata handshake](#immutable-task-metadata-handshake)
+- [Populated role-turn metadata gate](#populated-role-turn-metadata-gate)
 - [Filesystem canary context envelope](#filesystem-canary-context-envelope)
 - [GitHub access recovery](#github-access-recovery)
 - [Filesystem mutation canary result](#filesystem-mutation-canary-result)
@@ -26,6 +27,8 @@ ROUNDLET CONTEXT
 target_repository: <owner/repository>
 authoritative_checkout: <absolute-path>
 run_id: <stable-run-id>
+role_task: <metadata-read-exact-task-id>
+execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>
 active_contract_id: <sha256-derived-id>
 contract_bundle: <absolute-bundle-path>
 filesystem_canary_evidence_set: <sha256-and-ordered-entry-identities-or-none>
@@ -71,7 +74,28 @@ metadata_route: <exact-discovered-route>
 creator_readback_required: true
 ```
 
-Resolve `role_task` only when top-level `threadId` and every present immutable `thread_id` and `session_id` field are mutually equal. Return the route's immutable `turn_id` only as `metadata_turn`; it never satisfies `role_task`. The external creator independently reads an immutable creator-side task/turn record and verifies task ID, turn ID, and profile against the requested values. Only then may it send a populated next turn. At the start of that next turn, the role must invoke the immutable metadata route again and require exact task/profile equality with the populated `role_task`, while binding the new exact turn separately; the creator must independently read back that populated turn as well. Missing eager exposure is inconclusive; exhaustive discovery failure, invocation failure, task/session-field conflict, task/turn substitution, independent read-back failure, or any mismatch stops before action.
+Resolve `role_task` only when top-level `threadId` and every present immutable `thread_id` and `session_id` field are mutually equal. Return the route's immutable `turn_id` only as `metadata_turn`; it never satisfies `role_task`. The external creator independently reads an immutable creator-side task/turn record and verifies task ID, turn ID, and profile against the requested values. Only then may it send the task's first populated turn.
+
+Before dispatching every populated turn after that handshake, the creator must independently reread the stable task record and require the same `role_task` and configured profile, then put both exact values in the applicable context envelope. At the start of the populated turn, before mutation or review, the role must invoke the immutable metadata route, require exact task/profile equality with that envelope, and bind the route's new exact `turn_id` separately as `metadata_turn`. After the role returns, the creator must independently read back that exact populated task/turn record and require the same task ID, turn ID, model, and effort before accepting the result, publishing its trace, or allowing any downstream transition. A populated turn does not reuse the metadata-only turn ID. Missing eager exposure is inconclusive; exhaustive discovery failure, invocation failure, task/session-field conflict, task/turn substitution, pre-dispatch stable-task read-back failure, post-return exact-turn read-back failure, or any mismatch stops before action or rejects the result before transition.
+
+## Populated role-turn metadata gate
+
+Insert this gate immediately after the applicable context envelope in every populated Worker or Supervisor prompt:
+
+```text
+ROUNDLET POPULATED TURN METADATA GATE
+Before this turn was dispatched, the external creator independently reread the stable task
+record and required it to equal the populated role_task and execution_profile. Before any
+filesystem, Git, GitHub, implementation, cleanup, or review action, exhaust deferred tool
+discovery, invoke the immutable metadata route for this exact turn, require mutually equal
+task/session fields to equal role_task, require model and reasoning effort to equal
+execution_profile, and bind only the new turn_id as metadata_turn. On missing or conflicting
+identity, unavailable route, task/turn substitution, or profile mismatch, make no mutation
+or review and return CONTEXT_MISMATCH with bounded evidence. Include role_task,
+metadata_turn, and execution_profile in the structured result. The external creator must
+independently read back this exact populated turn after return and reject the result before
+publication or downstream transition on any mismatch.
+```
 
 ## Filesystem canary context envelope
 
@@ -388,6 +412,7 @@ The Launcher uses this with a short-lived configured Worker in a temporary linke
 Perform only the Roundlet filesystem canary for the supplied exact worktree.
 
 <insert the filesystem canary context envelope>
+<insert the populated role-turn metadata gate>
 <insert the Native Windows Worker patch-routing conditional contract>
 
 <insert target/run, exact task/worktree, phase, role, nonce, initial HEAD/status/index identities,
@@ -417,6 +442,7 @@ FILESYSTEM_CAPABILITY_UNAVAILABLE and the remaining exact canary path; do not br
 You are the persistent Roundlet Worker for one leaf issue.
 
 <insert the shared context envelope with review_mode INITIAL>
+<insert the populated role-turn metadata gate>
 <insert the Native Windows Worker patch-routing conditional contract>
 
 Reread every source required by the Worker contract. Confirm the issue remains open,
@@ -440,6 +466,7 @@ bounded factual summary for the Orchestrator to verify and publish; do not publi
 Continue as the same persistent Roundlet Worker.
 
 <insert the fresh shared context envelope with review_mode COMPLETE or CONVERGING>
+<insert the populated role-turn metadata gate>
 <insert the Native Windows Worker patch-routing conditional contract>
 
 Supervisor findings to address:
@@ -460,6 +487,7 @@ Return the structured Worker handoff. Every finding ID must have one disposition
 Continue as the same persistent Roundlet Worker for the one permitted final repair.
 
 <insert the fresh shared context envelope with review_mode FINAL_REPAIR and round 10>
+<insert the populated role-turn metadata gate>
 <insert the Native Windows Worker patch-routing conditional contract>
 
 Final Supervisor findings:
@@ -480,6 +508,7 @@ Use this only when live repository rules require the pull-request branch to be u
 Continue as the same persistent Roundlet Worker.
 
 <insert the fresh shared context envelope>
+<insert the populated role-turn metadata gate>
 <insert the Native Windows Worker patch-routing conditional contract>
 
 Reread every source required by the Worker contract. Fetch and inspect current
@@ -496,6 +525,7 @@ a new COMPLETE review epoch; do not claim prior review applies.
 Continue as the same persistent Roundlet Worker for cleanup preflight only.
 
 <insert the fresh shared context envelope with review_mode CLEANUP_PREFLIGHT>
+<insert the populated role-turn metadata gate>
 
 Reread every source required by the Worker contract. Make no source edit and perform no
 GitHub mutation. Verify and report:
@@ -521,6 +551,9 @@ Return exactly these headings with bounded content:
 ```text
 WORKER_HANDOFF
 phase: <phase>
+role_task: <metadata-read-exact-task-id>
+metadata_turn: <metadata-read-exact-populated-turn-id>
+execution_profile: model=<metadata-read-model>;reasoning_effort=<metadata-read-effort>
 review_epoch: <number>
 review_round: <number-or-0>
 terminal: <IMPLEMENTED|REPAIRED|FINAL_REPAIRED|INTEGRATED|NEEDS_OWNER_INPUT|CLEANUP_SAFE|CLEANUP_BLOCKED>
@@ -568,6 +601,7 @@ Before every attempt, the Supervisor must verify the context envelope, read the 
 You are a fresh read-only Roundlet Supervisor for one review attempt.
 
 <insert the shared context envelope with review_mode COMPLETE or CONVERGING>
+<insert the populated role-turn metadata gate>
 
 Read every source required by the Supervisor contract. Verify that the pull-request
 remote head equals candidate_sha and that all reviewed evidence is bound to it. If not,
@@ -599,6 +633,9 @@ Remain read-only. Return the structured Supervisor result and do not publish it.
 ```text
 SUPERVISOR_RESULT
 attempt_status: <VALID|INVALID_CONTEXT|FAILED>
+role_task: <metadata-read-exact-task-id>
+metadata_turn: <metadata-read-exact-populated-turn-id>
+execution_profile: model=<metadata-read-model>;reasoning_effort=<metadata-read-effort>
 supervisor_attempt: <positive-number>
 supervisor_profile: <configured-profile-name>
 review_epoch: <number>
