@@ -377,7 +377,7 @@ Before **every** initial, repair, final-repair, integration, or cleanup-prefligh
 
 It must not rely on task memory in place of rereading those sources.
 
-### Native Windows Worker patch routing
+### Native Windows Worker topology and patch routing
 
 Before every Worker turn, the Orchestrator must verify the Worker's actual runtime and populate `worker_runtime`; a Windows-looking path is not sufficient evidence. `NATIVE_WINDOWS` means the Worker runs directly on Windows, not inside WSL.
 
@@ -386,6 +386,10 @@ For every initial, repair, final-repair, integration, or other Worker turn that 
 ```text
 NATIVE_WINDOWS_PATCH_ROUTING
 Apply only when worker_runtime is NATIVE_WINDOWS:
+- Bind native_windows_task_anchor to this task's exact canonical current directory, require worktree
+  to be a distinct writable descendant, and fail before mutation if native_windows_task_anchor
+  equals or is inside worktree. Host-retained native_windows_task_anchor state never substitutes
+  for worktree cleanup.
 - Make every canary-artifact create, change, or deletion and every source-file edit inside
   the assigned writable worktree only through the dedicated
   apply_patch tool in the normal sandbox.
@@ -414,7 +418,7 @@ Perform only the Roundlet filesystem canary for the supplied exact worktree.
 
 <insert the filesystem canary context envelope>
 <insert the populated role-turn metadata gate>
-<insert the Native Windows Worker patch-routing conditional contract>
+<insert the Native Windows Worker topology and patch-routing conditional contract>
 
 <insert target/run, exact task/worktree, phase, role, nonce, initial HEAD/status/index identities,
 expected first/second content hashes, exact advisory/worktree/index applicability, and
@@ -444,7 +448,7 @@ You are the persistent Roundlet Worker for one leaf issue.
 
 <insert the shared context envelope with review_mode INITIAL>
 <insert the populated role-turn metadata gate>
-<insert the Native Windows Worker patch-routing conditional contract>
+<insert the Native Windows Worker topology and patch-routing conditional contract>
 
 Reread every source required by the Worker contract. Confirm the issue remains open,
 actionable, dependency-ready, and inside the allowed scope. Inspect the existing
@@ -468,7 +472,7 @@ Continue as the same persistent Roundlet Worker.
 
 <insert the fresh shared context envelope with review_mode COMPLETE or CONVERGING>
 <insert the populated role-turn metadata gate>
-<insert the Native Windows Worker patch-routing conditional contract>
+<insert the Native Windows Worker topology and patch-routing conditional contract>
 
 Supervisor findings to address:
 <insert exact verified finding IDs, evidence, and required outcomes>
@@ -489,7 +493,7 @@ Continue as the same persistent Roundlet Worker for the one permitted final repa
 
 <insert the fresh shared context envelope with review_mode FINAL_REPAIR and round 10>
 <insert the populated role-turn metadata gate>
-<insert the Native Windows Worker patch-routing conditional contract>
+<insert the Native Windows Worker topology and patch-routing conditional contract>
 
 Final Supervisor findings:
 <insert exact verified round-10 findings>
@@ -510,7 +514,7 @@ Continue as the same persistent Roundlet Worker.
 
 <insert the fresh shared context envelope>
 <insert the populated role-turn metadata gate>
-<insert the Native Windows Worker patch-routing conditional contract>
+<insert the Native Windows Worker topology and patch-routing conditional contract>
 
 Reread every source required by the Worker contract. Fetch and inspect current
 origin/main. Integrate it into the issue branch with a normal merge commit, resolve only
