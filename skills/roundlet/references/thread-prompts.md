@@ -416,19 +416,23 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   locking identity command in the normal sandbox or spend the configured retry before the
   actual canary sequence.
 - If that exact out-of-root route is initially restricted, use the sole configured approval
-  retry for the operator guide's native-Windows PowerShell body. Populate only its eleven
-  assignment values, reject a single quote/newline in any path or whitespace in either
-  relative canary path, parse the fully populated body before creating either canary artifact,
-  and submit that same parsed body unchanged as the one compound operation bound to the exact
-  worktree, resolved index, and unique canary paths. It captures the complete raw index bytes
+  retry for the operator guide's native-Windows PowerShell body. Before populating or parsing
+  it and before creating either artifact, derive the exact absolute worktree/index canary
+  files and immediate parents; prove all four literal paths absent, prove both parents are
+  distinct expected descendants inside but unequal to worktree if later created, and record
+  one immutable initial-absence digest. Missing parent-absence evidence cannot be reconstructed
+  after mutation. Then populate only its eleven assignment values, reject a single
+  quote/newline in any path or whitespace in either relative canary path, parse the fully
+  populated body, and submit that same parsed body unchanged as the one compound operation
+  bound to the exact worktree, resolved index, and unique canary paths. It captures the complete raw index bytes
   in memory before its first potentially locking command, creates no backup artifact, performs
   initial locking identity reads, stages and verifies only the canary entry/mode/blob/content,
   restores the raw preimage, performs every final HEAD/status/tree/pre-existing-entry read,
   restores the same raw bytes again after those reads, then verifies final raw
   length/SHA-256 and no index.lock using only raw filesystem read-back.
-- A template parse failure occurs before canary mutation: create no artifact, spend no
-  approval, and return FILESYSTEM_CAPABILITY_UNAVAILABLE. Never rewrite, wrap, split, or
-  substitute the template after its successful parse.
+- A path/preflight or template parse failure occurs before canary mutation: create no
+  artifact, spend no approval, and return FILESYSTEM_CAPABILITY_UNAVAILABLE. Never rewrite,
+  wrap, split, or substitute the template after its successful parse.
 - Every Git or subprocess non-zero exit must terminate that compound operation non-zero;
   later output, formatting, or object construction must not mask it. The operation is one
   approval retry and may not be split, broadened, reused for source/file edits, or followed
