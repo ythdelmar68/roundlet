@@ -6,7 +6,9 @@ This is the detailed operating contract for Roundlet. The Orchestrator must rere
 
 - [Operating envelope](#operating-envelope)
 - [Configuration and capability preflight](#configuration-and-capability-preflight)
+- [Immutable task-metadata handshake](#immutable-task-metadata-handshake)
 - [Filesystem mutation canaries and typed outcomes](#filesystem-mutation-canaries-and-typed-outcomes)
+- [Task and worktree resource cleanup](#task-and-worktree-resource-cleanup)
 - [Advisory local state](#advisory-local-state)
 - [Pinned run contract and migration](#pinned-run-contract-and-migration)
 - [Lightweight observation and heartbeat cadence](#lightweight-observation-and-heartbeat-cadence)
@@ -81,6 +83,19 @@ Enter `NEEDS_OWNER_INPUT` only when approval is explicitly denied, the approval 
 
 If any capability cannot be proven, report the exact unsupported value or missing capability and stop. Capability preflight is performed through Codex/tool inspection; it is not an executable validator or cross-platform test matrix.
 
+## Immutable task-metadata handshake
+
+Eager task tool exposure is not a complete capability catalog. Before a Launcher or task creator classifies immutable task metadata unavailable, it must exhaust the host's deferred tool-discovery surface and locate the route that exposes the current request's immutable task ID, model, and reasoning effort. Missing eager exposure is inconclusive.
+
+Every newly created Launcher, Orchestrator, Worker, and Supervisor uses this two-stage handshake before a canary, implementation, or review turn:
+
+1. Create the task with only the metadata-probe prompt from `thread-prompts.md`. It performs no filesystem, Git, GitHub, heartbeat, contract, issue, or pull-request mutation.
+2. In that task, exhaust deferred discovery, invoke the discovered immutable metadata route, and return the exact task ID plus `model=<id>;reasoning_effort=<effort>` and the route identity. Self-reported profile prose is invalid.
+3. The external creator independently reads an immutable creator-side task/turn record and requires the task ID, model, and reasoning effort to equal both the requested profile and the probe result. A task ID copied only from the child response is not independent evidence.
+4. Only after that match may the creator send the fully populated role or filesystem-canary prompt. On that exact turn, the role invokes the immutable metadata route again and requires the current task ID/model/effort to equal the populated envelope and the creator-side read-back before any mutation or review.
+
+Classify the route as unavailable only after exhaustive discovery or invocation fails, or independent read-back cannot be completed. A mismatch, malformed result, substituted profile, or route that exposes only self-report fails closed before the role acts. Preserve only bounded task, route, profile, and typed failure evidence.
+
 ## Filesystem mutation canaries and typed outcomes
 
 Tool presence, a permission declaration, or a zero-tool decision never proves filesystem mutation capability. Activation, issue claim, recovery, legacy bootstrap, contract adoption/migration, and mutation benchmarks must exercise the exact task, host, checkout/worktree, permission route, and mutation surface that the run will use. Use an unguessable nonce and a bounded artifact whose path is first proven absent. Record the exact target and initial identity before mutation.
@@ -122,6 +137,20 @@ Aggregate every transition's required role results as one canonical `roundlet-fi
 Required sets are: activation = Launcher advisory, short-lived activation Worker worktree/index, and live Orchestrator advisory; issue claim = a fresh live Orchestrator advisory result immediately before selection plus the newly created persistent Worker worktree/index result; recovery = recovery Launcher when used plus the recovered live Orchestrator and, when an active leaf retains a Worker, that same Worker on its worktree/index surfaces; legacy bootstrap or active in-place migration = the same Orchestrator advisory plus, when an active leaf retains a Worker, that same Worker worktree/index; between-issue adoption = same Orchestrator advisory plus a short-lived candidate-configured Worker worktree/index; benchmark = every role and all three surfaces named by the benchmark plan. A required retained Worker that is inaccessible invalidates the set; a phase with no Worker does not invent one. Persist and bind only the aggregate digest where a single evidence reference is required. Store each accepted set at `.roundlet/canary-evidence/accepted/<aggregate-sha256-hex>/manifest.json` with its exact result bytes at `results/<zero-padded-ordinal>-<result-sha256-hex>.txt`; write and read back every result first and the canonical manifest last. Once accepted, those bytes are immutable. When the exact advisory route remains writable and readable, store every failed or incomplete attempt under `.roundlet/canary-evidence/failed/<run-id>/<attempt-id>/` with one bounded `attempt.json` plus any exact bounded result bytes. If the failed surface is the advisory route and that exact route cannot create and read back this store, preserve the exact bounded result only in the existing immutable task response, addressed by task ID, response/event ID, and result digest; do not switch helpers or routes merely to create local evidence. This no-write representation is failed evidence only, can never appear under `accepted`, and cannot authorize a transition. Failed evidence is immutable, is never promoted into `accepted`, and contains no raw tool output. An existing path with conflicting bytes fails closed. `current.md` points to the accepted or failed evidence paths and marks each accepted entry as currently applicable or completed-and-cleaned without changing the canonical manifest; only currently applicable live-role entries participate in route-freshness checks, while completed-and-cleaned entries remain immutable evidence for that transition. Activation, recovery, full reconciliation, migration preparation/commit, and stop must enumerate and verify every referenced manifest/result byte before relying on or removing evidence. External cleanup after a failed result is environment repair only and never changes that result or makes its set valid.
 
 Any future model, effort, permission, or contract change that can affect Orchestrator/Worker mutations requires a bounded live benchmark on a disposable authorized target. It must use real task/tool calls on all three surfaces, cover each typed outcome and successful cleanup, and read back no-transition behavior. A zero-tool synthetic benchmark can supplement but never replace this gate.
+
+## Task and worktree resource cleanup
+
+Artifact/index cleanup inside `FILESYSTEM_CANARY_RESULT` and post-acceptance task/worktree cleanup are distinct. Accepting an immutable canary set proves only the former. Archiving a task, removing a Git worktree registration, emptying a directory, and removing the physical candidate path are also distinct facts; no one fact proves the others.
+
+After the aggregate is accepted and read back, the external creator or Orchestrator performs bounded post-archive reconciliation:
+
+1. Capture the exact short-lived task ID, task host, worktree path, Git registration, physical-path identity, unique-work status, and any live process whose current directory equals that exact canonical worktree path before archive.
+2. Archive the task and require an archive acknowledgement, then use bounded waits and external read-back rather than the archived task's self-report.
+3. Require the task to be non-active, the exact Git worktree registration to be absent, no unique or unpreserved work to remain, no live process to retain that exact canonical path as its current directory, and the physical candidate path to be absent.
+4. If the path is empty and unregistered but a current-directory holder survives, do not remove the path or kill the process. Report cleanup incomplete with the exact bounded holder/path evidence and fail closed.
+5. If no holder, registration, unique work, or contents remain, normal non-force removal of only the exact candidate path is permitted when authority allows; read back absence. A missing process-inspection or physical-path route is unverified cleanup, not success.
+
+Never force-remove a worktree, terminate Codex/Node or role processes, broaden the target, or relabel later environment repair as historical `cleanup: VERIFIED`. Activation attaches no heartbeat after incomplete short-lived cleanup. Adoption, recovery, migration, issue cleanup, and stop retain their current resources and enter their defined blocked state.
 
 ## Advisory local state
 
@@ -478,14 +507,14 @@ Never close an umbrella. If the leaf cannot be closed or verified, enter `REPOSI
 Cleanup remains part of the active issue and must be automatic when authorized.
 
 1. Send the same Worker a cleanup-preflight turn. It verifies the issue branch is pushed, the pull request/merge/leaf status, the worktree status, unique commits, untracked files, and absence of unpreserved work. The Worker must not remove its own worktree or delete its own branch.
-2. The Orchestrator independently verifies the handoff and archives the Worker task.
-3. When `allow_remove_worktree` is true, remove the issue worktree through a non-destructive normal removal. Never force removal of unknown changes.
+2. The Orchestrator independently verifies the handoff, captures the task/worktree resource-cleanup baseline, and archives the Worker task.
+3. Apply the task/worktree resource-cleanup contract. When `allow_remove_worktree` is true, use only non-destructive normal removal after proving no exact-current-directory holder, Git registration conflict, unique work, or unknown change; then read back task inactivity, Git-registration absence, and physical-path absence. Never force removal or terminate a process to release a path.
 4. When `allow_delete_local_branch` is true, delete the local issue branch only after proving its unique work is merged or explicitly authorized for abandonment.
 5. When `allow_delete_remote_branch` is true, delete the exact remote issue branch only after proving its identity and merge/abandon state.
 6. Fetch origin, fast-forward local `main`, and verify the authoritative checkout is clean and `HEAD == main == origin/main`.
 7. Append the cleanup trace, clear the issue-specific pointers, reset the same heartbeat to `active_minutes`, and remove the advisory files, retained contract bundles, canary-evidence tree, legacy activation record, and migration records only when stopping; while continuing, retain the lease and set `current.md` to `IDLE` with new observation counters. Do not stop after a completed issue unless stop-after-current is already recorded.
 
-If any cleanup step fails, enter `CLEANUP_BLOCKED`, keep the leaf closed, retain the lease/current evidence, and select no next issue. Never reopen the leaf solely because cleanup failed.
+If any cleanup step or required external inspection fails, or any exact-current-directory holder, Git registration, unique work, or physical candidate path survives, enter `CLEANUP_BLOCKED`, keep the leaf closed, retain the lease/current evidence, and select no next issue. Never reopen the leaf solely because cleanup failed.
 
 ## Active issue closed, ignored, or withdrawn
 

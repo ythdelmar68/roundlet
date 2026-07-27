@@ -5,6 +5,7 @@ These are prompt contracts, not hidden role knowledge. The Launcher and Orchestr
 ## Contents
 
 - [Shared context envelope](#shared-context-envelope)
+- [Immutable task-metadata handshake](#immutable-task-metadata-handshake)
 - [Filesystem canary context envelope](#filesystem-canary-context-envelope)
 - [GitHub access recovery](#github-access-recovery)
 - [Filesystem mutation canary result](#filesystem-mutation-canary-result)
@@ -49,6 +50,28 @@ prior_trace_urls: <ordered-urls-or-none>
 
 The Orchestrator must validate this envelope against live evidence before sending it. A role must stop and report `CONTEXT_MISMATCH` if the envelope contradicts live GitHub, Git, repository instructions, or filesystem state.
 
+## Immutable task-metadata handshake
+
+Every new Launcher, Orchestrator, Worker, or Supervisor task receives this as its first and only prompt before a populated role or canary prompt:
+
+```text
+Perform only the Roundlet immutable task-metadata handshake. Make no filesystem, Git,
+GitHub, heartbeat, contract, issue, pull-request, role, canary, implementation, review,
+or cleanup mutation.
+
+Resolve the complete deferred tool catalog before deciding whether task metadata is
+available. Locate and invoke the immutable metadata route for this exact turn. Do not use
+self-reported profile text. Return exactly:
+TASK_METADATA_READY
+role: <LAUNCHER|ORCHESTRATOR|WORKER|SUPERVISOR>
+role_task: <immutable-task-id>
+execution_profile: model=<immutable-model>;reasoning_effort=<immutable-effort>
+metadata_route: <exact-discovered-route>
+creator_readback_required: true
+```
+
+The external creator independently reads an immutable creator-side task/turn record and verifies the returned task ID and profile against the requested values. Only then may it send a populated next turn. At the start of that next turn, the role must invoke the immutable metadata route again and require exact equality with the populated `role_task`, `execution_profile`, and creator read-back. Missing eager exposure is inconclusive; exhaustive discovery failure, invocation failure, independent read-back failure, or any mismatch stops before action.
+
 ## Filesystem canary context envelope
 
 Begin every Launcher, Orchestrator, or Worker filesystem-canary turn with this separate envelope:
@@ -77,7 +100,7 @@ target_paths: <exact-canary-paths>
 approval_retry_limit: <configured-limit>
 ```
 
-Validate every field against live task, Git, and filesystem evidence. `none-before-contract` is valid only during pre-bundle `ACTIVATION`. `none-before-legacy-contract` is valid only during `LEGACY_BOOTSTRAP`, when the owner-authorized literal bootstrap protocol is bound in `source_contract` and live reconciliation proves that no activation ID, legacy record, contract bundle, prepared record, or committed record exists. `none-for-benchmark` is valid only for a standalone `BENCHMARK` bound to an exact candidate in `source_contract`. `active_leaf: none` and `branch: none` are valid only when that resource is genuinely absent in the named phase, including activation, between-issue adoption, legacy bootstrap without retained leaf resources, and a benchmark whose plan does not provision that resource.
+Before validating any other field or mutating, repeat the immutable task-metadata read on this exact populated turn and require equality with the creator-verified `role_task` and `execution_profile`. Then validate every field against live task, Git, and filesystem evidence. `none-before-contract` is valid only during pre-bundle `ACTIVATION`. `none-before-legacy-contract` is valid only during `LEGACY_BOOTSTRAP`, when the owner-authorized literal bootstrap protocol is bound in `source_contract` and live reconciliation proves that no activation ID, legacy record, contract bundle, prepared record, or committed record exists. `none-for-benchmark` is valid only for a standalone `BENCHMARK` bound to an exact candidate in `source_contract`. `active_leaf: none` and `branch: none` are valid only when that resource is genuinely absent in the named phase, including activation, between-issue adoption, legacy bootstrap without retained leaf resources, and a benchmark whose plan does not provision that resource.
 
 For `ISSUE_CLAIM`, create and live-verify the provisional local branch and linked worktree before either same-phase role canary. Both role contexts bind the selected leaf and that existing provisional branch; the Orchestrator context names the authoritative checkout as its `worktree`, while the persistent Worker context names the provisional linked worktree. Recovery, bootstrap, and migration name every retained applicable leaf, branch, and role-specific worktree. Review epoch/round/mode and pull-request fields are intentionally absent because a filesystem canary is not implementation or review. A role must return `CONTEXT_MISMATCH` for any other missing, invented, or contradictory value.
 
@@ -117,7 +140,7 @@ The Orchestrator must hash and aggregate the exact result bytes into the operato
 
 ## Long-lived Orchestrator bootstrap
 
-The Launcher creates the Orchestrator with this contract:
+After the immutable task-metadata handshake and creator-side read-back pass, the Launcher sends the Orchestrator this populated contract:
 
 ```text
 Act as the only long-lived Roundlet Orchestrator for the exact target and run below. Do not invoke or load the installed `$roundlet` skill; read only the supplied pinned bundle.
@@ -358,7 +381,7 @@ The Orchestrator rejects a native-Windows Worker canary or implementation handof
 
 ### Worker filesystem canary prompt
 
-The Launcher uses this with a short-lived configured Worker in a temporary linked worktree during activation or between-issue adoption. Immediately after issue claim, the Orchestrator sends it to the newly created persistent Worker in its exact linked worktree before initial implementation. Recovery, legacy bootstrap, or active migration sends it to the same retained Worker and exact linked worktree. This turn never becomes issue implementation.
+The Launcher uses this with a short-lived configured Worker in a temporary linked worktree during activation or between-issue adoption. Every newly created Worker first completes the immutable task-metadata handshake and creator-side read-back; the populated canary turn rereads metadata before mutation. Immediately after issue claim, the Orchestrator sends it to the newly created persistent Worker in its exact linked worktree before initial implementation. Recovery, legacy bootstrap, or active migration sends it to the same retained Worker and exact linked worktree. This turn never becomes issue implementation.
 
 ```text
 Perform only the Roundlet filesystem canary for the supplied exact worktree.
@@ -482,6 +505,8 @@ GitHub mutation. Verify and report:
 - live pull-request state and merge commit, when applicable;
 - live leaf closed state;
 - any process, task, nested worktree, unpushed commit, or file that makes cleanup unsafe.
+- any live process whose exact canonical current directory is the worktree, plus the exact
+  Git worktree registration and physical candidate-path state.
 
 Do not remove your own worktree, delete a local or remote branch, archive your own task,
 or hide/discard any change. Return the structured handoff with terminal
@@ -522,7 +547,7 @@ The Orchestrator rejects a handoff if SHAs, scope, files, tests, findings, or li
 
 ## Supervisor contract
 
-Create a fresh Supervisor task for each attempt using the exact configured attempt profile at that one-based position. Give it read-only access. It must not edit files, create commits, push, or mutate any GitHub object. Bind its prompt and result to the attempt number and profile as well as the review epoch/round/mode and candidate SHA. Archive it after a valid result or invalid attempt.
+Create a fresh Supervisor task for each attempt using the exact configured attempt profile at that one-based position. Complete the immutable task-metadata handshake and creator-side immutable task/turn-record read-back before sending the populated review prompt; reread metadata on the exact review turn. Give it read-only access. It must not edit files, create commits, push, or mutate any GitHub object. Bind its prompt and result to the attempt number and profile as well as the review epoch/round/mode and candidate SHA. Archive it after a valid result or invalid attempt, then apply bounded external task cleanup read-back.
 
 Before every attempt, the Supervisor must verify the context envelope, read the complete active pinned contract bundle, and freshly read:
 
