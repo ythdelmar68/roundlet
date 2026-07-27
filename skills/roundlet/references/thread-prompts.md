@@ -145,6 +145,7 @@ phase: <ACTIVATION|ISSUE_CLAIM|RECOVERY|LEGACY_BOOTSTRAP|BETWEEN_ISSUES_ADOPTION
 role: <LAUNCHER|ORCHESTRATOR|WORKER>
 run_id: <stable-run-id-or-benchmark-nonce>
 role_task: <exact-task-id>
+metadata_turn: <metadata-read-exact-populated-turn-id>
 execution_profile: model=<task-metadata-model>;reasoning_effort=<task-metadata-effort>
 host_route_fingerprint: <task-host-checkout-worktree-permission-route-tool-class-digest>
 target_paths: <exact-local-canary-paths-or-none>
