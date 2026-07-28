@@ -164,7 +164,7 @@ The hash-input manifest has exactly:
 }
 ```
 
-`resolved_config` is the complete parsed JSON configuration. For `git`, `locator` is canonical `owner/repository` and `ref` is the verified lowercase 40-character OID matching every bundled byte. For `installed-tree`, `locator` is the resolved absolute skill directory and `ref` is the exact tree digest. `contract_version` appends that ref.
+`resolved_config` is the complete parsed JSON configuration. For `git`, `locator` is canonical `owner/repository` and `ref` is the verified lowercase 40-character OID matching every bundled byte. Materialize and hash Git-sourced files directly from that commit object, never from working-tree bytes; checkout filters, attributes, or line-ending conversion must not affect the bundle. For `installed-tree`, `locator` is the resolved absolute skill directory and `ref` is the exact tree digest. `contract_version` appends that ref.
 
 Serialize with RFC 8785 JCS, no BOM, trailing newline, or floats. The contract ID is SHA-256 of these canonical hash-input bytes. Add only top-level `"contract_id":"<64-lowercase-hex>"`, reserialize, copy exact files and manifest to `.roundlet/contracts/<contract-id>/`, and read back every path, byte hash, manifest field, tree digest, role profile, and ID. Different bytes at an existing ID are `CONTRACT_BUNDLE_CONFLICT`.
 

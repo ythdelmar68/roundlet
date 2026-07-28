@@ -244,7 +244,7 @@ WSL, Linux, macOS, and other hosts keep their ordinary topology and must not inh
 
 ## Safety boundaries
 
-- Every run reads one immutable activation bundle.
+- Every run reads one immutable activation bundle; Git-sourced bundles use exact commit-object bytes, not filterable checkout bytes.
 - Installed drift never silently changes a live run.
 - Every task is bound once at creation to immutable task ID, profile, project/workspace, and CWD.
 - GitHub is the durable trace; local files never override live Git/GitHub evidence.

@@ -10,7 +10,7 @@ Operate one target repository through Codex tasks, GitHub, Git worktrees, adviso
 ## Preserve the core invariants
 
 - Use exactly one long-lived Orchestrator, one phase-aware heartbeat, one authoritative machine, and at most one active leaf issue for a target repository.
-- Pin each new run to one content-addressed bundle under `.roundlet/contracts/<contract-id>/`. Include this file, every required reference, the exact resolved configuration, and a manifest of ordered paths and SHA-256 values. Read live instructions only from that bundle.
+- Pin each new run to one content-addressed bundle under `.roundlet/contracts/<contract-id>/`. Include this file, every required reference, the exact resolved configuration, and a manifest of ordered paths and SHA-256 values. When the source is Git, materialize every bundled file from the verified commit object rather than checkout bytes so filters or line-ending conversion cannot change the claimed source. Read live instructions only from that bundle.
 - Never migrate or adopt a changed installed skill into a live run. Stop and fully clean the old run, then start a fresh activation from the new installed copy.
 - Refuse activation when another live or unreconciled Roundlet run may own the target. The local lease is advisory and never proves exclusivity across machines, clones, or tasks.
 - Treat GitHub issues and pull requests as the durable backlog and audit history. Only the Orchestrator mutates GitHub.

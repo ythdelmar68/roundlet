@@ -73,6 +73,7 @@ If and only if every preflight item passes:
 
 1. Reserve a new unguessable run ID that differs from every former run ID.
 2. Build `.roundlet/contracts/<contract-id>/` from the current installed skill and exact resolved configuration:
+   - when source kind is `git`, materialize every file directly from the verified commit object; never copy or hash working-tree bytes, even when the checkout is clean;
    - include exact bytes for SKILL.md, every required reference, and agents/openai.yaml;
    - use unique POSIX relative paths sorted by unsigned UTF-8 bytes;
    - record SHA-256 of exact bytes;
