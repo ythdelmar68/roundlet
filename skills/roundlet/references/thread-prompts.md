@@ -385,7 +385,7 @@ Before **every** initial, repair, final-repair, integration, or cleanup-prefligh
 
 It must not rely on task memory in place of rereading those sources.
 
-### Native Windows Worker topology, patch routing, Git-index approval, and canary empty-parent finalization
+### Native Windows Worker topology, patch routing, fixed-body transport, Git-index approval, and canary empty-parent finalization
 
 Before every Worker turn, the Orchestrator must verify the Worker's actual runtime and populate `worker_runtime`; a Windows-looking path is not sufficient evidence. `NATIVE_WINDOWS` means the Worker runs directly on Windows, not inside WSL.
 
@@ -422,13 +422,16 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   inside the verified effective pinned bundle. Bind native_windows_operator_guide_sha256
   to that exact file's SHA-256 from the verified candidate tree or bundle manifest.
   The external creator, not this Worker, extracts both fixed bodies from those verified
-  bytes, populates every named assignment exactly once from the already bound canary values,
+  bytes, populates every named assignment exactly once from the already bound canary values
+  by replacing only the exact value byte range before its existing CRLF or LF while leaving
+  that terminator and every non-replaced source byte untouched,
   and supplies the three complete preflight assignment lines, ten complete compound
   assignment lines, and SHA-256 of each fully populated body in this prompt. Independently
   extract each body from the first byte after its opening-fence line terminator up to but
-  excluding the CRLF or LF that introduces its closing fence. Preserve every internal byte
-  and internal line terminator without normalization. Re-populate by replacing the same
-  named assignment lines exactly once, then
+  excluding the CRLF or LF that introduces its closing fence. Preserve every internal source
+  byte and internal line terminator without normalization. Re-populate by replacing the same
+  named assignment value byte ranges exactly once without consuming any terminal CR, then
+  verify all non-replaced bytes and line-terminator positions remain identical and
   compare the resulting lines and body digests to those creator-supplied records. Never
   derive an expected line or digest from this Worker's own already populated body.
   Independently require the complete absolute path to end at
@@ -450,29 +453,55 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   ad hoc shell preflight. Then populate only the separate compound body's ten validated
   assignment values. Before canary creation, read back exactly ten complete lines byte-for-byte
   and the full body digest against the creator-supplied canonical records; reject every placeholder, concatenation, interpolation,
-  variable reference, method call, or other right-hand-side expression; parse the fully populated
-  body; and bind its SHA-256. After the direct patch files exist, require the retained bytes to
-  match that digest and submit those exact same parsed bytes as the one compound operation
+  variable reference, method call, or other right-hand-side expression; validate the fully populated
+  source body and bind its original-byte SHA-256. Never place that populated body in a process command line.
+  Reject a lone CR and any terminal line break, then derive the patch-canonical transport
+  representation by replacing every internal CRLF with LF, leaving an already-LF source
+  otherwise unchanged, and appending exactly one terminal LF. This native-Windows
+  source-to-transport conversion is the only permitted normalization. Independently require its byte length and SHA-256 to
+  equal separate creator-supplied transport records before creating any file.
+  Bind native_windows_compound_transport to one nonce-qualified direct-child `.ps1` path
+  under native_windows_task_anchor and outside worktree, and bind its expected byte length
+  and SHA-256 to the creator-supplied patch-canonical transport record, not the original source-body
+  record. Require the path initially
+  absent and its parent to be exactly the ordinary non-reparse task anchor. Before either
+  canary file exists, serialize its direct Add File patch by removing only the target's one
+  structural terminal LF, emitting exactly one +<line> record per remaining logical line
+  including internal empty lines, and emitting no additional terminal empty + record.
+  Create the transport with exactly those patch-canonical bytes only through direct
+  apply_patch in the normal sandbox, read back its exact bytes/length/digest, and parse it
+  through a bounded short command that reads the file. A command-line-embedded body, another
+  path, another helper, or a parse that does not read those exact file bytes is invalid.
+  After the direct patch canary files exist, re-read the transport and require the retained
+  bytes to match that digest, then submit exactly
+  powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File
+  <native_windows_compound_transport> as the one compound operation, with the verified
+  absolute transport path as the final and only script argument. Never invoke the .ps1
+  directly, use -Command, change persistent or session policy, or substitute another
+  executable/path. This process-scoped bypass is native-Windows-only. The operation remains
   bound to the exact worktree, resolved index, and unique canary paths. It captures the complete raw index bytes
   in memory before its first potentially locking command, creates no backup artifact, performs
   initial locking identity reads, stages and verifies only the canary entry/mode/blob/content,
   restores the raw preimage, performs every final HEAD/status/tree/pre-existing-entry read,
   restores the same raw bytes again after those reads, then verifies final raw
   length/SHA-256 and no index.lock using only raw filesystem read-back.
-- A path/preflight, assignment-literal read-back, or template parse failure occurs before canary mutation: create no
-  artifact, spend no approval, and return FILESYSTEM_CAPABILITY_UNAVAILABLE. Without a Git
+- A path/preflight, assignment-literal read-back, body/transport read-back, or template parse
+  failure occurs before canary mutation: create no canary artifact, spend no approval, delete
+  an already-created exact transport only through direct apply_patch, and return
+  FILESYSTEM_CAPABILITY_UNAVAILABLE. Without a Git
   command, use raw filesystem reads to prove both files absent, the raw index length/SHA-256
   unchanged, and index.lock absent; report cleanup VERIFIED when that exact proof passes.
-  Never rewrite,
-  wrap, split, or substitute the template after its successful parse.
+  Never rewrite, wrap, split, further normalize, or substitute the template or transport after its
+  successful parse.
 - Every Git or subprocess non-zero exit must terminate that compound operation non-zero;
   later output, formatting, or object construction must not mask it. The operation is one
   approval retry and may not be split, broadened, reused for source/file edits, or followed
   by a second approval. Any denial, unavailable approval, parse/launched failure, identity
   mismatch, raw-byte mismatch, lock residue, or incomplete read-back is
   FILESYSTEM_CAPABILITY_UNAVAILABLE.
-- After that out-of-root compound operation passes, delete both direct-child files through
-  apply_patch. Run no later Git command. Prove both files absent, repeat only raw index
+- After that out-of-root compound operation passes, delete both direct-child canary files
+  and the exact anchor transport file through apply_patch. Run no later Git command. Prove
+  all three files absent, repeat only raw index
   length/SHA-256 and index.lock reads, and bind the patch tool's exact-path evidence to prove
   no unrelated path changed. No external directory-removal turn is expected or authorized.
 - Only for a different NATIVE_WINDOWS canary whose index route used no approval, after
@@ -495,7 +524,7 @@ Apply only when worker_runtime is NATIVE_WINDOWS:
   GitHub, network, or out-of-root operation that is not a source-file patch.
 When worker_runtime is WSL or NON_WINDOWS, this conditional block imposes no additional
 topology, patch-routing, guide-path/fixed-body extraction, canonical-assignment/body-digest,
-Git-index-approval, or
+compound-file transport, Git-index-approval, or
 empty-parent-finalization rule; follow the normal tool, sandbox, and repository contracts.
 ```
 
@@ -543,7 +572,21 @@ native_windows_operator_guide path ending in `references/operator-guide.md` and 
 native_windows_operator_guide_sha256 from the verified installed candidate or effective
 pinned-bundle manifest. The external creator must also insert the three complete preflight
 assignment lines, ten complete compound assignment lines, and SHA-256 of each fully populated
-body, all derived before dispatch from those exact guide bytes and the bound canary values.
+body, all derived before dispatch from those exact guide bytes and the bound canary values by
+replacing only the assignment value byte ranges and preserving their original CRLF or LF bytes.
+Also insert the exact nonce-bound `native_windows_compound_transport` path under the verified
+task anchor, its initially-absent/ordinary-parent evidence, and the creator-computed byte length
+and SHA-256 of the compound body's patch-canonical transport representation after the separately
+verified source body rejects lone CR and a terminal line break, converts internal CRLF to LF,
+and appends exactly one terminal LF. Also require the direct Add File serialization to remove
+only that structural terminal LF before emitting one patch record per logical line and no
+extra terminal empty record. Keep these transport
+records distinct from the source-body length/digest. The transport is invalid for every other runtime
+or writable-index route.
+Also bind the exact native-Windows execution argv
+`powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <native_windows_compound_transport>`;
+the verified absolute transport path is its final and only script argument. Do not apply this
+process-scoped bypass to another runtime or operation.
 Both sides use the native-Windows conditional's exact opening/closing-fence byte-boundary rule.
 The Worker independently reconstructs and compares them; it must not self-derive expected
 records from its own populated body. Require exact path/hash/body read-back before any mutation
