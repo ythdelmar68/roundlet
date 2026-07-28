@@ -58,7 +58,7 @@ Before activation, prove:
 - Git and the authoritative checkout are usable;
 - GitHub identity, repository identity, issues, comments, formal issue relationships, branches, pull requests, reviews, checks, mergeability, and merge operations can be inspected;
 - the Orchestrator can perform repository-authorized GitHub mutations;
-- the installed contract file set can be copied byte-for-byte to a content-addressed bundle and read back;
+- the contract file set can be materialized byte-for-byte to a content-addressed bundle and read back: from verified commit objects for `git`, or from the resolved installed directory for `installed-tree`;
 - root `AGENTS.md` on `origin/main` contains exactly one valid Roundlet authority block;
 - the configured merge method is supported;
 - the checkout is clean and `HEAD == main == origin/main`;

@@ -53,6 +53,7 @@ Before creating any run resource, fail closed unless every item below is freshly
 
 4. Installed contract and configuration
    - Resolve the exact installed skill root and required file set.
+   - Classify the source as `git` only after verifying the containing repository root, canonical `owner/repository` origin, exact lowercase 40-character commit OID, and the skill root's exact tree prefix at that commit. Require every bundled relative path to map uniquely to an existing blob below that prefix. Otherwise use `installed-tree` and make no Git provenance claim.
    - Require every required reference present and internally consistent.
    - Parse the exact configuration without defaults or overrides.
    - Require unique Supervisor profile names; ordered profile count equal to `max_supervisor_attempts_per_round`; positive review limits; valid merge method; heartbeat arrays beginning at `active_minutes`, strictly increasing, and positive; positive full-reconciliation bound; and the authenticated owner in `owner_allowlist`.
