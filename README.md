@@ -1,367 +1,273 @@
 # Roundlet
 
-Roundlet is a prompt-native Codex skill that works through one GitHub repository's issue backlog, one actionable leaf at a time. It keeps one long-lived Orchestrator, one phase-aware recurring heartbeat, one persistent Worker for the active issue, and a fresh read-only Supervisor for every review attempt. It merges only when the target repository explicitly permits the required mutations, then cleans up before selecting another issue.
-
-This README is the human-facing entry point for the source repository. It is **not** part of the installed skill. The installable source is [`skills/roundlet`](skills/roundlet), and its operating contract remains self-contained there.
+Roundlet is a lightweight, prompt-native Codex skill for running one GitHub issue at a time through implementation, independent review, merge, closure, and cleanup. It uses Codex tasks, GitHub, Git worktrees, a small advisory local state, and one immutable activation-time contract bundle. It has no orchestration runtime, database, package, or release service.
 
 ## Contents
 
-- [Understand the architecture](#understand-the-architecture)
-- [Know what installation includes](#know-what-installation-includes)
-- [Install on a new machine](#install-on-a-new-machine)
-- [Prepare a target repository](#prepare-a-target-repository)
-- [Prepare the GitHub backlog](#prepare-the-github-backlog)
-- [Launch Roundlet](#launch-roundlet)
-- [Operate and maintain a run](#operate-and-maintain-a-run)
-- [Understand safety boundaries](#understand-safety-boundaries)
-- [Contribute to Roundlet](#contribute-to-roundlet)
+- [Architecture](#architecture)
+- [Installation](#installation)
+- [Target repository preparation](#target-repository-preparation)
+- [Backlog preparation](#backlog-preparation)
+- [Activation](#activation)
+- [Operation](#operation)
+- [Native Windows only](#native-windows-only)
+- [Safety boundaries](#safety-boundaries)
+- [Contributing](#contributing)
 
-## Understand the architecture
-
-Roundlet uses Codex tasks, GitHub, Git branches/worktrees, two advisory local files, activation-time content-addressed contract snapshots, and bounded filesystem mutation canaries. It does not ship an executable orchestration runtime, database, package, distributed lock, or CI service.
+## Architecture
 
 ```mermaid
 flowchart LR
-    Owner["Owner"] --> Launcher["Short-lived Launcher"]
-    Launcher --> Orchestrator["Long-lived Orchestrator"]
-    Heartbeat["One recurring heartbeat"] --> Orchestrator
-    Orchestrator <--> GitHub["GitHub issues, PRs, checks, trace"]
-    Orchestrator --> Worker["One persistent Worker per leaf"]
-    Orchestrator --> Supervisor["Fresh read-only Supervisor per attempt"]
-    Worker <--> Worktree["One codex/* branch and isolated worktree"]
-    Orchestrator <--> Advisory[".roundlet lease/current and pinned contracts"]
+    O["Owner"] --> L["Short-lived Launcher"]
+    L --> C["Immutable activation bundle"]
+    L --> R["Long-lived Orchestrator"]
+    L --> H["One recurring heartbeat"]
+    H --> R
+    R --> W["Persistent Worker"]
+    R --> S["Fresh read-only Supervisor"]
+    W --> G["Issue branch and worktree"]
+    S --> G
+    R --> GH["GitHub issue and pull request trace"]
 ```
 
-The **outer loop** schedules and completes one leaf issue before considering another:
+The outer loop continuously reconciles and schedules:
 
 ```mermaid
 flowchart TD
-    Tick["Activation or heartbeat tick"] --> Observe["Read bounded pointers and compute live metadata fingerprints"]
-    Observe --> Same{"Complete exact match and lightweight wait allowed?"}
-    Same -- Yes --> Noop["No full read or repository mutation; apply heartbeat backoff"]
-    Noop --> Tick
-    Same -- No --> Reconcile["Full same-tick reconciliation of required semantic sources"]
-    Reconcile --> Blocked{"Paused, stopped, blocked, or already active?"}
-    Blocked -- Yes --> Follow["Follow only the current state or release signal"]
-    Blocked -- No --> Scan["Scan every open issue"]
-    Scan --> Rank["Classify dependencies and rank ready leaves"]
-    Rank --> Claim["Claim exactly one leaf"]
-    Claim --> Implement["Worker implements in isolated worktree"]
-    Implement --> Review["Run the bounded inner review loop"]
-    Review --> Gates["Check authority, branch rules, checks, mergeability, and closing reference"]
-    Gates --> Merge["Mark ready and merge with the configured method"]
-    Merge --> Close["Verify or close the active leaf"]
-    Close --> Cleanup["Preflight and perform ordered cleanup"]
-    Cleanup --> Idle["Return to IDLE and continue, or stop only when requested"]
-    Idle --> Tick
+    A["IDLE"] --> B["Read complete live backlog"]
+    B --> C["Select one ready leaf"]
+    C --> D["Provision branch, worktree, Worker"]
+    D --> E["Implement and open draft PR"]
+    E --> F["Worker/Supervisor inner loop"]
+    F --> G["Ready, merge commit, close leaf"]
+    G --> H["Cleanup and verify main"]
+    H --> A
 ```
 
-The **inner loop** keeps the Worker but replaces the Supervisor on every attempt:
+The inner loop keeps the same Worker and creates a fresh Supervisor for each attempt. A valid PASS ends review. Findings return to the same Worker. Invalid or unavailable Supervisor attempts use the next configured profile without consuming a review round.
 
-```mermaid
-flowchart TD
-    Candidate["Pushed candidate full SHA"] --> Attempt["Fresh Supervisor using the configured attempt profile"]
-    Attempt --> Valid{"Valid result for the exact attempt, round, and SHA?"}
-    Valid -- No --> Retry{"Another configured attempt profile?"}
-    Retry -- Yes --> Attempt
-    Retry -- No --> Owner["NEEDS_OWNER_INPUT"]
-    Valid -- PASS --> Terminal["SUPERVISOR_PASS"]
-    Valid -- Findings, round 1-9 --> Repair["Same Worker repairs and returns a new candidate"]
-    Repair --> Next["Next review round"]
-    Next --> Attempt
-    Valid -- Findings, round 10 --> Final["One Worker final repair; no round 11 and no PASS claim"]
-    Final --> Limit["REVIEW_LIMIT_REACHED_WORKER_FINALIZED"]
-    Terminal --> Gates["Normal live merge gates"]
-    Limit --> Gates
-```
+GitHub issues and pull requests are durable scheduling/audit state. Local `.roundlet/` files are recovery pointers only. The Orchestrator is the sole GitHub writer.
 
-The exact invariants and round limits live in [`SKILL.md`](skills/roundlet/SKILL.md) and the [`operator guide`](skills/roundlet/references/operator-guide.md).
+## Installation
 
-## Know what installation includes
+### Prerequisites
 
-Installers select the `skills/roundlet` repository path and copy that directory to the user's skills location. The repository root README, repository policy, Git history, and source-maintenance files are not installed.
+- Codex task creation, inspection, follow-up, wait, and archive controls.
+- Recurring heartbeat creation, inspection, update, pause/resume, and removal.
+- Git and an authenticated GitHub route with issue, pull request, branch, review/check, and merge access.
+- Every exact model and reasoning effort in [`roundlet-config.json`](skills/roundlet/references/roundlet-config.json).
+- The ability to read immutable creator-side task identity, model, effort, workspace/project, and canonical CWD.
+- A clean authoritative local checkout for the target repository.
+
+### Choose reviewed source
+
+Use an exact reviewed Roundlet commit. The canonical installable directory is `skills/roundlet`; the repository root is not part of the installed skill.
+
+Expected installable files:
 
 ```text
-roundlet repository
-├── README.md                         human onboarding; not installed
-├── AGENTS.md                         source-repository policy; not installed
-└── skills/roundlet/                  installation boundary
-    ├── SKILL.md                      core safety and orchestration contract
-    ├── agents/openai.yaml            skill UI metadata
-    └── references/
-        ├── launcher.md               activation and recovery prompts
-        ├── operator-guide.md         scheduling, lifecycle, owner commands, cleanup
-        ├── repository-authority.md   target-repository authority block
-        ├── roundlet-config.json      exact role and run configuration
-        └── thread-prompts.md         Orchestrator, Worker, and Supervisor contracts
+skills/roundlet/
+├── SKILL.md
+├── LICENSE
+├── agents/
+│   └── openai.yaml
+└── references/
+    ├── launcher.md
+    ├── operator-guide.md
+    ├── repository-authority.md
+    ├── roundlet-config.json
+    └── thread-prompts.md
 ```
 
-Consequences:
+Install that directory as `$CODEX_HOME/skills/roundlet` using the Codex skill installer workflow. Updating an existing installation does not update a live run: safely stop and clean that run first, install the reviewed source, then perform a completely fresh activation.
 
-- A root README does not affect skill discovery, triggering, or context loading.
-- Do not put a README inside `skills/roundlet`.
-- Anything needed while Roundlet operates must remain in `SKILL.md` or `references/`, not only here.
-- The root README may explain or link to the contract, but the installed files remain authoritative for a live run.
+### Verify installation
 
-## Install on a new machine
+Read the installed `SKILL.md` and all references. Validate:
 
-### 1. Confirm prerequisites
+- frontmatter and skill discovery;
+- JSON and YAML parsing;
+- exact configured role profiles;
+- Supervisor profile count/name consistency;
+- heartbeat interval arrays and full-reconciliation bound;
+- review limits and merge method;
+- owner allowlist;
+- links and required file set;
+- absence of executable orchestration artifacts.
 
-You need:
+## Target repository preparation
 
-- Codex with skills, task creation/coordination, and recurring heartbeat support;
-- Git and one clean authoritative checkout of the target repository;
-- authenticated GitHub access that can inspect issues, pull requests, reviews, checks, mergeability, branches, and repository rules;
-- GitHub Connector for semantic reads and writes, plus authenticated GitHub CLI when raw paginated metadata or formal relationship endpoints are required; `gh --jq` is sufficient and a standalone `jq` install is not required;
-- the exact configured models and reasoning efforts;
-- permission to add the Roundlet authority block to the target repository's root `AGENTS.md`.
+### Authoritative checkout
 
-Roundlet fails closed if any configured capability or mutation cannot be verified. It proves advisory-state, linked-worktree, and linked-worktree-index mutations with real role/tool canaries; tool visibility and zero-tool decisions are not proof. It does not silently substitute another model, effort, Supervisor attempt profile, or merge method.
+Before activation:
 
-The checked-in configuration uses `gpt-5.6-sol` with high reasoning for the long-lived Orchestrator and retains the configured Worker and Supervisor profiles. Roundlet does not require a custom Codex permission profile or project `config.toml`. When required GitHub CLI access is blocked by the network sandbox, it requires the model to request scoped escalation automatically, including through **Approve for me** when available, and distinguishes connectivity failure from a credential rejection returned by reachable GitHub. The skill cannot grant or assume network access; the host permission policy remains authoritative. Only an explicit approval denial, unavailable approval mechanism, confirmed authentication rejection, or connectivity that remains unavailable after bounded recovery blocks activation for owner input.
+- origin and GitHub repository identity equal the intended `owner/repository`;
+- default/primary branch is `main`;
+- fetch completes;
+- checkout is clean;
+- `HEAD == main == origin/main`;
+- no unrelated branch/worktree/task/heartbeat/run resource may own the target.
 
-### 2. Choose the source you will install
+Roundlet never force-pushes, rebases, resets, bypasses branch protection, or destroys unique work.
 
-The checked-in [`roundlet-config.json`](skills/roundlet/references/roundlet-config.json) contains an owner allowlist and exact model settings. Install the upstream source unchanged only when those values are correct for you.
+### Repository authority
 
-For a durable personal or team setup:
+Copy the authority template from [`repository-authority.md`](skills/roundlet/references/repository-authority.md) into root `AGENTS.md` on authoritative `origin/main`. Keep exactly one valid block.
 
-1. Fork this repository.
-2. Clone the fork.
-3. Change only the configuration values you deliberately own, especially `owner_allowlist`.
-4. Verify that every configured role model, reasoning effort, and ordered Supervisor attempt profile is available on the Codex host.
-5. Commit and review the configuration in the fork, then install from that reviewed ref.
+Authority switches can permit:
 
-Copy this prompt into a Codex task opened on your fork checkout:
+- ready conversion;
+- merge;
+- leaf closure;
+- remote/local branch deletion;
+- worktree removal.
+
+They may narrow Roundlet but never override repository, host, or platform policy. Umbrella issues remain open.
+
+### Local state exclusion
+
+Add exactly:
 
 ```text
-Prepare this Roundlet source fork for my own installation.
-
-My GitHub owner login: <GITHUB_LOGIN>
-Reviewed source ref: <BRANCH_OR_FULL_COMMIT_SHA>
-
-Read AGENTS.md, skills/roundlet/SKILL.md, and every required reference. Update
-skills/roundlet/references/roundlet-config.json only for values I explicitly confirm.
-Set owner_allowlist to the exact allowed GitHub login or logins. Inspect whether every
-configured model, reasoning effort, and ordered Supervisor attempt profile is selectable
-on this Codex host; do not substitute an unsupported value. Keep the review limits,
-merge method, and heartbeat active/backoff/full-audit values unchanged unless I explicitly
-approve different exact values. Validate the skill, JSON, YAML, links, source layout, and git diff. Do not install,
-push, merge, publish, tag, or release anything in this task.
-```
-
-### 3. Install only the skill directory
-
-Start a new Codex task and use the built-in skill installer. Replace the placeholders with the repository and reviewed ref you selected:
-
-```text
-Use $skill-installer to install the Roundlet skill from GitHub repository
-<OWNER/REPOSITORY>, path skills/roundlet, at reviewed ref <BRANCH_OR_FULL_COMMIT_SHA>.
-Install only that skill path, not the repository root. Report the final installed skill
-directory and whether Codex needs to restart before Roundlet appears. Do not change the
-source repository or a target repository.
-```
-
-The installed directory is normally `$CODEX_HOME/skills/roundlet`, with `~/.codex/skills/roundlet` as the default when `CODEX_HOME` is unset. If a directory with that name already exists, reconcile or preserve its local changes before replacing it; never delete an unknown installed copy blindly.
-
-### 4. Verify discovery and configuration
-
-After installation, start a new turn or restart Codex if the skill does not appear. Then copy this prompt:
-
-```text
-Use $roundlet read-only. Resolve the exact installed Roundlet skill directory, read
-SKILL.md and every required reference, and report:
-- the installed source path;
-- the configured owner allowlist;
-- every Orchestrator and Worker model/effort;
-- the ordered Supervisor attempt profiles;
-- heartbeat active interval, IDLE and owner-input backoff arrays, periodic full-audit bound, filesystem-canary required flag and approval retry limit, review limits, and merge method;
-- any missing, malformed, or unsupported value.
-
-Do not launch or recover a run. Do not mutate GitHub, Git, Codex tasks, heartbeats, or a
-target repository.
-```
-
-Do not proceed if this verification reports a mismatch.
-
-## Prepare a target repository
-
-Roundlet operates one target repository from one authoritative checkout on one authoritative machine. Do not activate a second run for the same target from another clone, machine, or Codex task.
-
-### 1. Prepare the authoritative checkout
-
-Before activation, make sure:
-
-- the checkout is on the target repository's primary branch;
-- `HEAD`, local `main`, and `origin/main` name the same full commit;
-- the worktree is clean;
-- the `origin` URL and GitHub default branch identify the intended target;
-- the configured merge method is supported;
-- required checks and branch rules can be inspected;
-- no existing Roundlet lease, trace, task, heartbeat, branch, worktree, or pull request remains live or unreconciled.
-
-### 2. Grant repository-specific authority
-
-Roundlet reads mutation authority only from the root `AGENTS.md` on authoritative `origin/main`. Copy the exact block from [`repository-authority.md`](skills/roundlet/references/repository-authority.md#copyable-agentsmd-block), choose every boolean deliberately, commit it through the target repository's normal review process, and ensure it is present on `origin/main` before activation.
-
-You can ask Codex to prepare the proposed target-repository change without granting authority implicitly:
-
-```text
-Prepare a proposed Roundlet authority change for this target repository.
-
-Read the installed $roundlet skill completely, including
-references/repository-authority.md, and read every applicable AGENTS.md. Show me the
-meaning and consequence of every required boolean before editing. After I choose each
-value explicitly, add exactly one roundlet:repository-authority block to the root
-AGENTS.md. Do not broaden any existing repository permission, and do not claim that true
-overrides stricter repository, GitHub, or platform rules. Run repository validation, but
-do not commit, push, create a pull request, merge, or launch Roundlet unless I separately
-authorize those actions.
-```
-
-### 3. Exclude advisory runtime state locally
-
-Roundlet creates only:
-
-- `.roundlet/lease.json`, containing stable run/task identity and immutable activation-contract identity without an expiry;
-- `.roundlet/current.md`, containing concise reconciliation pointers, a derived effective-contract mirror, pending adoption/migration identity, and bounded observation state;
-- `.roundlet/contracts/<contract-id>/`, containing read-only content-addressed snapshots of the exact skill, required references, resolved role configuration, source/ref/version, and canonical manifest;
-- `.roundlet/canary-evidence/accepted/<aggregate-sha256-hex>/` and `.roundlet/canary-evidence/failed/<run-id>/<attempt-id>/`, containing immutable bounded canary evidence;
-- optional `.roundlet/legacy-activation.json`, used once to pin a provable pre-contract run; and
-- `.roundlet/migrations/<sequence>-<migration-id>/`, containing immutable prepared and committed records that form the recoverable active-contract chain.
-
-Add this one line to the authoritative checkout's local `.git/info/exclude`:
-
-```gitignore
 .roundlet/
 ```
 
-Do **not** add it to a committed `.gitignore`. Do not commit `.roundlet/`, credentials, tokens, task transcripts, caches, or generated runtime artifacts.
+to the authoritative checkout's local `.git/info/exclude`. Do not add it to committed `.gitignore`.
 
-Copyable preparation prompt:
+Roundlet may then keep:
 
-```text
-Prepare only the local Roundlet advisory-state exclusion for this authoritative checkout.
+- `.roundlet/lease.json`;
+- `.roundlet/current.md`;
+- `.roundlet/contracts/<contract-id>/`.
 
-Verify the repository root and inspect the existing .git/info/exclude. Add exactly one
-.roundlet/ entry there if it is absent. Do not edit a tracked .gitignore or any other
-tracked file. Verify with git check-ignore that .roundlet/lease.json resolves to this
-checkout's .git/info/exclude. Report the exact evidence and make no other mutation.
-```
+All are local-only. The bundle contains exact activation-time instructions and configuration; it is read-only after activation.
 
-The Launcher repeats and verifies this local step during activation. Mutation artifacts are transient, uniquely named, bounded, and must be removed with exact read-back proof; they are never durable Roundlet state or committed source. Their bounded result bytes and canonical manifests are separate immutable recovery evidence under `.roundlet/canary-evidence/`.
+## Backlog preparation
 
-## Prepare the GitHub backlog
+Use formal GitHub parent/sub-issue relationships for membership. For each umbrella, keep a Canonical scheduling note describing priority, wave/order, exact runnable dependencies, and completion evidence.
 
-Roundlet fully rescans all open issues on activation, whenever the complete IDLE graph fingerprint changes, and when the periodic full-audit bound is due. A quiet IDLE heartbeat can compare one fingerprint without rereading every body and comment. It distinguishes:
+Umbrellas are scheduling context only:
 
-- **Umbrella:** has formal GitHub sub-issues and a clearly identified `Canonical scheduling note`; it supplies scheduling context and is never implemented or closed by Roundlet.
-- **Scheduling-blocked parent:** has formal sub-issues but no canonical scheduling note; Roundlet stops for owner input.
-- **Leaf:** has no formal sub-issues; it may be a child of an umbrella or a standalone issue.
-- **Ignored:** carries `roundlet:ignore` and is excluded.
+- never select an umbrella for implementation;
+- never use its open/closed/completed state as a dependency;
+- express dependencies only as exact leaf or standalone issue numbers;
+- keep the umbrella open after a wave completes.
 
-For every umbrella, keep the body as the canonical scheduling record. State priority, dependency order, readiness, and required completion evidence; then add each member through GitHub's formal parent/sub-issue relationship. A plain `Parent: #123` line is useful context but does not replace the formal relationship.
+A runnable leaf provides live scope, boundaries, acceptance intent, and dependency evidence. Owner-only security, destructive, product-scope, release, or publication decisions remain explicit.
 
-A leaf should provide enough live scope, boundaries, acceptance intent, and dependency evidence for safe implementation. Owner-only security, destructive, or product-scope choices must remain explicit instead of being guessed by the Worker.
+## Activation
 
-## Launch Roundlet
+Open [`launcher.md`](skills/roundlet/references/launcher.md#new-activation), fill only its placeholders, and create one Launcher directly against the authoritative checkout using the requested Launcher model/effort.
 
-Activation starts in a short-lived **Launcher task**, not in the target repository's implementation task and not in the future Orchestrator task. Create that Launcher directly against the exact authoritative checkout as its canonical CWD and normal writable local-project workspace. Do not use a projectless task, unrelated project, read-only route, or removable linked worktree.
+The Launcher:
 
-Open a new Codex task at the exact owner-selected Launcher profile in that authoritative writable checkout and first send only the immutable task-metadata handshake from [`thread-prompts.md`](skills/roundlet/references/thread-prompts.md#immutable-task-metadata-handshake). After the task exhausts deferred discovery, returns `TASK_METADATA_READY`, and the creator independently verifies an immutable task/turn record with the same task ID, model, reasoning effort, canonical CWD, and writable local-project workspace, send this wrapper in that same task. It tells Codex to load the complete canonical activation prompt from the installed skill, so the long contract has one source of truth:
+1. verifies its immutable profile and writable checkout binding;
+2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities;
+3. reconciles every old local/remote Roundlet resource and fails closed on stale ownership;
+4. scans the complete backlog and Canonical scheduling notes without selecting an issue;
+5. reserves a new run ID;
+6. builds and reads back one immutable activation bundle;
+7. creates and reads back advisory lease/current state;
+8. creates exactly one configured Orchestrator and verifies its immutable task/profile/workspace/CWD binding;
+9. requires exact `ACTIVATION_READY` without issue selection;
+10. creates exactly one heartbeat bound only to the Orchestrator and requires exact `HEARTBEAT_BOUND`;
+11. verifies all identities, sends one initial tick, reports the activation, and archives itself.
 
-```text
-Use $roundlet as a short-lived Launcher for exactly one target repository.
+The Launcher never implements an issue and never owns the heartbeat.
 
-GitHub repository: <OWNER/REPOSITORY>
-Authoritative local checkout: <ABSOLUTE_PATH>
-Expected primary branch: main
+## Operation
 
-Read the complete installed Roundlet skill and every required reference. Open
-references/launcher.md and execute its entire "New activation" prompt verbatim after
-replacing only its explicit placeholders with the target values above. Use the exact
-checked-in roundlet-config.json without defaults or substitutions. Do not implement an
-issue in this Launcher task. Stop fail-closed on any incomplete preflight, active or
-unreconciled run, unsupported capability, or ambiguous authority.
-```
+Routine instructions go to the existing Orchestrator and read only its pinned bundle. Do not invoke the installed `$roundlet` skill inside a live run.
 
-The canonical full prompt is visible at [`launcher.md`](skills/roundlet/references/launcher.md#new-activation). A successful Launcher:
+Use the copyable prompts in [`operator-guide.md`](skills/roundlet/references/operator-guide.md#copyable-owner-commands) for:
 
-1. verifies configuration, models, GitHub, Git, rules, authority, local state, task/heartbeat capabilities, any required GitHub CLI path, and the deferred immutable task-metadata route;
-2. binds the Launcher to the authoritative checkout as its normal writable workspace; uses a metadata-only handshake, pre-dispatch creator-side stable-task/profile/workspace read-back, exact populated-turn metadata reread, and post-return creator-side exact task/turn/profile read-back for every populated role turn; reserves the stable run ID; then proves and cleans the Launcher's advisory route plus a short-lived configured Worker's linked-worktree file and Git-index routes with real same-run canaries;
-3. creates and reads back the content-addressed activation contract bundle, then creates the two advisory files with the same active contract identity;
-4. creates exactly one metadata-verified long-lived Orchestrator from that pinned bundle, requires its own advisory canary, binds all three role results in one canonical evidence set, and waits for digest-bound `ACTIVATION_READY`;
-5. attaches exactly one heartbeat at the configured active interval, verifies that the same heartbeat can adopt every configured backoff interval, and waits for `HEARTBEAT_BOUND`;
-6. sends one initial tick; and
-7. reports the run identities and archives itself.
+- status inspection without advancing;
+- pause;
+- resume;
+- stop-after-current;
+- active-issue abort decisions.
 
-Keep the Orchestrator task. Routine owner commands go there.
+If the original Orchestrator or heartbeat is inaccessible, use [`Explicit recovery`](skills/roundlet/references/launcher.md#explicit-recovery). Recovery uses the old bundle; it never imports an installed update.
 
-## Operate and maintain a run
+### Scheduling and claim
 
-The [`operator guide`](skills/roundlet/references/operator-guide.md) contains the installed operating contract and copyable owner commands:
+On full reconciliation, Roundlet scans all open issues, formal relationships, blocking edges, canonical notes, labels, comments, active branches, and pull requests. It ranks ready leaf/standalone candidates by canonical order, priority, stated blocker-removal value, then oldest issue number.
 
-| Need | Use |
-| --- | --- |
-| Inspect without advancing | [Inspect status without advancing](skills/roundlet/references/operator-guide.md#inspect-status-without-advancing) |
-| Pause safely | [Pause at a safe checkpoint](skills/roundlet/references/operator-guide.md#pause-at-a-safe-checkpoint) |
-| Resume | [Resume the paused run](skills/roundlet/references/operator-guide.md#resume-the-paused-run) |
-| Pin a pre-contract active run before migration | [Owner-authorized legacy bootstrap](skills/roundlet/references/launcher.md#owner-authorized-legacy-run-contract-bootstrap) |
-| Adopt a reviewed contract between issues | [Owner-authorized between-issue adoption](skills/roundlet/references/launcher.md#owner-authorized-between-issue-contract-adoption) |
-| Migrate an active run to an owner-approved contract | [Owner-authorized in-place migration](skills/roundlet/references/launcher.md#owner-authorized-in-place-contract-migration) |
-| Finish current work, then stop | [Stop after the current issue](skills/roundlet/references/operator-guide.md#stop-after-the-current-issue) |
-| Handle a closed, ignored, or withdrawn active leaf | [Choose an explicit abort disposition](skills/roundlet/references/operator-guide.md#resolve-an-active-issue-that-was-closed-ignored-or-withdrawn) |
-| Recover an inaccessible Orchestrator or heartbeat | [Explicit recovery Launcher](skills/roundlet/references/launcher.md#explicit-recovery) |
+Selection remains read-only while provisioning. The Orchestrator publishes selection only after branch, worktree, clean base, and persistent Worker identity read back correctly.
 
-Important distinctions:
+### Review and merge
 
-- **Status** is read-only and performs no tick.
-- **Pause** preserves tasks, heartbeat identity, branch, worktree, pull request, lease, and current state.
-- A paused heartbeat performs no polling. A direct owner instruction resumes the same Orchestrator and resets the same heartbeat to the active interval after full reconciliation.
-- **Resume** happens in the same Orchestrator after reconciliation.
-- **Stop-after-current** completes the active issue and ordered cleanup, then stops. If idle, it stops immediately.
-- Without stop-after-current, cleanup returns to IDLE at the active interval and Roundlet continues selecting later issues automatically. Quiet IDLE ticks back off through 5/15/30/60 minutes; owner-input waits back off through 5/15/30 minutes.
-- There is no immediate destructive stop. Active work requires `resume`, `preserve-and-stop`, or an explicitly scoped `abandon-and-cleanup` owner decision.
-- **Legacy bootstrap** first pins the exact activation-time source/ref for a pre-contract run; it fails closed if the old identity cannot be proven and never treats the current installed copy as evidence. **Between-issue adoption** handles an owner-approved candidate only when fully reconciled `IDLE` has no leaf resources. **In-place migration** handles every other phase and retains all active resources. Both use a same-task model/effort override verified from task metadata and make no repository transition.
-- **Recovery** is only for an inaccessible Orchestrator or heartbeat. It reads the pinned active bundle; a stale-looking local file never authorizes takeover.
-- **Filesystem capability** is proven on the exact role/task/host/route. Every canary uses a phase-specific context that permits absent contract/leaf fields only when they genuinely do not exist, including distinct truthful states for pre-activation contracts, pre-contract legacy runs, and standalone benchmarks. Issue claim provisions and verifies its bounded local branch/worktree substrate before both same-phase role contexts bind it. Exact task, profile, runtime, role-specific worktree, route, target, and Git identities remain mandatory. Every newly created persistent Worker repeats the worktree/index canary before implementation, and a canonical aggregate prevents one role or surface from overwriting another. A completed transition keeps immutable historical evidence after its clean short-lived resources are removed, but every later transition requires a fresh applicable set. An initial restriction gets at most one narrow host-supported approval retry. Direct execution failure, explicit denial, unavailable approval, approved execution failure, and final unproven capability remain distinct.
-- **Launcher writable-route binding** is platform-neutral. Every activation or recovery Launcher runs directly in the authoritative checkout as its canonical CWD and normal writable local-project workspace, so its advisory canary exercises the actual route instead of an out-of-root approval workaround. Projectless, unrelated, read-only, and removable-worktree Launchers fail before reservation or mutation. This invariant does not broaden the native-Windows Worker exception.
-- **Immutable task metadata** uses an initial metadata-only handshake plus a gate on every populated turn. Missing eager tool exposure is inconclusive: the role exhausts deferred discovery, accepts `role_task` only from equal thread/session fields, and records `turn_id` separately. Before each populated turn the creator independently rechecks the stable task/profile; the role rereads metadata and binds the new exact turn before acting; after return the creator independently verifies that populated task/turn/profile before accepting its result or allowing a transition. A turn ID can never substitute for a task ID.
-- **Raw index restoration** treats `initial_index_sha256` as an exact byte preimage. A Worker captures the resolved linked-worktree index before the first operation that may lock or write it, restores those same bytes after exact-path stage/inspection and all remaining identity reads, and verifies the final raw hash. Matching HEAD, status, index tree, and entries is necessary but cannot substitute for byte equality. Shell wrappers must surface a failing Git exit instead of allowing later output to mask it.
-- **Task/worktree cleanup** is separate from artifact/index cleanup and from an archive acknowledgement. Bounded external read-back must prove the task non-active, exact Git registration absent, no unique work, no live process retaining the exact worktree as its current directory, and the physical worktree path absent. Roundlet never kills Codex/Node or force-removes a path to manufacture `cleanup=VERIFIED`.
-- **Recovery and contract migration** rerun canaries before any checkpoint, Git, or GitHub transition. Failure retains every active resource in `FILESYSTEM_CAPABILITY_BLOCKED`.
-- **GitHub CLI recovery** automatically escalates sandbox-blocked network access and retries bounded transient transport failures without changing Roundlet phase; it never launches browser authentication as an implicit workaround.
-- **Native Windows Worker patch and index routing** keeps canary-file creation/change/deletion and source edits on the dedicated `apply_patch` tool inside the assigned writable worktree's normal sandbox. It forbids PowerShell/pipeline/here-string/batch-wrapper and elevated-shell patch fallbacks because those host-specific helper routes can fail independently of worktree capability. The separated Worker topology can place the linked-worktree Git index under the authoritative repository's `.git/worktrees/` metadata, outside the Worker's writable roots. Only on native Windows, every operation that may create `index.lock`—including `git write-tree`—is therefore kept inside one narrowly approved, exact-worktree/index/canary operation when the normal route is initially restricted. The populated Worker prompt binds the fixed bodies to the complete absolute `references/operator-guide.md` path inside the exact installed candidate or effective pinned bundle and to that file's verified SHA-256; it also carries creator-computed canonical assignment lines and populated-source-body digests so the Worker can independently reconstruct and compare them instead of accepting self-derived expected values. Canonical source-body bytes begin after the opening-fence line terminator and exclude the `CRLF` or `LF` introducing the closing fence while preserving internal bytes without normalization. Each assignment population replaces only its value byte range before the existing line terminator; consuming a terminal `CR`, moving a terminator, or changing any non-replaced source byte is invalid. This mode uses two unique direct-child canary files, not canary directories, so their direct-`apply_patch` deletion needs no second approval. Every exact path enters the two Windows-only PowerShell templates only as validated standard padded Base64 of its UTF-8 bytes; before mutation, the Worker reads back every populated assignment and both source-body digests against those creator-supplied canonical records and rejects expressions even when PowerShell can parse them. To avoid native Windows process argument limits while retaining source identity, the Worker separately rejects lone `CR` and a terminal line break in the verified compound source body, deterministically converts internal `CRLF` to `LF`, leaves an already-LF source otherwise unchanged, and appends exactly one terminal `LF`. The creator and Worker independently bind the resulting patch-canonical representation's length and hash separately from the source-body records. When serializing the Add File patch, the Worker removes only that structural terminal LF, emits one `+<line>` record per logical line including internal empty lines, and emits no extra terminal empty record; the patch terminators recreate the exact target. It writes those bytes through direct normal-sandbox `apply_patch` to one nonce-bound temporary `.ps1` direct child of its verified host-owned task anchor, parses and rehashes that file through a short command, then launches exactly `powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File <verified-transport>` as the sole approved operation. The bypass is process-scoped: Roundlet never changes persistent or session execution policy, invokes the `.ps1` directly, or uses `-Command`. It then deletes the transport through direct `apply_patch` and proves absence. No further transport normalization is permitted. The transport never enters the linked worktree or Git status. Native stderr diagnostics remain separate from parsed stdout identities, and an unconditional guard restores/verifies the in-memory raw preimage on success or failure without a backup artifact. After direct file deletion, this mode performs no further Git command and relies only on exact file/tool evidence plus raw index/lock reads; a pre-mutation rejection can still prove cleanup `VERIFIED` from exact raw absence/index/lock reads. For a different native-Windows canary whose index route needs no approval, the existing two-turn exception remains available when direct file cleanup leaves an initially absent, nonce-bound, ordinary, non-reparse, proven-empty nested parent. Neither exception can delete source, ancestors, worktrees, anchors, or run state. These guide-path, canonical-assignment/body-digest/byte-boundary, patch-canonical transport, process-scoped execution-policy, task-anchor, topology, patch, index, and cleanup guards apply only to native Windows, not Launcher advisory canaries, WSL, Linux, macOS, `NON_WINDOWS`, or an ordinary writable-index route; those routes remain unchanged.
+- Rounds 1–3 are COMPLETE if reached; any valid PASS ends review.
+- Rounds 4–10 are CONVERGING.
+- Invalid Supervisor attempts do not consume the round.
+- Round-10 findings get one final Worker repair without round 11 or a claimed PASS.
+- Ready conversion and merge require live authority, correct exact SHA, successful required checks, mergeability, correct closing reference, and configured merge method `merge`.
 
-## Understand safety boundaries
+### Cleanup
 
-- The local lease is advisory; it cannot prevent split-brain across machines, clones, or tasks.
-- Every run reads an immutable activation-time contract bundle plus a unique valid committed migration chain. Installed updates are separately fingerprinted candidates and never become live instructions silently.
-- Routine owner and recovery prompts do not invoke the mutable installed skill. A prepared contract change has no effect; one valid commit record is the recoverable commit point, and lease/current active values are only mirrors.
-- GitHub issues, pull requests, reviews, checks, and append-only Roundlet comments are the durable backlog and audit trail.
-- Only the Orchestrator mutates GitHub. Workers and Supervisors return proposals for verification.
-- Lightweight metadata is only an unchanged proof. Any changed, incomplete, overflowed, action-ready, or periodically due observation triggers full reconciliation in the same heartbeat before reasoning or mutation.
-- A filesystem tool's presence is not proof that it can mutate the exact advisory/worktree/index surface. A normal launched non-zero result is `DIRECT_EXECUTION_FAILED`; only a launched failure after approved escalation is `ESCALATED_EXECUTION_FAILED`, and neither is an approval denial; any incomplete mutation/read-back/restoration/cleanup is `FILESYSTEM_CAPABILITY_UNAVAILABLE`.
-- A GitHub CLI failure inside a network-restricted sandbox is not proof that its credential is invalid. Roundlet must reach GitHub before making that classification.
-- **Native Windows only:** each new Worker must separate its host-owned task-anchor CWD from its removable linked worktree. A surviving process at the distinct anchor is truthful host lifecycle evidence, not a holder of an already absent worktree. Failure of a shell-wrapped or elevated patch helper is not proof that the assigned worktree is unwritable or that approval was denied. Workers must use the dedicated normal-sandbox patch route for canary files and source edits, and fail closed as `FILESYSTEM_CAPABILITY_UNAVAILABLE` instead of retrying either mutation through elevation. The only directory exception is the bounded external removal and same-Worker read-only finalization of one exact proven-empty canary-created parent. This topology and cleanup exception does not apply to WSL, Linux, macOS, or other hosts/runtimes; they retain their existing platform-appropriate flow.
-- Every Worker and Supervisor turn is bound to exact live context, full commit SHAs, stable role task, exact populated turn, and immutable execution profile.
-- Roundlet never rebases, force-pushes, bypasses protection, destroys unique work, or closes an umbrella.
-- A pull request may use a closing keyword only for its one active leaf. Use plain links for umbrellas and every other issue.
-- Cleanup is part of the active issue. No next issue is selected until the checkout is clean, issue-specific tasks are non-active, no process has the exact Roundlet-owned worktree as current directory, no worktree registration/path remains, resources are removed as authorized, and `HEAD == main == origin/main`.
+The same Worker performs read-only cleanup preflight. The Orchestrator then:
 
-Read the complete [core skill contract](skills/roundlet/SKILL.md) and [operator guide](skills/roundlet/references/operator-guide.md) before using Roundlet on valuable work.
+1. verifies merge/leaf/remote/worktree/unique-work state;
+2. archives the Worker;
+3. removes the linked worktree non-force when authorized;
+4. verifies registration and physical path are absent;
+5. deletes exact local/remote issue branches when authorized and safe;
+6. fetches and fast-forwards authoritative `main`;
+7. proves a clean `HEAD == main == origin/main`;
+8. returns to IDLE or stops after current.
 
-## Contribute to Roundlet
+If ordinary worktree removal fails, diagnose the exact holder and preserve evidence. Never kill Codex or Node, force-remove unknown work, or broaden the cleanup target.
 
-Repository work follows [`AGENTS.md`](AGENTS.md):
+### Skill updates
 
-1. Create or select a formal leaf issue under the correct umbrella and follow its canonical scheduling note.
-2. Develop from exact `origin/main` in an isolated `codex/` worktree.
-3. Keep commits atomic and use Conventional Commits.
-4. Use a focused draft pull request and obtain explicit owner approval before merge.
-5. When anything under `skills/roundlet` changes, review and synchronize every affected reference and this README in the same pull request. If a reviewed document needs no textual change, record that verification in the pull request.
-6. Run the current system skill validator, JSON and YAML validation, reference-link and source-layout checks, prohibited-artifact checks, and `git diff --check`.
-7. Keep forward testing in its dedicated issue and never mutate a target repository without explicit owner authorization.
-8. Any model, effort, permission, or contract change that can affect mutation behavior requires a bounded live task/tool benchmark on all three canary surfaces; a zero-tool synthetic comparison is insufficient.
+A live run remains pinned even when the installed skill changes. The supported update sequence is:
 
-Do not add a second README, separate installation or quick-reference document, executable runtime, generated documentation, CI workflow, release artifact, or automated test suite.
+1. stop-after-current (or stop immediately while IDLE);
+2. verify heartbeat, roles, branches, worktrees, advisory state, and bundle cleanup;
+3. install the reviewed new skill;
+4. start a completely fresh run with a new run ID and contract.
+
+There is no in-place update path.
+
+## Native Windows only
+
+These rules apply only to a verified native-Windows Worker:
+
+- Create the task with a unique host-owned anchor as canonical CWD.
+- Place the removable linked worktree at a distinct writable descendant path; never make the Worker CWD equal to or inside that worktree.
+- Use direct normal-sandbox `apply_patch` for source edits. Do not wrap or elevate it through PowerShell, shell pipelines, here-strings, or batch files.
+- If linked-worktree Git metadata is outside normal writable roots, request only the narrowest approval for the exact Git metadata operation.
+- A host process retaining the separate anchor CWD is not a holder of the child worktree.
+- A surviving empty host-owned anchor is host lifecycle evidence, not an active Roundlet worktree.
+
+WSL, Linux, macOS, and other hosts keep their ordinary topology and must not inherit these exceptions.
+
+## Safety boundaries
+
+- Every run reads one immutable activation bundle; Git-sourced bundles use exact commit-object bytes, not filterable checkout bytes.
+- Installed drift never silently changes a live run.
+- Every task is bound once at creation to immutable task ID, profile, project/workspace, and CWD.
+- GitHub is the durable trace; local files never override live Git/GitHub evidence.
+- Lightweight observations never authorize mutation.
+- Only one active leaf and Worker exist per run.
+- Only the Orchestrator mutates GitHub.
+- Supervisors are fresh and read-only.
+- Merge, closure, branch deletion, and worktree removal require live authority.
+- Cleanup never destroys unique work.
+- Release, tag, publish, version bump, repository visibility change, force-push, reset, rebase, and runtime self-promotion remain out of scope.
+
+## Contributing
+
+Repository policy is in [`AGENTS.md`](AGENTS.md).
+
+For every skill change:
+
+1. create an isolated `codex/` worktree/branch;
+2. keep the change focused and prompt-native;
+3. synchronize affected references and this README;
+4. avoid new runtimes, helpers, CI, generated artifacts, or duplicate guides;
+5. run the current system `skill-creator/scripts/quick_validate.py skills/roundlet`;
+6. parse JSON/YAML and check links, source layout, prohibited artifacts, Markdown fences, and `git diff --check`;
+7. independently review the exact candidate;
+8. when mutation behavior changes, run one owner-authorized complete forward cycle through Launcher, Orchestrator, Worker, Supervisor, draft PR, ready, merge commit, leaf close, and cleanup;
+9. use a focused draft PR, merge commit, and ordered branch/worktree cleanup.
