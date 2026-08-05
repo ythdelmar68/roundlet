@@ -56,7 +56,7 @@ GitHub issues and pull requests are durable scheduling/audit state. Local `.roun
 - Recurring heartbeat creation, inspection, update, pause/resume, and removal.
 - Git and an authenticated GitHub route with issue, pull request, branch, review/check, and merge access.
 - Every exact model and reasoning effort in [`roundlet-config.json`](skills/roundlet/references/roundlet-config.json).
-- The ability to read immutable creator-side task identity, model, effort, workspace/project, and canonical CWD.
+- The ability to read immutable creator-side task identity, creator/source task, configured model/effort, workspace/project, canonical CWD, and available stable host/environment identity independently of role output.
 - A clean authoritative local checkout for the target repository.
 
 ### Choose reviewed source
@@ -88,6 +88,7 @@ Read the installed `SKILL.md` and all references. Validate:
 - frontmatter and skill discovery;
 - JSON and YAML parsing;
 - exact configured role profiles;
+- distinct non-authoritative role-report and creator-authoritative binding-attestation contracts;
 - Supervisor profile count/name consistency;
 - heartbeat interval arrays and full-reconciliation bound;
 - review limits and merge method;
@@ -168,7 +169,7 @@ The Launcher:
 5. reserves a new run ID;
 6. builds and reads back one immutable activation bundle;
 7. creates and reads back advisory lease/current state;
-8. creates exactly one configured Orchestrator and verifies its immutable task/profile/workspace/CWD binding;
+8. creates exactly one configured Orchestrator and records its creator-authoritative task-binding attestation independently of any role metadata report;
 9. requires exact `ACTIVATION_READY` without issue selection;
 10. creates exactly one heartbeat bound only to the Orchestrator and requires exact `HEARTBEAT_BOUND`;
 11. verifies all identities, sends one initial tick, reports the activation, and archives itself.
@@ -246,7 +247,7 @@ WSL, Linux, macOS, and other hosts keep their ordinary topology and must not inh
 
 - Every run reads one immutable activation bundle; Git-sourced bundles use exact commit-object bytes, not filterable checkout bytes.
 - Installed drift never silently changes a live run.
-- Every task is bound once at creation to immutable task ID, profile, project/workspace, and CWD.
+- Every task has at most one creator-authoritative binding attestation covering immutable task ID, creator/source task, requested role, profile, project/workspace, CWD, and available stable host/environment identity. Role metadata reports are advisory and cannot satisfy, alter, or invalidate that binding.
 - GitHub is the durable trace; local files never override live Git/GitHub evidence.
 - Lightweight observations never authorize mutation.
 - Only one active leaf and Worker exist per run.
