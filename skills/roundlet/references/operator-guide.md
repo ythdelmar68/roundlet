@@ -250,7 +250,7 @@ After selecting one ready leaf:
    - other hosts: create/verify worktree first, then create the Worker in the ordinary topology.
 4. Independently verify clean base SHA, branch, worktree registration/path/status, Worker task/profile/workspace/CWD binding, repository instructions, and absence of conflicting resources.
 5. On any provisioning failure, remove only proven empty/unpublished resources, verify cleanup, and return to `IDLE`; otherwise stop in `CLEANUP_BLOCKED`.
-6. Only after successful read-back, publish the selection trace, enter `ISSUE_SELECTED`, and send the initial implementation prompt to that same Worker.
+6. Only after successful read-back, publish the selection trace to the leaf issue, read it back there, enter `ISSUE_SELECTED`, and send the initial implementation prompt to that same Worker.
 
 The Worker may edit only its assigned worktree and issue scope. It must reread root instructions, use conventional branch/commit rules, preserve unrelated user work, validate proportionally, and return a structured handoff.
 
@@ -259,13 +259,28 @@ After a valid initial handoff:
 1. Independently verify before/after SHAs, diff, status, tests, and issue scope.
 2. On native Windows, verify direct normal-sandbox `apply_patch` for source edits and reject contradictory routing evidence.
 3. Push the exact candidate without force.
-4. Append the Worker handoff to the leaf.
+4. Append the initial Worker handoff to the leaf issue and read it back from that issue.
 5. Create a draft pull request linking the umbrella non-closing when present and including `Closes #<leaf>` for the active leaf only.
-6. Append the draft-PR trace and update advisory state.
+6. Append the draft-PR creation trace to the leaf issue, read it back from that issue, update advisory state, and then use the pull request's top-level Conversation for all later candidate/review/repair/validation evidence.
 
 ## GitHub trace
 
 Only the Orchestrator publishes Roundlet trace. Worker and Supervisor results are proposals until independently verified.
+
+### Canonical destination matrix
+
+This matrix is authoritative. **PR Conversation** means a top-level conversation comment on the pull request number, not a submitted review or inline review thread. **PR** means the pull request artifact: any accompanying curated trace goes to its top-level Conversation, while merge-gate inputs and the merge result are read back from pull-request metadata.
+
+| Event | Canonical destination |
+| --- | --- |
+| Issue selection, scope/owner decision, initial Worker handoff | Issue |
+| Draft pull-request creation | Issue |
+| After the pull request exists: Worker repair handoff, candidate push/read-back, tests, checks, CI, and Shadow evidence | PR Conversation |
+| Supervisor availability, FINDINGS, PASS, and terminal review evidence | PR Conversation |
+| Merge-gate decision and merge result | PR |
+| Leaf closure, cleanup, `STOPPED`, `NEEDS_OWNER_INPUT`, and abort decision | Issue |
+
+Before each publication, classify the event and populate both the leaf issue number and pull-request number (or explicit `none` before creation). For an Issue or PR Conversation row, select that exact comment surface and number. For a PR row, bind the decision/result to the pull-request number and live metadata; if a curated comment accompanies it, select that same number's PR Conversation separately. Read back the authoritative metadata and any event marker from the same selected surfaces before transitioning. A write to the wrong surface or a same-surface read-back failure is not durable completion.
 
 Every trace comment starts with:
 
@@ -273,7 +288,9 @@ Every trace comment starts with:
 <!-- roundlet:event=<event-id>;run=<run-id>;epoch=<number>;round=<number-or-0>;candidate=<full-sha-or-none> -->
 ```
 
-Use stable event IDs. Search live comments before writing; do not duplicate an identical event. Never edit/delete a trace to hide an error; append a correction naming the superseded event.
+Use stable event IDs. Before writing, search both the leaf issue and the pull request's top-level Conversation, when present, for the same event marker. This cross-surface lookup is required before retrying an ambiguous transport result or when pull-request creation may have changed the canonical target; never duplicate an identical event merely because the workflow crossed surfaces. After target selection, write and read back only on the canonical surface.
+
+Never edit, delete, move, or bulk-repost a historical trace to hide or repair a routing error. Preserve the original comment. When recovery needs to make the durable sequence clear, add at most one bounded pointer on the current canonical surface naming the prior event marker and URL without copying raw artifacts or the full prior comment.
 
 Record selection/ranking, Worker handoffs, draft PR creation, invalid Supervisor availability attempts, valid Supervisor results, repairs, terminal review, owner/authority/abort decisions, merge, leaf closure, and cleanup. Summarize files, tests, findings/dispositions, SHAs, and risks. Never publish hidden reasoning, credentials, private artifacts, raw task transcripts, or unbounded logs.
 
@@ -288,12 +305,12 @@ For each round:
 3. Create one fresh Supervisor with that exact profile and independently verify its immutable task/profile/workspace/CWD binding.
 4. Send the read-only review prompt and require a structured result bound to the attempt/profile/epoch/round/mode/SHA.
 5. Independently verify context, read-only behavior, and result identity.
-6. If valid, publish it, archive the Supervisor, and follow PASS or FINDINGS.
-7. If invalid/failed/cancelled/inaccessible/malformed/wrong-context/wrong-SHA, archive it, publish only bounded availability evidence, and advance to the next profile. It does not consume the review round or become a finding/PASS.
+6. If valid, publish it to the PR Conversation and read it back there, archive the Supervisor, and follow PASS or FINDINGS.
+7. If invalid/failed/cancelled/inaccessible/malformed/wrong-context/wrong-SHA, archive it, publish only bounded availability evidence to the PR Conversation, read it back there, and advance to the next profile. It does not consume the review round or become a finding/PASS.
 
 Rounds 1–3 are COMPLETE when reached; any valid PASS ends review. Rounds 4–10 are CONVERGING and focus on prior findings/delta while allowing new blocking regressions or missing evidence.
 
-Before round 10, valid findings go to the same Worker for repair. The Orchestrator independently verifies the repair handoff/diff/tests, pushes the exact new candidate without force, reads back the remote head, appends the handoff trace, updates the pull request state, and only then advances to the next review round. Round-10 findings go once to `WORKER_FINAL_REPAIR`; the Orchestrator performs the same verify/push/read-back/trace sequence for that final candidate, but does not create round 11 or claim PASS. Record `REVIEW_LIMIT_REACHED_WORKER_FINALIZED`, then apply normal merge gates. If all configured attempts for a round fail, enter `NEEDS_OWNER_INPUT`.
+Before round 10, valid findings go to the same Worker for repair. The Orchestrator independently verifies the repair handoff/diff/tests, pushes the exact new candidate without force, reads back the remote head, appends and reads back the handoff trace in the PR Conversation, updates the pull request state, and only then advances to the next review round. Round-10 findings go once to `WORKER_FINAL_REPAIR`; the Orchestrator performs the same verify/push/read-back/trace sequence for that final candidate, but does not create round 11 or claim PASS. Record `REVIEW_LIMIT_REACHED_WORKER_FINALIZED` in the PR Conversation, then apply normal merge gates. If all configured attempts for a round fail, enter `NEEDS_OWNER_INPUT` and record/read back that lifecycle block on the leaf issue.
 
 ## Owner input
 
@@ -323,15 +340,15 @@ Before ready conversion or merge, prove:
 - branch rules permit the operation;
 - configured merge method is available and equals `merge`.
 
-If `origin/main` advanced, reread mergeability and rules. Merge directly only when GitHub still accepts it and no rule requires an update. Otherwise send the same Worker a main-integration turn that merges `origin/main` into the issue branch without rebase/force. The Orchestrator independently verifies the integration handoff/diff/tests, pushes the exact new candidate without force, reads back the remote head, appends the handoff trace, and then starts a new COMPLETE epoch.
+If `origin/main` advanced, reread mergeability and rules. Merge directly only when GitHub still accepts it and no rule requires an update. Otherwise send the same Worker a main-integration turn that merges `origin/main` into the issue branch without rebase/force. The Orchestrator independently verifies the integration handoff/diff/tests, pushes the exact new candidate without force, reads back the remote head, appends and reads back the handoff trace in the PR Conversation, and then starts a new COMPLETE epoch.
 
-Mark ready only with authority. Merge using a merge commit only with both merge and leaf-close authority. Record merge commit and exact head SHA.
+Mark ready only with authority. Record the merge-gate decision in the PR Conversation and read its inputs from live pull-request metadata. Merge using a merge commit only with both merge and leaf-close authority. Read the merge result, merge commit, and exact head SHA back from pull-request metadata; put any accompanying curated result trace in the PR Conversation.
 
 ## Leaf closure
 
 The PR body includes `Closes #<leaf>` and GitHub must parse only that active leaf as closing. Use plain links or `Parent: #<umbrella>` for non-terminal context.
 
-After merge, read the leaf. If still open and authorized, close it explicitly with trace. Read back closed state before cleanup. Never close an umbrella.
+After merge, read the leaf. If still open and authorized, close it explicitly. Append any closure trace to the leaf issue and read both the comment and closed state back there before cleanup. Never close an umbrella.
 
 ## Ordered cleanup
 
@@ -345,7 +362,7 @@ Cleanup is part of the active issue:
 6. If ordinary removal fails, diagnose exact-worktree CWD holders. On native Windows, do not treat a distinct retained empty task anchor as the linked worktree. Never kill Codex or Node to obtain cleanup.
 7. Delete local/remote issue branches only when authorized and their unique work is merged or explicitly abandoned.
 8. Fetch, fast-forward local `main`, and prove a clean authoritative checkout with `HEAD == main == origin/main`.
-9. Append cleanup trace and clear issue pointers. If continuing, retain lease/contract and set `IDLE`; if stopping, remove heartbeat, advisory state, and contract bundle after final read-back, then archive the Orchestrator.
+9. Append the cleanup trace to the leaf issue, read it back there, and clear issue pointers. If continuing, retain lease/contract and set `IDLE`; if stopping, append/read back `STOPPED` on the issue, remove heartbeat, advisory state, and contract bundle after final reconciliation, then archive the Orchestrator.
 
 Failed ordinary removal, surviving registration/path, unique work, or ambiguous read-back enters `CLEANUP_BLOCKED` and selects no next issue. Do not reopen a leaf solely because cleanup failed.
 
