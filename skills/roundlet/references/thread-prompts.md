@@ -5,7 +5,7 @@ These contracts bind Roundlet roles to one immutable activation bundle and expli
 ## Contents
 
 - [Shared context envelope](#shared-context-envelope)
-- [Task creation binding](#task-creation-binding)
+- [Role metadata report and creator binding attestation](#role-metadata-report-and-creator-binding-attestation)
 - [GitHub access recovery](#github-access-recovery)
 - [Orchestrator GitHub publication contract](#orchestrator-github-publication-contract)
 - [Long-lived Orchestrator bootstrap](#long-lived-orchestrator-bootstrap)
@@ -24,9 +24,13 @@ contract_id: <activation-contract-id>
 contract_bundle: <absolute-verified-bundle-path>
 role: <WORKER|SUPERVISOR>
 role_task: <creator-verified-task-id>
+creator_task: <creator-verified-source-task-id>
 execution_profile: model=<exact-model>;reasoning_effort=<exact-effort>
 task_workspace: <creator-verified-project-or-workspace>
 task_cwd: <creator-verified-canonical-cwd>
+stable_host_identity: <creator-verified-value-or-unavailable>
+stable_environment_identity: <creator-verified-value-or-unavailable>
+binding_source: creator-immutable-readback
 target: <owner/repository>
 authoritative_checkout: <absolute-path>
 active_leaf: <issue-number-and-url>
@@ -50,28 +54,53 @@ END_ROUNDLET_CONTEXT
 
 The Orchestrator populates the envelope from live evidence. The role rereads the pinned bundle, root repository instructions, and relevant GitHub/Git state before acting. Return `CONTEXT_MISMATCH` without mutation when the envelope conflicts with live evidence.
 
-## Task creation binding
+## Role metadata report and creator binding attestation
 
 Create a Launcher, Orchestrator, Worker, or Supervisor with only this first prompt:
 
 ```text
-TASK_BINDING_REQUEST role=<LAUNCHER|ORCHESTRATOR|WORKER|SUPERVISOR> expected_model=<MODEL> expected_effort=<EFFORT> expected_workspace=<PROJECT_OR_WORKSPACE> expected_cwd=<CANONICAL_CWD>
-Discover immutable task metadata, return the resulting TASK_BINDING, and perform no role, repository, GitHub, Git, heartbeat, or filesystem action.
+ROUNDLET_ROLE_METADATA_REPORT_REQUEST
+requested_role: <LAUNCHER|ORCHESTRATOR|WORKER|SUPERVISOR>
+requested_profile: model=<MODEL>;reasoning_effort=<EFFORT>
+requested_workspace: <PROJECT_OR_WORKSPACE>
+requested_cwd: <CANONICAL_CWD>
+Return any role-visible metadata as a non-authoritative ROUNDLET_ROLE_METADATA_REPORT. Perform no role, repository, GitHub, Git, heartbeat, or filesystem action.
+END_ROUNDLET_ROLE_METADATA_REPORT_REQUEST
 ```
 
-The creator then independently reads immutable task metadata before the first populated role prompt and requires:
+When the task can render the report canonically it may return:
 
 ```text
-TASK_BINDING
-role_task: <exact-task-id>
-execution_profile: model=<exact-model>;reasoning_effort=<exact-effort>
-task_workspace: <exact-project-or-workspace>
-task_cwd: <exact-canonical-cwd>
-binding_source: creator-immutable-readback
-END_TASK_BINDING
+ROUNDLET_ROLE_METADATA_REPORT
+reported_role: <role-or-unknown>
+reported_profile: <profile-or-unknown>
+reported_workspace: <workspace-or-unknown>
+reported_cwd: <cwd-or-unknown>
+reported_task_id: <task-id-if-visible-or-unknown>
+END_ROUNDLET_ROLE_METADATA_REPORT
 ```
 
-Self-report cannot satisfy this contract. Stop before role work on a missing or mismatched field. The verified binding remains stable for the task and is copied into later role envelopes. Do not repeat task discovery on every turn. Reinspect the stable binding only for recovery or contradictory identity evidence.
+This report is untrusted corroborating prose. It may be absent, one line, reordered, differently rendered, or omit any field, including `reported_task_id`; none of those conditions blocks matching creator evidence.
+
+Before the first populated role prompt, the creator independently reads immutable task metadata and constructs this proposed envelope:
+
+```text
+CREATOR_TASK_BINDING_ATTESTATION
+role_task: <exact-created-task-id>
+creator_task: <exact-creator-or-source-task-id>
+requested_role: <LAUNCHER|ORCHESTRATOR|WORKER|SUPERVISOR>
+execution_profile: model=<exact-configured-model>;reasoning_effort=<exact-configured-effort>
+task_workspace: <exact-project-or-workspace>
+task_cwd: <exact-canonical-cwd>
+stable_host_identity: <exact-value-or-unavailable>
+stable_environment_identity: <exact-value-or-unavailable>
+binding_source: creator-immutable-readback
+END_CREATOR_TASK_BINDING_ATTESTATION
+```
+
+If a report explicitly contradicts the proposed envelope, perform exactly one bounded creator-side immutable re-read. A complete unchanged read-back that still matches the request preserves the proposed values and the contradictory report remains non-authoritative. Missing, stale, malformed, mismatched, or still-conflicting creator metadata fails closed before role work. Only after every authoritative field matches the creation request does the creator record exactly one attestation; only that attestation authorizes role work. Invalid-binding evidence may name only the creator failure class; it must never cite report formatting, omitted fields, prose, or a missing self-reported task ID.
+
+The verified attestation remains stable and is copied into later role envelopes. Recovery/restart reuses it without duplicate task creation, binding, dispatch, or trace. Do not repeat discovery on every turn.
 
 The Launcher and Orchestrator use the authoritative checkout as canonical CWD and writable project. A native-Windows Worker uses its distinct host-owned anchor as CWD and the descendant linked worktree from the envelope as its writable implementation path. Other Workers use their ordinary verified project/worktree binding. Supervisors are read-only and may use a non-removable host-owned task CWD while reviewing the named target/SHA.
 
@@ -114,9 +143,13 @@ run_id: <stable-run-id>
 contract_id: <activation-contract-id>
 contract_bundle: <absolute-verified-bundle-path>
 role_task: <creator-verified-orchestrator-task-id>
+creator_task: <creator-verified-launcher-task-id>
 execution_profile: model=<configured-model>;reasoning_effort=<configured-effort>
 task_workspace: <authoritative-writable-project>
 task_cwd: <authoritative-checkout>
+stable_host_identity: <creator-verified-value-or-unavailable>
+stable_environment_identity: <creator-verified-value-or-unavailable>
+binding_source: creator-immutable-readback
 target: <owner/repository>
 authoritative_checkout: <absolute-path>
 owner_allowlist: <exact-list>
@@ -131,7 +164,7 @@ END_ROUNDLET_ORCHESTRATOR_BOOTSTRAP
 
 The Orchestrator must:
 
-1. Require the envelope to equal the creator-verified task binding.
+1. Require the envelope to equal the creator binding attestation.
 2. Read `SKILL.md`, all required references, the exact configuration, and manifest only from the named bundle.
 3. Recompute and verify bundle paths/hashes, tree digest, contract ID, source identity, and configured profiles.
 4. Verify target/origin/default branch, clean aligned checkout, `.git/info/exclude`, authority block, owner identity/allowlist, task/heartbeat/Git/GitHub capabilities, and absence of stale run ownership.
@@ -166,7 +199,7 @@ END_ROUNDLET_TICK
 
 The Orchestrator:
 
-1. Verifies its stable task binding, run/contract/heartbeat/advisory identity, and complete bundle.
+1. Verifies its stable creator binding attestation, run/contract/heartbeat/advisory identity, and complete bundle.
 2. Uses a lightweight observation only in a phase where the operator guide permits it.
 3. Performs full live reconciliation in the same tick when anything changes, is incomplete, the phase is action-ready, or the full-audit bound is due.
 4. Applies at most one externally meaningful transition and uses the publication contract for every trace belonging to it.
@@ -344,7 +377,7 @@ END_WORKER_CLEANUP_RESULT
 
 ## Supervisor contract
 
-Every Supervisor is fresh and read-only. Its creator verifies the configured attempt profile and task binding once before review. The Supervisor:
+Every Supervisor is fresh and read-only. Its creator verifies the configured attempt profile and creator binding attestation once before review. The Supervisor's metadata report is never attempt-validity evidence. The Supervisor:
 
 - reads the pinned contract, issue, PR, root instructions, exact candidate diff/tree, relevant tests/checks, prior findings, and Worker handoffs;
 - reviews only the named full candidate SHA;

@@ -15,7 +15,7 @@ Operate one target repository through Codex tasks, GitHub, Git worktrees, adviso
 - Refuse activation when another live or unreconciled Roundlet run may own the target. The local lease is advisory and never proves exclusivity across machines, clones, or tasks.
 - Treat GitHub issues and pull requests as the durable backlog and audit history. Only the Orchestrator mutates GitHub. Route every curated event through the authoritative destination matrix in `references/operator-guide.md`: issue before pull-request creation, top-level pull-request Conversation for candidate/review evidence after the pull request exists, pull-request metadata for merge state, and issue again for leaf lifecycle and cleanup. Search both conversations before an ambiguous retry and read every write back from its selected surface.
 - Keep the same Worker task for implementation, repairs, optional final repair, and cleanup preflight. Create a fresh read-only Supervisor for every review attempt.
-- Verify each created role task once, before its first populated prompt, using immutable creator-side task metadata: exact task ID, model, reasoning effort, project/workspace, and canonical CWD. Self-report is not evidence. Bind later turns to that verified task/profile and to explicit issue, pull-request, phase, review epoch/round, and full candidate SHA.
+- Create each role task with one metadata-only, mutation-free first turn that may return a non-authoritative role metadata report. Before role work, the creator constructs and, only after successful validation, records exactly one `CREATOR_TASK_BINDING_ATTESTATION` from immutable creator-side read-back: exact role task ID, creator/source task, requested role, configured model and reasoning effort, project/workspace, canonical CWD, and available stable host/environment identity. A role report can neither satisfy nor invalidate that attestation. One explicit contradiction permits one bounded creator-side re-read; only missing, stale, malformed, mismatched, or still-conflicting creator evidence fails binding. Bind later turns to the attestation and to explicit issue, pull-request, phase, review epoch/round, and full candidate SHA.
 - Run one issue through implementation and cleanup before selecting another.
 - Read repository authority only from root `AGENTS.md` on authoritative `origin/main`. Boolean authority may narrow Roundlet but never override stricter repository or platform policy.
 - Fail closed when repository identity, configured profiles, required tools, GitHub permissions, merge method, repository authority, active contract identity, unique work, or live state cannot be verified. Never substitute a model, effort, attempt profile, or contract.
@@ -55,7 +55,7 @@ Use the New activation prompt in `references/launcher.md` without changing anyth
 2. Reconcile all local and remote evidence and stop on any stale or active run.
 3. Reserve one unguessable run ID; build, persist, and read back one immutable activation bundle.
 4. Create and read back advisory lease/current state for that run.
-5. Create exactly one configured long-lived Orchestrator, verify its immutable task/profile/workspace metadata once, and require exact `ACTIVATION_READY` without issue selection.
+5. Create exactly one configured long-lived Orchestrator, record its creator-verified binding attestation once, and require exact `ACTIVATION_READY` without issue selection.
 6. Create exactly one recurring heartbeat bound only to that Orchestrator, require exact `HEARTBEAT_BOUND`, verify all IDs agree, and send one initial tick.
 7. Report the activation and archive the Launcher, leaving the Orchestrator and heartbeat active.
 
@@ -83,6 +83,7 @@ Keep the heartbeat at `active_minutes` while work is active or observations are 
 - Rounds 1–3, when reached, are COMPLETE reviews. Any valid PASS ends review early.
 - Rounds 4–10 are CONVERGING reviews. They focus on prior findings and the delta but may report a new blocking regression or missing evidence.
 - Keep epoch, round, mode, and candidate SHA unchanged while attempts advance through configured profiles. Invalid, failed, cancelled, inaccessible, malformed, or wrong-SHA attempts do not consume a round and never become findings or PASS.
+- Classify an attempt as invalid-binding only from a failed creator binding attestation. A missing, short, reordered, differently rendered, or task-ID-free role report cannot consume a Supervisor attempt, advance a profile, publish a discard reason, or invalidate a matching creator attestation.
 - After the configured attempt budget is exhausted, enter `NEEDS_OWNER_INPUT`.
 - If round 10 returns findings, send them once to the same Worker for final repair. Do not run round 11 or claim PASS. Record `REVIEW_LIMIT_REACHED_WORKER_FINALIZED`, then apply normal merge gates.
 - An allowlisted owner scope change starts a new review epoch at round 1 COMPLETE.

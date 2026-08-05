@@ -9,11 +9,16 @@ Replace every `<PLACEHOLDER>` before use. Do not change any other value or add a
 Create the Launcher directly against the exact authoritative checkout as its writable local project and use the requested Launcher model/effort. Its first prompt is only:
 
 ```text
-TASK_BINDING_REQUEST role=LAUNCHER expected_model=<MODEL> expected_effort=<EFFORT> expected_workspace=<ABSOLUTE_PATH> expected_cwd=<ABSOLUTE_PATH>
-Discover immutable task metadata, return the resulting TASK_BINDING, and perform no activation, repository, GitHub, Git, heartbeat, or filesystem action.
+ROUNDLET_ROLE_METADATA_REPORT_REQUEST
+requested_role: LAUNCHER
+requested_profile: model=<MODEL>;reasoning_effort=<EFFORT>
+requested_workspace: <ABSOLUTE_PATH>
+requested_cwd: <ABSOLUTE_PATH>
+Return any role-visible metadata as a non-authoritative ROUNDLET_ROLE_METADATA_REPORT. Perform no activation, repository, GitHub, Git, heartbeat, or filesystem action.
+END_ROUNDLET_ROLE_METADATA_REPORT_REQUEST
 ```
 
-Independently read the creator-side immutable task record and require the same task ID, model, effort, writable project/workspace, and canonical CWD. Archive the task and stop on mismatch. Only after that read-back, replace the placeholders below, including `<LAUNCHER_TASK_ID>`, and send this entire populated activation prompt to the same task:
+Treat any response as a non-authoritative role report. Independently read the creator-side immutable task record and build the exact `CREATOR_TASK_BINDING_ATTESTATION` from `thread-prompts.md`, including this creator task, requested Launcher role, task ID, model, effort, writable project/workspace, canonical CWD, and available stable host/environment identity. A missing, short, noncanonical, or task-ID-free report does not block matching creator read-back. On an explicit contradiction, perform one bounded creator-side re-read; archive and stop only when authoritative evidence is missing, stale, malformed, mismatched, or still conflicting. Only after the attestation succeeds, replace the placeholders below, including `<LAUNCHER_TASK_ID>`, and send this entire populated activation prompt to the same task:
 
 ```text
 Use $roundlet as a short-lived Launcher for exactly one completely fresh Roundlet run.
@@ -24,7 +29,9 @@ Target:
 - Expected primary branch: main
 - Roundlet configuration: use references/roundlet-config.json within the installed $roundlet skill without changing, defaulting, or overriding any value
 - Expected Launcher task ID: <LAUNCHER_TASK_ID>
+- Expected Launcher creator/source task ID: <CREATOR_TASK_ID>
 - Expected Launcher model/effort: <MODEL> / <EFFORT>
+- Expected stable host/environment identity: <STABLE_HOST_IDENTITY_OR_UNAVAILABLE> / <STABLE_ENVIRONMENT_IDENTITY_OR_UNAVAILABLE>
 - Authenticated and allowlisted owner: <OWNER_LOGIN>
 
 Do not recover, resume, reuse, migrate, adopt, or replace any former run or Orchestrator. Read the complete installed Roundlet SKILL.md and every required reference before acting. Do not select or implement an issue in this Launcher.
@@ -34,9 +41,10 @@ Before creating any run resource, fail closed unless every item below is freshly
 1. Immutable Launcher identity
    - Discover and invoke the immutable task-metadata route.
    - Require the actual Launcher task ID to equal the creator-verified expected task ID.
+   - Require the creator/source task, requested role, stable host/environment identity, and `binding_source: creator-immutable-readback` to equal the validated creator attestation.
    - Require the actual Launcher task model and reasoning effort to equal the expected values.
    - Require its canonical CWD and writable local-project workspace to equal the authoritative checkout.
-   - Self-report, a projectless task, an unrelated project, a read-only route, or a removable linked worktree is insufficient.
+   - The creator binding attestation is the authority. A role metadata report is never sufficient and cannot invalidate matching creator evidence; a projectless task, unrelated project, read-only route, or removable linked worktree in creator read-back fails closed.
 
 2. Repository and Git identity
    - Fetch and resolve the exact GitHub repository, origin URL, default branch, local main, origin/main, and HEAD.
@@ -84,11 +92,12 @@ If and only if every preflight item passes:
    - derive lowercase-hex contract ID from the canonical manifest with `contract_id` omitted, add only that ID, reserialize, persist the exact files and manifest, and read back every byte, path, hash, role profile, source identity, tree digest, and contract ID.
    - Stop with `CONTRACT_BUNDLE_CONFLICT` if an existing path differs.
 3. Create fresh `.roundlet/lease.json` and `.roundlet/current.md` for this run and read them back. Bind the exact target, checkout, owner, run ID, contract ID/bundle, activation time, state `ACTIVATING`, and empty Orchestrator/heartbeat fields. Do not add an expiry.
-4. Create exactly one long-lived Orchestrator using the configured Orchestrator model and effort from the pinned bundle. Give it only the binding request from `thread-prompts.md` as its first prompt. Before its populated bootstrap:
-   - independently read back its immutable task ID, model, effort, project/workspace, and canonical CWD;
+4. Create exactly one long-lived Orchestrator using the configured Orchestrator model and effort from the pinned bundle. Give it only the role metadata report request from `thread-prompts.md` as its first prompt. Before its populated bootstrap:
+   - treat its returned report as advisory and independently build the creator binding attestation from immutable task ID, creator task, requested role, model, effort, project/workspace, canonical CWD, and available stable host/environment identity;
+   - on an explicit report contradiction, perform one bounded immutable re-read; never reject a matching creator attestation because the report is missing, short, noncanonical, or omits its own task ID;
    - require task/profile equality with configuration and project/CWD equality with the authoritative checkout;
-   - write the verified Orchestrator task ID to both advisory files and read back the same run/contract/task binding.
-5. Send the Orchestrator the exact bootstrap contract from the pinned bundle, including target, checkout, run ID, owner allowlist, resolved authority, configuration, contract ID/path, advisory paths, verified task/profile/workspace identity, live backlog summary, and instruction not to select an issue. Require it to reread the bundle and live identities, repeat any representative `gh` access needed in its own task, update state to `IDLE`, and return exactly:
+   - write the verified Orchestrator task ID and complete creator binding attestation fields to advisory state, then read back the same run/contract/task/attestation binding.
+5. Send the Orchestrator the exact bootstrap contract from the pinned bundle, including target, checkout, run ID, owner allowlist, resolved authority, configuration, contract ID/path, advisory paths, complete creator binding attestation, live backlog summary, and instruction not to select an issue. Require it to reread the bundle and live identities, repeat any representative `gh` access needed in its own task, update state to `IDLE`, and return exactly:
    `ACTIVATION_READY run=<run-id> contract=<contract-id> orchestrator=<task-id> target=<owner/repository> state=IDLE`
 6. Independently inspect that exact populated turn and advisory state. Require the acknowledgement and lease/current files to bind the same run, contract, Orchestrator, target, and state. On any mismatch, create no heartbeat and stop with exact evidence.
 7. Create exactly one recurring heartbeat at configured `heartbeat.active_minutes`, bound only to the new Orchestrator. Its instruction is: invoke one idempotent Roundlet tick from the pinned bundle, prove the bounded observation unchanged or fully reconcile in the same tick, make at most one externally meaningful transition, maintain the configured phase-aware interval on this same heartbeat, and report the resulting state.
@@ -105,7 +114,7 @@ Never attach the heartbeat to this Launcher. Never create a second Orchestrator 
 
 Use recovery only after an allowlisted owner explicitly directs it. Recovery uses the existing run's immutable bundle; an installed update is never adopted. If the owner wants a newer skill, stop and clean the old run and use New activation.
 
-Create the recovery Launcher against the authoritative checkout using the old bundle's configured Orchestrator profile. Its first prompt is only the `TASK_BINDING_REQUEST` from `thread-prompts.md` with role `LAUNCHER`, the old bundle's exact model/effort, and the authoritative workspace/CWD. Independently read back the same immutable task/profile/workspace/CWD, archive and stop on mismatch, then replace `<RECOVERY_LAUNCHER_TASK_ID>`, `<MODEL>`, and `<EFFORT>` below and send the populated recovery prompt to that same task:
+Create the recovery Launcher against the authoritative checkout using the old bundle's configured Orchestrator profile. Its first prompt is only the `ROUNDLET_ROLE_METADATA_REPORT_REQUEST` from `thread-prompts.md` with requested role `LAUNCHER`, the old bundle's exact model/effort, and the authoritative workspace/CWD. Treat the response as advisory, independently build the creator binding attestation, use one bounded creator re-read for an explicit contradiction, and archive/stop only on failed authoritative evidence. Then replace every recovery placeholder below, including the recovery Launcher/creator task IDs and stable host/environment identities, and send the populated recovery prompt to that same task:
 
 ```text
 Act as a short-lived Roundlet recovery Launcher for exactly one previously activated target. Do not invoke or load the installed `$roundlet` skill.
@@ -115,18 +124,20 @@ Target:
 - Authoritative local checkout: <ABSOLUTE_PATH>
 - Existing run ID, if known: <RUN_ID_OR_UNKNOWN>
 - Expected recovery Launcher task ID: <RECOVERY_LAUNCHER_TASK_ID>
+- Expected recovery Launcher creator/source task ID: <RECOVERY_CREATOR_TASK_ID>
 - Expected recovery Launcher model/effort: <MODEL> / <EFFORT>
+- Expected recovery stable host/environment identity: <STABLE_HOST_IDENTITY_OR_UNAVAILABLE> / <STABLE_ENVIRONMENT_IDENTITY_OR_UNAVAILABLE>
 - Owner-authorized Orchestrator/heartbeat replacement: <true|false>
 - Owner recovery instruction: <EXACT_OWNER_INSTRUCTION>
 
 Read only the advisory activation pointers first, resolve the one immutable activation bundle, verify it completely, then read its SKILL.md and every required reference. Treat the installed skill only as an unrelated candidate that cannot enter this run.
 
-1. Verify this recovery Launcher's immutable task ID/profile/workspace/CWD against the creator-supplied values and perform the bundle's repository, authority, GitHub, host, and capability preflight.
+1. Verify this recovery Launcher's complete creator binding attestation against the creator-supplied task/creator IDs, requested role, profile, workspace/CWD, stable host/environment identity, and binding source; then perform the bundle's repository, authority, GitHub, host, and capability preflight.
 2. Reconcile lease/current state, activation bundle, GitHub traces and pull requests, branches, worktrees, checks, exact candidate SHA, all identifiable role tasks, and all heartbeats.
 3. If the old Orchestrator or heartbeat is live, ownership is ambiguous, the bundle is incomplete, or unique work cannot be attributed, stop with `RECOVERY_OWNER_DECISION_REQUIRED`. Do not replace or delete anything.
 4. If both old Orchestrator and heartbeat are conclusively unavailable, reconstruct the phase from durable GitHub and Git evidence. Preserve the run ID only when identity is certain; otherwise stop for owner input.
 5. Never silently replace an active or inaccessible Worker. Return `WORKER_REPLACEMENT_REQUIRES_OWNER`.
-6. Only when `Owner-authorized Orchestrator/heartbeat replacement` is exactly `true` and the owner instruction expressly authorizes it, create exactly one replacement Orchestrator from the old pinned bundle. Give it only the task-binding request first, verify its immutable task/profile/workspace/CWD once, and require without advancing work:
+6. Only when `Owner-authorized Orchestrator/heartbeat replacement` is exactly `true` and the owner instruction expressly authorizes it, create exactly one replacement Orchestrator from the old pinned bundle. Give it only the role metadata report request first, record one creator binding attestation after immutable read-back, and require without advancing work:
    `RECOVERY_READY run=<run-id> contract=<contract-id> orchestrator=<replacement-task-id> state=<reconstructed-phase> transition=none`
 7. After that acknowledgement, remove only a conclusively stale heartbeat, create one replacement heartbeat at `active_minutes`, bind it only to the replacement Orchestrator, update and read back advisory state, and send one recovery tick.
 8. Report every retained, replaced, removed, or unresolved resource and archive this recovery Launcher.

@@ -53,7 +53,7 @@ Before activation, prove:
 - every configured model/reasoning-effort pair is selectable;
 - Supervisor profile names are unique and their ordered count equals `max_supervisor_attempts_per_round`;
 - role tasks can be created, addressed, waited on, inspected, resumed, and archived;
-- immutable creator-side task metadata exposes exact task ID, model, effort, project/workspace, and canonical CWD;
+- immutable creator-side task metadata exposes exact task ID, configured model/effort, project/workspace, canonical CWD, and any available stable host/environment identity, while the creator can identify its own source task and requested role;
 - one recurring heartbeat can be created, inspected, updated through every configured interval, paused/resumed, and removed;
 - Git and the authoritative checkout are usable;
 - GitHub identity, repository identity, issues, comments, formal issue relationships, branches, pull requests, reviews, checks, mergeability, and merge operations can be inspected;
@@ -79,13 +79,17 @@ The skill requires requesting approval; it cannot grant or assume it. Enter `NEE
 
 For every Launcher, Orchestrator, Worker, and Supervisor:
 
-1. Request the exact configured model and effort and the intended project/workspace/CWD.
-2. Create exactly one task with only the `TASK_BINDING_REQUEST` from the role contract as its first prompt. That turn performs no role, repository, GitHub, Git, heartbeat, or filesystem action.
-3. Independently read immutable creator-side metadata before sending the first populated role prompt.
-4. Require the returned task ID, model, effort, project/workspace, and canonical CWD to equal the request.
-5. Record that binding in the role envelope and advisory state where applicable.
+1. Record the creator/source task, requested role, exact configured model and effort, and intended project/workspace/CWD.
+2. Create exactly one role task with only the `ROUNDLET_ROLE_METADATA_REPORT_REQUEST` from the role contract as its first prompt. That metadata-only turn performs no role, repository, GitHub, Git, heartbeat, or filesystem action.
+3. Treat any `ROUNDLET_ROLE_METADATA_REPORT` or other returned rendering as advisory. It may be absent, one line, reordered, noncanonical, or omit a self-reported task ID.
+4. Independently read immutable creator-side metadata before the first populated role prompt and construct a proposed `CREATOR_TASK_BINDING_ATTESTATION` containing the role task ID, creator/source task, requested role, configured model/effort, project/workspace, canonical CWD, and available stable host/environment identity.
+5. If the role report explicitly contradicts the proposed attestation, perform exactly one bounded creator-side immutable re-read. If the authoritative values remain complete and match the request, keep the same proposed attestation and treat the report as untrusted contradictory prose. If authoritative metadata is missing, stale, malformed, mismatched, changes across the re-read, or otherwise conflicts, archive the task and fail closed before role work.
+6. Require every authoritative field to match the creation request, then record exactly one creator attestation. Only that validated attestation authorizes the first populated role prompt.
+7. Copy the stable attestation into the role envelope and advisory state where applicable. Recovery and restart reuse it; they do not create a second task, second attestation, or duplicate availability event.
 
-Self-reported profile text is never sufficient. A missing or conflicting read-back stops before the role acts. Do not repeat task discovery on every turn. Later turns remain bound to the same verified task/profile and carry current issue/phase/SHA context; reconcile the stable task record again only when recovery or contradictory evidence makes identity uncertain.
+Role text never satisfies, alters, or invalidates binding by itself. Missing, short, reordered, differently rendered, title-like, summary-like, or task-ID-free role output proceeds normally when creator read-back matches. Do not repeat task discovery on every turn. Later turns remain bound to the one verified attestation and carry current issue/phase/SHA context.
+
+An `invalid-binding` disposition or public availability trace may name only a creator-evidence class: `CREATOR_METADATA_MISSING`, `CREATOR_METADATA_STALE`, `CREATOR_METADATA_MALFORMED`, `CREATOR_METADATA_MISMATCH`, or `CREATOR_METADATA_CONFLICT_AFTER_REREAD`. Never cite role-report formatting, omitted fields, prose, title, summary, or missing self-reported task ID as the reason. A valid creator attestation plus a noncanonical role report does not consume a Supervisor attempt, advance the attempt profile, consume a review round, or publish a discard trace.
 
 ## Native Windows Worker topology
 
@@ -129,7 +133,7 @@ The lease has no expiry:
 }
 ```
 
-`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, branch/worktree/Worker anchor, base and candidate full SHAs, review epoch/round/mode/attempt/profile, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
+`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, review epoch/round/mode/attempt/profile, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never store the advisory role report. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
 
 Before each tick or mutation, reconcile both files with the bundle, GitHub, Git, tasks, and heartbeat. Prefer live authoritative evidence. Conflicts enter `NEEDS_OWNER_INPUT` with reason `STATE_RECONCILIATION_CONFLICT`; never guess or overwrite them.
 
@@ -302,7 +306,7 @@ For each round:
 
 1. Hold epoch, round, mode, and candidate SHA fixed.
 2. Select the configured attempt profile at the exact one-based position.
-3. Create one fresh Supervisor with that exact profile and independently verify its immutable task/profile/workspace/CWD binding.
+3. Create one fresh Supervisor with that exact profile and independently record/verify its creator binding attestation. Do not interpret its advisory role report as binding evidence.
 4. Send the read-only review prompt and require a structured result bound to the attempt/profile/epoch/round/mode/SHA.
 5. Independently verify context, read-only behavior, and result identity.
 6. If valid, publish it to the PR Conversation and read it back there, archive the Supervisor, and follow PASS or FINDINGS.
