@@ -13,7 +13,7 @@ Operate one target repository through Codex tasks, GitHub, Git worktrees, adviso
 - Pin each new run to one content-addressed bundle under `.roundlet/contracts/<contract-id>/`. Include this file, every required reference, the exact resolved configuration, and a manifest of ordered paths and SHA-256 values. When the source is Git, materialize every bundled file from the verified commit object rather than checkout bytes so filters or line-ending conversion cannot change the claimed source. Read live instructions only from that bundle.
 - Never migrate or adopt a changed installed skill into a live run. Stop and fully clean the old run, then start a fresh activation from the new installed copy.
 - Refuse activation when another live or unreconciled Roundlet run may own the target. The local lease is advisory and never proves exclusivity across machines, clones, or tasks.
-- Treat GitHub issues and pull requests as the durable backlog and audit history. Only the Orchestrator mutates GitHub.
+- Treat GitHub issues and pull requests as the durable backlog and audit history. Only the Orchestrator mutates GitHub. Route every curated event through the authoritative destination matrix in `references/operator-guide.md`: issue before pull-request creation, top-level pull-request Conversation for candidate/review evidence after the pull request exists, pull-request metadata for merge state, and issue again for leaf lifecycle and cleanup. Search both conversations before an ambiguous retry and read every write back from its selected surface.
 - Keep the same Worker task for implementation, repairs, optional final repair, and cleanup preflight. Create a fresh read-only Supervisor for every review attempt.
 - Verify each created role task once, before its first populated prompt, using immutable creator-side task metadata: exact task ID, model, reasoning effort, project/workspace, and canonical CWD. Self-report is not evidence. Bind later turns to that verified task/profile and to explicit issue, pull-request, phase, review epoch/round, and full candidate SHA.
 - Run one issue through implementation and cleanup before selecting another.
@@ -71,8 +71,8 @@ On activation and each heartbeat:
 4. Scan every open issue, exclude umbrellas and non-runnable/dependency-blocked/owned items, and rank ready leaf candidates by the operator contract.
 5. Select exactly one leaf. Create one unpublished `codex/` branch and isolated worktree, then create and verify one persistent Worker. On native Windows, create the Worker at its distinct anchor before the descendant worktree; on other hosts, use the ordinary worktree-first topology.
 6. Record selection only after the branch, worktree, Worker identity, and clean starting state read back correctly. Send implementation to that same Worker.
-7. Publish the initial handoff, push the exact candidate, and create a draft pull request.
-8. Run bounded fresh-Supervisor/same-Worker review cycles and append completed handoffs to the pull request.
+7. Publish the initial Worker handoff on the leaf issue, push the exact candidate, create a draft pull request, and publish/read back that creation event on the leaf issue.
+8. After the pull request exists, run bounded fresh-Supervisor/same-Worker review cycles and publish candidate, repair, validation, and review evidence only to its top-level pull-request Conversation.
 9. At a valid terminal review state, satisfy live merge gates, mark ready when authorized, merge with the configured method, verify or close the leaf, and perform ordered cleanup.
 10. Select no new issue until cleanup proves the authoritative checkout, `main`, and `origin/main` align and all issue resources are removed.
 

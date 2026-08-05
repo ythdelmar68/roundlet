@@ -7,6 +7,7 @@ These contracts bind Roundlet roles to one immutable activation bundle and expli
 - [Shared context envelope](#shared-context-envelope)
 - [Task creation binding](#task-creation-binding)
 - [GitHub access recovery](#github-access-recovery)
+- [Orchestrator GitHub publication contract](#orchestrator-github-publication-contract)
 - [Long-lived Orchestrator bootstrap](#long-lived-orchestrator-bootstrap)
 - [Heartbeat tick](#heartbeat-tick)
 - [Worker contract](#worker-contract)
@@ -78,6 +79,31 @@ The Launcher and Orchestrator use the authoritative checkout as canonical CWD an
 
 When a role requires `gh`, a sandbox result produced before GitHub is reachable is inconclusive. Request the narrowest scoped network approval for the same command automatically, then apply the bounded connectivity retry in the operator guide. Never open browser authentication or use browser automation as a substitute. Return a blocking result only for explicit denial, unavailable approval, reachable authentication rejection, or exhausted connectivity recovery.
 
+## Orchestrator GitHub publication contract
+
+Only the Orchestrator publishes. It must use the authoritative event-to-destination matrix in `operator-guide.md`; Worker and Supervisor tasks never publish their own results. Before every write, populate and verify:
+
+```text
+ROUNDLET_TRACE_WRITE
+event_id: <stable-event-id>
+event_class: <selection|scope-owner|initial-worker|draft-pr|post-pr-worker|candidate-validation|supervisor|merge-gate|merge-result|leaf-lifecycle|cleanup>
+leaf_issue: <issue-number>
+pull_request: <pull-request-number-or-none>
+authoritative_binding: <ISSUE|PR>
+authoritative_number: <issue-or-pull-request-number>
+comment_surface: <ISSUE|PR_CONVERSATION|NONE>
+comment_number: <issue-or-pull-request-number-or-none>
+END_ROUNDLET_TRACE_WRITE
+```
+
+Search both the leaf issue and the pull request's top-level Conversation, when present, for the same event marker before publishing or retrying. Publish one curated public-safe trace only on the canonical comment surface, then require authoritative-state and same-comment-surface read-back:
+
+```text
+ROUNDLET_TRACE_READBACK event=<stable-event-id> binding=<ISSUE|PR> binding_number=<number> comment_surface=<ISSUE|PR_CONVERSATION|NONE> comment_number=<number-or-none> status=VERIFIED
+```
+
+Before a pull request exists, selection, scope/owner decisions, the initial Worker handoff, and draft-PR creation target the issue. After it exists, Worker repair, candidate push/read-back, validation, Supervisor availability/results, and terminal review target the PR Conversation. Merge gates/results bind to PR metadata, with accompanying trace in its Conversation. Leaf closure, cleanup, `STOPPED`, `NEEDS_OWNER_INPUT`, and abort decisions return to the issue. Preserve misrouted historical comments; recovery may add one bounded pointer on the current canonical surface but never edits, deletes, moves, or bulk-reposts them.
+
 ## Long-lived Orchestrator bootstrap
 
 The Launcher sends:
@@ -143,7 +169,7 @@ The Orchestrator:
 1. Verifies its stable task binding, run/contract/heartbeat/advisory identity, and complete bundle.
 2. Uses a lightweight observation only in a phase where the operator guide permits it.
 3. Performs full live reconciliation in the same tick when anything changes, is incomplete, the phase is action-ready, or the full-audit bound is due.
-4. Applies at most one externally meaningful transition.
+4. Applies at most one externally meaningful transition and uses the publication contract for every trace belonging to it.
 5. Updates the same heartbeat interval when cadence changes and reads it back.
 6. Returns:
 

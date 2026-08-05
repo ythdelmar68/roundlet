@@ -46,7 +46,7 @@ flowchart TD
 
 The inner loop keeps the same Worker and creates a fresh Supervisor for each attempt. A valid PASS ends review. Findings return to the same Worker. Invalid or unavailable Supervisor attempts use the next configured profile without consuming a review round.
 
-GitHub issues and pull requests are durable scheduling/audit state. Local `.roundlet/` files are recovery pointers only. The Orchestrator is the sole GitHub writer.
+GitHub issues and pull requests are durable scheduling/audit state. Local `.roundlet/` files are recovery pointers only. The Orchestrator is the sole GitHub writer. The authoritative routing matrix is in [`operator-guide.md`](skills/roundlet/references/operator-guide.md#canonical-destination-matrix): selection, owner/scope, initial Worker, and draft-PR events stay on the issue; post-PR candidate, validation, repair, and review evidence uses the top-level PR Conversation; merge state comes from the PR; leaf lifecycle and cleanup return to the issue. Every write is read back from the same selected surface, and ambiguous retries search both conversations for the stable event marker first.
 
 ## Installation
 
@@ -193,7 +193,7 @@ If the original Orchestrator or heartbeat is inaccessible, use [`Explicit recove
 
 On full reconciliation, Roundlet scans all open issues, formal relationships, blocking edges, canonical notes, labels, comments, active branches, and pull requests. It ranks ready leaf/standalone candidates by canonical order, priority, stated blocker-removal value, then oldest issue number.
 
-Selection remains read-only while provisioning. The Orchestrator publishes selection only after branch, worktree, clean base, and persistent Worker identity read back correctly.
+Selection remains read-only while provisioning. The Orchestrator publishes and reads back selection on the leaf issue only after branch, worktree, clean base, and persistent Worker identity read back correctly.
 
 ### Review and merge
 
