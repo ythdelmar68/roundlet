@@ -52,7 +52,7 @@ owner_instruction: <exact-scope-or-none>
 END_ROUNDLET_CONTEXT
 ```
 
-The Orchestrator populates the envelope from live evidence. The role rereads the pinned bundle, root repository instructions, and relevant GitHub/Git state before acting. Return `CONTEXT_MISMATCH` without mutation when the envelope conflicts with live evidence.
+The Orchestrator populates the envelope from live evidence. The `role` field must equal the attestation's `requested_role`; the other creator-binding fields must equal the same recorded attestation exactly. The role rereads the pinned bundle, root repository instructions, and relevant GitHub/Git state before acting. Return `CONTEXT_MISMATCH` without mutation when the envelope conflicts with live evidence.
 
 ## Role metadata report and creator binding attestation
 
@@ -100,7 +100,7 @@ END_CREATOR_TASK_BINDING_ATTESTATION
 
 If a report explicitly contradicts the proposed envelope, perform exactly one bounded creator-side immutable re-read. A complete unchanged read-back that still matches the request preserves the proposed values and the contradictory report remains non-authoritative. Missing, stale, malformed, mismatched, or still-conflicting creator metadata fails closed before role work. Only after every authoritative field matches the creation request does the creator record exactly one attestation; only that attestation authorizes role work. Invalid-binding evidence may name only the creator failure class; it must never cite report formatting, omitted fields, prose, or a missing self-reported task ID.
 
-The verified attestation remains stable and is copied into later role envelopes. Recovery/restart reuses it without duplicate task creation, binding, dispatch, or trace. Do not repeat discovery on every turn.
+The verified attestation remains stable and is copied into later role envelopes. Recovery/restart normally reuses it without duplicate task creation, binding, dispatch, or trace. Only contradictory immutable creator-side evidence triggers exactly one bounded re-read against the recorded attestation. An unchanged complete match preserves it; an unresolved difference fails closed without creating another task, attestation, dispatch, or trace. Do not repeat discovery on every turn.
 
 The Launcher and Orchestrator use the authoritative checkout as canonical CWD and writable project. A native-Windows Worker uses its distinct host-owned anchor as CWD and the descendant linked worktree from the envelope as its writable implementation path. Other Workers use their ordinary verified project/worktree binding. Supervisors are read-only and may use a non-removable host-owned task CWD while reviewing the named target/SHA.
 
@@ -144,6 +144,7 @@ contract_id: <activation-contract-id>
 contract_bundle: <absolute-verified-bundle-path>
 role_task: <creator-verified-orchestrator-task-id>
 creator_task: <creator-verified-launcher-task-id>
+requested_role: ORCHESTRATOR
 execution_profile: model=<configured-model>;reasoning_effort=<configured-effort>
 task_workspace: <authoritative-writable-project>
 task_cwd: <authoritative-checkout>

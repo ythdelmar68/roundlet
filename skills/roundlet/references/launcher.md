@@ -133,7 +133,7 @@ Target:
 Read only the advisory activation pointers first, resolve the one immutable activation bundle, verify it completely, then read its SKILL.md and every required reference. Treat the installed skill only as an unrelated candidate that cannot enter this run.
 
 1. Verify this recovery Launcher's complete creator binding attestation against the creator-supplied task/creator IDs, requested role, profile, workspace/CWD, stable host/environment identity, and binding source; then perform the bundle's repository, authority, GitHub, host, and capability preflight.
-2. Reconcile lease/current state, activation bundle, GitHub traces and pull requests, branches, worktrees, checks, exact candidate SHA, all identifiable role tasks, and all heartbeats.
+2. Reconcile lease/current state, activation bundle, GitHub traces and pull requests, branches, worktrees, checks, exact candidate SHA, all identifiable role tasks and recorded creator binding attestations, and all heartbeats. Reuse each stable attestation normally. If contradictory immutable creator-side evidence appears, perform exactly one bounded re-read against that attestation; unresolved conflict fails closed without a second task, attestation, dispatch, or trace.
 3. If the old Orchestrator or heartbeat is live, ownership is ambiguous, the bundle is incomplete, or unique work cannot be attributed, stop with `RECOVERY_OWNER_DECISION_REQUIRED`. Do not replace or delete anything.
 4. If both old Orchestrator and heartbeat are conclusively unavailable, reconstruct the phase from durable GitHub and Git evidence. Preserve the run ID only when identity is certain; otherwise stop for owner input.
 5. Never silently replace an active or inaccessible Worker. Return `WORKER_REPLACEMENT_REQUIRES_OWNER`.
