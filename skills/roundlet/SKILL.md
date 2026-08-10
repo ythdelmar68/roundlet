@@ -20,6 +20,9 @@ Operate one target repository through Codex tasks, GitHub, Git worktrees, adviso
 - Read repository authority only from root `AGENTS.md` on authoritative `origin/main`. Boolean authority may narrow Roundlet but never override stricter repository or platform policy.
 - Fail closed when repository identity, configured profiles, required tools, GitHub permissions, merge method, repository authority, active contract identity, unique work, or live state cannot be verified. Never substitute a model, effort, attempt profile, or contract.
 - When root repository instructions explicitly declare a validation-toolchain contract, bind all affected build, test, packaging, and review evidence to that contract as defined in `references/operator-guide.md`. A system-discovered bootstrap interpreter may invoke the repository resolver but is never validation evidence. Provision a wholly absent exact cache lazily on first required validation; reject partial or invalid evidence without falling back to host build tools. A repository-owned cache below the authoritative checkout's `.roundlet/validation-tools/` is generated host state, not a Roundlet runtime or source tree.
+- When authoritative root instructions declare repository-owned external-validation routing, use only the generic routes `none`, `toolbox`, and `toolbox+disposable-target`. Bind the selected leaf, referenced instruction/skill paths and exact bytes, concrete repository/commit identities, permitted actions, evidence-time field, rollback, and read-back procedure at selection. Roundlet core never supplies target-specific names or scope.
+- Treat `allow_external_validation_read_only` and `allow_external_validation_disposable_target_mutation` as independent repository-authority switches. A matching standing `true` removes repetitive per-attempt approval only inside the exact repository-owned route; it never waives credentials, identity, allowlist, rollback, or semantic read-back gates.
+- Historical replay uses the immutable evidence capture time declared by the selected repository contract. Never substitute replay execution wall-clock time for that captured time.
 - Treat a GitHub CLI failure before GitHub is reachable as connectivity evidence, not credential rejection. Request the narrowest scoped network approval for the same command, use bounded retry, and never substitute browser authentication or browser automation.
 - Use lightweight observations only to prove a fully reconciled baseline unchanged. Any change, omission, overflow, malformed value, due full audit, or action-ready phase requires full live reconciliation in the same tick before mutation.
 - Never auto-expire, steal, or replace a lease. Recovery requires explicit owner direction after reconciliation.
@@ -69,8 +72,8 @@ On activation and each heartbeat:
 1. Resolve and verify the one immutable activation bundle. Fingerprint the installed skill separately but never adopt it into the live run.
 2. Fully reconcile whenever the bounded observation is not an exact match, the phase is action-ready, or the full-audit bound is due.
 3. Honor pause, stop-after-current, owner-input, authority, and active-issue states before scheduling.
-4. Scan every open issue, exclude umbrellas and non-runnable/dependency-blocked/owned items, and rank ready leaf candidates by the operator contract.
-5. Select exactly one leaf. Create one unpublished `codex/` branch and isolated worktree, then create and verify one persistent Worker. On native Windows, create the Worker at its distinct anchor before the descendant worktree; on other hosts, use the ordinary worktree-first topology.
+4. Scan every open issue, exclude umbrellas and non-runnable/dependency-blocked/owned items, classify any repository-declared external-validation route, and rank ready leaf candidates by the operator contract.
+5. Select exactly one leaf. Bind any repository-owned external-validation contract and standing authority before provisioning. Create one unpublished `codex/` branch and isolated worktree, then create and verify one persistent Worker. On native Windows, create the Worker at its distinct anchor before the descendant worktree; on other hosts, use the ordinary worktree-first topology.
 6. Record selection only after the branch, worktree, Worker identity, and clean starting state read back correctly. Send implementation to that same Worker.
 7. Publish the initial Worker handoff on the leaf issue, push the exact candidate, create a draft pull request, and publish/read back that creation event on the leaf issue.
 8. After the pull request exists, run bounded fresh-Supervisor/same-Worker review cycles and publish candidate, repair, validation, and review evidence only to its top-level pull-request Conversation.
@@ -87,7 +90,8 @@ Keep the heartbeat at `active_minutes` while work is active or observations are 
 - Classify an attempt as invalid-binding only from a failed creator binding attestation. A missing, short, reordered, differently rendered, or task-ID-free role report cannot consume a Supervisor attempt, advance a profile, publish a discard reason, or invalidate a matching creator attestation.
 - After the configured attempt budget is exhausted, enter `NEEDS_OWNER_INPUT`.
 - If round 10 returns findings, send them once to the same Worker for final repair. Do not run round 11 or claim PASS. Record `REVIEW_LIMIT_REACHED_WORKER_FINALIZED`, then apply normal merge gates.
-- An allowlisted owner scope change starts a new review epoch at round 1 COMPLETE.
+- Preserve epoch, accepted-round count, and review mode across pause, resume, same-task continuation, and authorized recovery when the immutable contract, leaf scope, acceptance criteria, and candidate review basis are unchanged. Satisfying an already-declared standing validation route is not a scope change.
+- An allowlisted owner change to scope or acceptance criteria starts a new review epoch at round 1 COMPLETE. The existing main-integration rule also starts a new COMPLETE epoch because it changes the review basis.
 
 ## Stop safely
 

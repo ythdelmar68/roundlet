@@ -7,6 +7,7 @@ This is Roundlet's detailed operating contract. The Orchestrator rereads the pin
 - [Operating envelope](#operating-envelope)
 - [Configuration and capability preflight](#configuration-and-capability-preflight)
 - [Repository-defined validation toolchains](#repository-defined-validation-toolchains)
+- [Repository-owned external validation](#repository-owned-external-validation)
 - [Task creation and immutable binding](#task-creation-and-immutable-binding)
 - [Native Windows Worker topology](#native-windows-worker-topology)
 - [Advisory local state](#advisory-local-state)
@@ -61,6 +62,7 @@ Before activation, prove:
 - the Orchestrator can perform repository-authorized GitHub mutations;
 - the contract file set can be materialized byte-for-byte to a content-addressed bundle and read back: from verified commit objects for `git`, or from the resolved installed directory for `installed-tree`;
 - root `AGENTS.md` on `origin/main` contains exactly one valid Roundlet authority block;
+- when root instructions explicitly declare repository-owned external validation, every referenced contract resolves to one exact authoritative path and byte identity and every declared leaf route uses only `none`, `toolbox`, or `toolbox+disposable-target`;
 - the configured merge method is supported;
 - the checkout is clean and `HEAD == main == origin/main`;
 - no other Roundlet run or unreconciled resource may own the target;
@@ -86,7 +88,7 @@ At activation, read the contract from authoritative `origin/main`, prove that th
 Before each affected Worker validation:
 
 1. Reread the candidate's root instructions and named toolchain contract from the assigned worktree. Bind the resolver and lock to the exact candidate SHA.
-2. Use the contract's explicit shared cache root. For the Roundwright-style repository-local contract, this is `<authoritative-checkout>/.roundlet/validation-tools`, not a cache below the removable issue worktree.
+2. Use the contract's explicit shared cache root. For a repository-local shared-cache contract, this is `<authoritative-checkout>/.roundlet/validation-tools`, not a cache below the removable issue worktree.
 3. Discover a bootstrap interpreter satisfying the declared version and invoke the candidate resolver with the exact shared cache-root argument. Never install packages into the bootstrap interpreter.
 4. If the exact lock/platform cache is absent, invoke the contract's ordinary provision operation. This is the only automatic cache creation path.
 5. If a complete receipt exists, verify and reuse it. If the cache or receipt is incomplete, malformed, stale, moved, wrong-platform, wrong-lock, digest-drifted, or fails executable/version read-back, stop without fallback or automatic rebuild. An explicit destructive rebuild remains a separate owner-directed recovery action.
@@ -96,6 +98,29 @@ Before each affected Worker validation:
 The Worker may affect the shared validation cache only by invoking the repository-defined resolver with the exact cache root. It must not edit cache contents directly or use this exception for authoritative source changes. The Orchestrator independently verifies the candidate/lock/receipt/result binding before accepting or publishing validation. Candidate movement or a relevant contract change requires fresh verification.
 
 The shared validation cache is host-owned reusable repository state. It is not run-owned advisory state, is not part of the immutable Roundlet activation bundle, and survives ordinary issue cleanup, stop-after-current, and worktree removal. A valid retained cache does not indicate a stale Roundlet run.
+
+## Repository-owned external validation
+
+This section applies only when authoritative root instructions explicitly declare an external-validation contract. Roundlet supplies generic orchestration; the target repository owns concrete toolbox, disposable-target, commit, action, credential, evidence, rollback, and read-back details.
+
+Each actionable leaf declares exactly one route:
+
+- `none`: no external toolbox or target;
+- `toolbox`: use the exact selected repository-owned execution toolbox for read-only validation;
+- `toolbox+disposable-target`: use that toolbox plus one exact repository-owned disposable target for read-only observation or separately authorized mutation.
+
+Before provisioning a selected leaf:
+
+1. Read root `AGENTS.md` from authoritative `origin/main` and resolve every referenced operations contract or repository-owned skill used by the route. Bind each path and exact Git blob identity; a candidate-authored copy may narrow but never widen authority.
+2. Read the live leaf and canonical scheduling context. Bind the route, gate/evidence class, base, future candidate-binding rule, concrete public repositories, reviewed source commits, target baseline commit, action allowlist, rollback/kill-switch procedure, semantic read-back, evidence-time field, and public-safe projection. Reject floating refs or conflicting declarations.
+3. For any external observation, require `allow_external_validation_read_only: true`. For a target mutation, also require `allow_external_validation_disposable_target_mutation: true` and prove that the exact operation is allowlisted for the exact disposable target. Neither switch authorizes mutation of the repository under development.
+4. Record a bounded selection binding in advisory state, then include its allowed projection in the ordinary public-safe selection trace only after branch/worktree/Worker provisioning succeeds. Credentials, raw payloads, private paths, logs, and owner-private reasoning remain excluded.
+
+When these bindings and standing switches match, proceed without requesting a new owner approval for each attempt, commit, or replay. Enter `NEEDS_OWNER_INPUT` only for confirmed credential/login failure, repository or commit identity conflict, an operation outside the authoritative allowlist, unavailable required rollback, or observed/ambiguous partial mutation/read-back. Missing authority enters `REPOSITORY_AUTHORITY_REQUIRED`. Never substitute another toolbox, target, credential, action, or branch head.
+
+Immediately before each invocation, resolve and bind the current full candidate SHA plus the already-selected toolbox and target commits. Candidate movement invalidates prior gate evidence and requires a new evidence run under the same standing route; it does not itself request owner approval or start a review epoch.
+
+For historical replay, read the immutable capture time from the evidence bundle using the repository-declared field and pass that value to the repository comparator. Wall-clock execution time is valid only for a contract that explicitly describes a current live decision; it must never replace historical evidence time. Bind the field name, captured value, bundle digest, and comparison result in private state, and publish only their allowed public-safe projection.
 
 ## Task creation and immutable binding
 
@@ -157,7 +182,7 @@ The lease has no expiry:
 }
 ```
 
-`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, repository validation-toolchain summary/cache root and last public-safe lock/receipt status when applicable, review epoch/round/mode/attempt/profile, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never store the advisory role report or raw receipt. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
+`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, repository validation-toolchain summary/cache root and last public-safe lock/receipt status when applicable, selected external-validation route plus authoritative instruction/skill/target/action identities and historical evidence-time binding when applicable, review epoch/round/mode/attempt/profile, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never store the advisory role report, credential, raw external payload, or raw receipt. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
 
 Before each tick or mutation, reconcile both files with the bundle, GitHub, Git, tasks, and heartbeat. Prefer live authoritative evidence. Conflicts enter `NEEDS_OWNER_INPUT` with reason `STATE_RECONCILIATION_CONFLICT`; never guess or overwrite them.
 
@@ -247,6 +272,7 @@ For each ready candidate, build a compact evidence record:
 - priority from canonical live context;
 - exact dependency list and completion evidence;
 - formal parent and relevant Canonical scheduling note;
+- external-validation route and exact authoritative contract/standing-authority readiness, or explicit `none`;
 - blocker/owner/active-resource evidence;
 - readiness reason.
 
@@ -272,7 +298,7 @@ One heartbeat tick may perform at most one externally meaningful transition. Bou
 After selecting one ready leaf:
 
 1. Enter `ISSUE_PROVISIONING` without posting selection.
-2. Create one unpublished local `codex/` branch from exact `origin/main`.
+2. Resolve and verify any repository-owned external-validation route and standing authority, then create one unpublished local `codex/` branch from exact `origin/main`.
 3. Create one isolated linked worktree and one persistent Worker:
    - native Windows: create/verify anchor and Worker first, then create the separate descendant worktree;
    - other hosts: create/verify worktree first, then create the Worker in the ordinary topology.
@@ -324,7 +350,9 @@ Record selection/ranking, Worker handoffs, draft PR creation, invalid Supervisor
 
 ## Review epochs and rounds
 
-Start epoch 1, round 1, bound to the exact pushed candidate. An allowlisted owner scope change starts a new epoch at round 1 COMPLETE; ordinary repairs stay in the epoch.
+Start epoch 1, round 1, bound to the exact pushed candidate. Preserve the same epoch, accepted-round count, and next mode across pause, resume, same-task continuation, and authorized recovery when the immutable activation contract, leaf scope, acceptance criteria, and candidate review basis are unchanged. Satisfying or refreshing an already-declared standing external-validation route is not a scope change. Ordinary repairs stay in the epoch.
+
+An allowlisted owner change that materially changes scope or acceptance criteria starts a new epoch at round 1 COMPLETE. Main integration also starts a new COMPLETE epoch under the merge-gate rule because the candidate review basis changes. Never start a new epoch merely because the Orchestrator/heartbeat restarts, an unchanged gate is retried, a credential is refreshed, or a previously permitted repository-owned route is mechanically rebound to the same identities.
 
 For each round:
 
@@ -344,11 +372,11 @@ Before round 10, valid findings go to the same Worker for repair. The Orchestrat
 
 `NEEDS_OWNER_INPUT` stops global scheduling. Retain all active resources. The heartbeat uses owner-input backoff and only reconciles the blocker, watches for a new allowlisted issue comment, or observes direct Orchestrator input.
 
-An issue-body edit, non-owner comment, reaction, label change, or role message does not release the block. A new valid owner instruction is traced, applied narrowly, and followed by full reconciliation.
+An issue-body edit, non-owner comment, reaction, label change, or role message does not release the block. A new valid owner instruction is traced, applied narrowly, and followed by full reconciliation. It changes the review epoch only when it materially changes leaf scope or acceptance criteria. Credential repair or confirmation of an already-authorized route preserves the epoch and accepted-round count.
 
 ## Repository authority block
 
-At each mutation boundary, reread root `AGENTS.md` on current authoritative `origin/main`. If the required switch is false or ambiguous, enter `REPOSITORY_AUTHORITY_REQUIRED`, retain resources, and stop scheduling.
+At each mutation or external-validation boundary, reread root `AGENTS.md` on current authoritative `origin/main`. If the required switch is false or ambiguous, enter `REPOSITORY_AUTHORITY_REQUIRED`, retain resources, and stop scheduling. External read-only validation checks `allow_external_validation_read_only`; a disposable-target mutation checks that switch plus `allow_external_validation_disposable_target_mutation`.
 
 Release requires either the allowlisted owner performs/confirms the action or the authority block changes on `origin/main` and the owner explicitly directs a reread. An issue-branch policy change cannot release the block.
 
@@ -368,6 +396,7 @@ Before ready conversion or merge, prove:
 - branch rules permit the operation;
 - configured merge method is available and equals `merge`.
 - every repository-required validation-toolchain receipt and result is valid for the terminal candidate SHA; bootstrap-only or host-tool output cannot satisfy this gate.
+- every selected external-validation binding, evidence-time value, semantic read-back, rollback disposition, and public-safe result is current for the terminal candidate; an ambiguous or partially applied target mutation cannot satisfy this gate.
 
 If `origin/main` advanced, reread mergeability and rules. Merge directly only when GitHub still accepts it and no rule requires an update. Otherwise send the same Worker a main-integration turn that merges `origin/main` into the issue branch without rebase/force. The Orchestrator independently verifies the integration handoff/diff/tests, pushes the exact new candidate without force, reads back the remote head, appends and reads back the handoff trace in the PR Conversation, and then starts a new COMPLETE epoch.
 
@@ -409,6 +438,7 @@ Never infer abandonment or preserve old issue resources while selecting a new is
 ## Pause, resume, stop, and skill updates
 
 - `pause`: finish an atomic mutation or stop before the next, record `PAUSED`, pause the heartbeat, and preserve resources.
+- `resume` and explicit recovery preserve review epoch/round whenever immutable contract, scope, acceptance criteria, and candidate review basis reconcile unchanged; they never manufacture a new epoch to regain an attempt budget.
 - `stop-after-current`: finish the active issue and ordered cleanup; if IDLE, stop immediately. Then remove the heartbeat, record `STOPPED`, remove advisory state/bundle after reconciliation, and archive the Orchestrator.
 - Installed skill/config drift never changes live instructions. Report it as an update candidate.
 - To update Roundlet, stop and fully clean the old run, install the reviewed new skill, and perform New activation with a new run and contract. Do not adopt or migrate in place.
@@ -461,5 +491,6 @@ If the Orchestrator or heartbeat is inaccessible, use the Explicit recovery Laun
 - An inaccessible persistent Worker requires owner direction before replacement.
 - A failed Supervisor is disposable under the bounded attempt rule.
 - Verify the immutable activation bundle first, then reconstruct from GitHub trace, exact Git, task/heartbeat evidence, and advisory files.
+- Reconstruct and verify the selected repository-owned external-validation binding and historical evidence-time value when applicable. Preserve the epoch/round on an exact match; conflict fails closed instead of resetting review accounting.
 - Treat the installed skill as unrelated candidate material. It cannot repair or replace the active contract.
 - Stop on contradictions and append corrections rather than editing old trace.
