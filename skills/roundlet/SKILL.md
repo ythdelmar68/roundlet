@@ -19,6 +19,7 @@ Operate one target repository through Codex tasks, GitHub, Git worktrees, adviso
 - Run one issue through implementation and cleanup before selecting another.
 - Read repository authority only from root `AGENTS.md` on authoritative `origin/main`. Boolean authority may narrow Roundlet but never override stricter repository or platform policy.
 - Fail closed when repository identity, configured profiles, required tools, GitHub permissions, merge method, repository authority, active contract identity, unique work, or live state cannot be verified. Never substitute a model, effort, attempt profile, or contract.
+- When root repository instructions explicitly declare a validation-toolchain contract, bind all affected build, test, packaging, and review evidence to that contract as defined in `references/operator-guide.md`. A system-discovered bootstrap interpreter may invoke the repository resolver but is never validation evidence. Provision a wholly absent exact cache lazily on first required validation; reject partial or invalid evidence without falling back to host build tools. A repository-owned cache below the authoritative checkout's `.roundlet/validation-tools/` is generated host state, not a Roundlet runtime or source tree.
 - Treat a GitHub CLI failure before GitHub is reachable as connectivity evidence, not credential rejection. Request the narrowest scoped network approval for the same command, use bounded retry, and never substitute browser authentication or browser automation.
 - Use lightweight observations only to prove a fully reconciled baseline unchanged. Any change, omission, overflow, malformed value, due full audit, or action-ready phase requires full live reconciliation in the same tick before mutation.
 - Never auto-expire, steal, or replace a lease. Recovery requires explicit owner direction after reconciliation.
@@ -92,5 +93,6 @@ Keep the heartbeat at `active_minutes` while work is active or observations are 
 
 - `pause` takes effect at a safe checkpoint, pauses the heartbeat, and retains current resources for manual resume.
 - `stop-after-current` finishes the active issue and cleanup, removes the heartbeat, releases advisory state and contract bundles after final reconciliation, and archives the Orchestrator. If IDLE, stop immediately.
+- Normal stop and issue cleanup retain a repository-declared shared validation cache. Remove or rebuild it only as a separate exact owner-directed cache action after validating the target path and preserving evidence of corruption or drift.
 - A closed, ignored, or withdrawn active issue requires an explicit owner abort decision.
 - Any unresolved ambiguity affecting scope, dependency order, data safety, unique work, or irreversible mutation enters `NEEDS_OWNER_INPUT` and stops scheduling.

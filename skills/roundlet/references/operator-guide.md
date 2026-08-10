@@ -6,6 +6,7 @@ This is Roundlet's detailed operating contract. The Orchestrator rereads the pin
 
 - [Operating envelope](#operating-envelope)
 - [Configuration and capability preflight](#configuration-and-capability-preflight)
+- [Repository-defined validation toolchains](#repository-defined-validation-toolchains)
 - [Task creation and immutable binding](#task-creation-and-immutable-binding)
 - [Native Windows Worker topology](#native-windows-worker-topology)
 - [Advisory local state](#advisory-local-state)
@@ -64,6 +65,7 @@ Before activation, prove:
 - the checkout is clean and `HEAD == main == origin/main`;
 - no other Roundlet run or unreconciled resource may own the target;
 - required branch rules and checks can be determined well enough to fail closed at merge time.
+- when root instructions declare a validation-toolchain contract, its named documentation, lock, resolver, cache boundary, bootstrap constraint, and receipt verification route are readable and internally consistent; an available bootstrap interpreter satisfies the repository's stated version without becoming validation evidence.
 
 When a role needs `gh`:
 
@@ -74,6 +76,26 @@ When a role needs `gh`:
 5. Never open browser authentication or substitute browser automation without explicit owner direction.
 
 The skill requires requesting approval; it cannot grant or assume it. Enter `NEEDS_OWNER_INPUT` only after explicit denial, unavailable approval machinery, confirmed authentication rejection, or exhausted bounded connectivity recovery.
+
+## Repository-defined validation toolchains
+
+This section applies only when root repository instructions explicitly name a validation-toolchain document or equivalent contract. Do not infer a contract from ordinary dependency files, and do not impose one on another repository.
+
+At activation, read the contract from authoritative `origin/main`, prove that the named files and capability route exist, and record a bounded contract summary for the Orchestrator. Do not provision merely because a run starts. The host may discover any available bootstrap interpreter that satisfies the repository's stated bootstrap version. Record its command and observed version internally; it only runs the resolver and cannot satisfy build, test, packaging, review, or merge evidence.
+
+Before each affected Worker validation:
+
+1. Reread the candidate's root instructions and named toolchain contract from the assigned worktree. Bind the resolver and lock to the exact candidate SHA.
+2. Use the contract's explicit shared cache root. For the Roundwright-style repository-local contract, this is `<authoritative-checkout>/.roundlet/validation-tools`, not a cache below the removable issue worktree.
+3. Discover a bootstrap interpreter satisfying the declared version and invoke the candidate resolver with the exact shared cache-root argument. Never install packages into the bootstrap interpreter.
+4. If the exact lock/platform cache is absent, invoke the contract's ordinary provision operation. This is the only automatic cache creation path.
+5. If a complete receipt exists, verify and reuse it. If the cache or receipt is incomplete, malformed, stale, moved, wrong-platform, wrong-lock, digest-drifted, or fails executable/version read-back, stop without fallback or automatic rebuild. An explicit destructive rebuild remains a separate owner-directed recovery action.
+6. Run every affected build, test, packaging, and smoke command through the receipt-bound execution route. Direct use of bootstrap, user, system, or `PATH`-discovered build tools is not evidence.
+7. Return the public-safe lock digest, lock/platform cache key, receipt status, platform identity, and command results to the Orchestrator. The Orchestrator uses the envelope's exact local cache path only for private read-back. Handoffs and GitHub trace must omit private paths, raw receipts, and generated artifacts.
+
+The Worker may affect the shared validation cache only by invoking the repository-defined resolver with the exact cache root. It must not edit cache contents directly or use this exception for authoritative source changes. The Orchestrator independently verifies the candidate/lock/receipt/result binding before accepting or publishing validation. Candidate movement or a relevant contract change requires fresh verification.
+
+The shared validation cache is host-owned reusable repository state. It is not run-owned advisory state, is not part of the immutable Roundlet activation bundle, and survives ordinary issue cleanup, stop-after-current, and worktree removal. A valid retained cache does not indicate a stale Roundlet run.
 
 ## Task creation and immutable binding
 
@@ -116,6 +138,8 @@ Keep:
 - `.roundlet/current.md`: concise phase and recovery pointers;
 - `.roundlet/contracts/<contract-id>/`: the one read-only activation snapshot.
 
+When the repository declares it, `.roundlet/validation-tools/` is a separate host-owned reusable cache governed by the repository validation-toolchain contract. Do not put it in lease/current state, hash it into the activation bundle, treat it as run ownership, or remove it during ordinary Roundlet cleanup.
+
 The lease has no expiry:
 
 ```json
@@ -133,7 +157,7 @@ The lease has no expiry:
 }
 ```
 
-`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, review epoch/round/mode/attempt/profile, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never store the advisory role report. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
+`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, repository validation-toolchain summary/cache root and last public-safe lock/receipt status when applicable, review epoch/round/mode/attempt/profile, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never store the advisory role report or raw receipt. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
 
 Before each tick or mutation, reconcile both files with the bundle, GitHub, Git, tasks, and heartbeat. Prefer live authoritative evidence. Conflicts enter `NEEDS_OWNER_INPUT` with reason `STATE_RECONCILIATION_CONFLICT`; never guess or overwrite them.
 
@@ -260,7 +284,7 @@ The Worker may edit only its assigned worktree and issue scope. It must reread r
 
 After a valid initial handoff:
 
-1. Independently verify before/after SHAs, diff, status, tests, and issue scope.
+1. Independently verify before/after SHAs, diff, status, tests, issue scope, and any repository-required candidate/lock/receipt validation binding.
 2. On native Windows, verify direct normal-sandbox `apply_patch` for source edits and reject contradictory routing evidence.
 3. Push the exact candidate without force.
 4. Append the initial Worker handoff to the leaf issue and read it back from that issue.
@@ -343,6 +367,7 @@ Before ready conversion or merge, prove:
 - authority permits ready, merge, and leaf close;
 - branch rules permit the operation;
 - configured merge method is available and equals `merge`.
+- every repository-required validation-toolchain receipt and result is valid for the terminal candidate SHA; bootstrap-only or host-tool output cannot satisfy this gate.
 
 If `origin/main` advanced, reread mergeability and rules. Merge directly only when GitHub still accepts it and no rule requires an update. Otherwise send the same Worker a main-integration turn that merges `origin/main` into the issue branch without rebase/force. The Orchestrator independently verifies the integration handoff/diff/tests, pushes the exact new candidate without force, reads back the remote head, appends and reads back the handoff trace in the PR Conversation, and then starts a new COMPLETE epoch.
 
@@ -366,7 +391,8 @@ Cleanup is part of the active issue:
 6. If ordinary removal fails, diagnose exact-worktree CWD holders. On native Windows, do not treat a distinct retained empty task anchor as the linked worktree. Never kill Codex or Node to obtain cleanup.
 7. Delete local/remote issue branches only when authorized and their unique work is merged or explicitly abandoned.
 8. Fetch, fast-forward local `main`, and prove a clean authoritative checkout with `HEAD == main == origin/main`.
-9. Append the cleanup trace to the leaf issue, read it back there, and clear issue pointers. If continuing, retain lease/contract and set `IDLE`; if stopping, append/read back `STOPPED` on the issue, remove heartbeat, advisory state, and contract bundle after final reconciliation, then archive the Orchestrator.
+9. Retain any repository-declared `.roundlet/validation-tools/` shared cache; it is not an issue worktree or run-owned resource.
+10. Append the cleanup trace to the leaf issue, read it back there, and clear issue pointers. If continuing, retain lease/contract and set `IDLE`; if stopping, append/read back `STOPPED` on the issue, remove heartbeat, advisory state, and contract bundle after final reconciliation, then archive the Orchestrator.
 
 Failed ordinary removal, surviving registration/path, unique work, or ambiguous read-back enters `CLEANUP_BLOCKED` and selects no next issue. Do not reopen a leaf solely because cleanup failed.
 

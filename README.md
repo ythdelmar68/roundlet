@@ -58,6 +58,7 @@ GitHub issues and pull requests are durable scheduling/audit state. Local `.roun
 - Every exact model and reasoning effort in [`roundlet-config.json`](skills/roundlet/references/roundlet-config.json).
 - The ability to read immutable creator-side task identity, creator/source task, configured model/effort, workspace/project, canonical CWD, and available stable host/environment identity independently of role output.
 - A clean authoritative local checkout for the target repository.
+- When the target explicitly declares a validation-toolchain contract, any system-discoverable bootstrap interpreter satisfying that repository's stated version. It invokes only the repository resolver and is not build/test evidence.
 
 ### Choose reviewed source
 
@@ -139,9 +140,10 @@ Roundlet may then keep:
 
 - `.roundlet/lease.json`;
 - `.roundlet/current.md`;
-- `.roundlet/contracts/<contract-id>/`.
+- `.roundlet/contracts/<contract-id>/`;
+- `.roundlet/validation-tools/` when the target repository declares it as a shared validation cache.
 
-All are local-only. The bundle contains exact activation-time instructions and configuration; it is read-only after activation.
+All are local-only. The bundle contains exact activation-time instructions and configuration; it is read-only after activation. A validation cache is separate host-owned reusable state: it is not part of the bundle, does not indicate a live run, and survives ordinary issue/run cleanup.
 
 ## Backlog preparation
 
@@ -164,15 +166,16 @@ The Launcher:
 
 1. verifies its immutable profile and writable checkout binding;
 2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities;
-3. reconciles every old local/remote Roundlet resource and fails closed on stale ownership;
-4. scans the complete backlog and Canonical scheduling notes without selecting an issue;
-5. reserves a new run ID;
-6. builds and reads back one immutable activation bundle;
-7. creates and reads back advisory lease/current state;
-8. creates exactly one configured Orchestrator and records its creator-authoritative task-binding attestation independently of any role metadata report;
-9. requires exact `ACTIVATION_READY` without issue selection;
-10. creates exactly one heartbeat bound only to the Orchestrator and requires exact `HEARTBEAT_BOUND`;
-11. verifies all identities, sends one initial tick, reports the activation, and archives itself.
+3. discovers and checks any explicitly declared repository validation-toolchain capability without provisioning it;
+4. reconciles every old local/remote Roundlet resource and fails closed on stale ownership;
+5. scans the complete backlog and Canonical scheduling notes without selecting an issue;
+6. reserves a new run ID;
+7. builds and reads back one immutable activation bundle;
+8. creates and reads back advisory lease/current state;
+9. creates exactly one configured Orchestrator and records its creator-authoritative task-binding attestation independently of any role metadata report;
+10. requires exact `ACTIVATION_READY` without issue selection;
+11. creates exactly one heartbeat bound only to the Orchestrator and requires exact `HEARTBEAT_BOUND`;
+12. verifies all identities, sends one initial tick, reports the activation, and archives itself.
 
 The Launcher never implements an issue and never owns the heartbeat.
 
@@ -204,6 +207,12 @@ Selection remains read-only while provisioning. The Orchestrator publishes and r
 - Round-10 findings get one final Worker repair without round 11 or a claimed PASS.
 - Ready conversion and merge require live authority, correct exact SHA, successful required checks, mergeability, correct closing reference, and configured merge method `merge`.
 
+### Repository-defined validation toolchains
+
+If root instructions explicitly name a validation-toolchain contract, Roundlet binds affected validation to it. On first required validation, the Worker uses the candidate resolver and lock with the authoritative checkout's shared `.roundlet/validation-tools/` cache root. A valid receipt is verified and reused; a wholly absent exact cache is provisioned automatically. Partial, stale, invalid, moved, or drifted evidence blocks without fallback or automatic rebuild.
+
+The host may discover a suitable bootstrap interpreter, but it only invokes the resolver. Actual build, test, packaging, and smoke commands run through the receipt-bound environment. Repositories without an explicit contract keep ordinary proportional validation.
+
 ### Cleanup
 
 The same Worker performs read-only cleanup preflight. The Orchestrator then:
@@ -215,7 +224,8 @@ The same Worker performs read-only cleanup preflight. The Orchestrator then:
 5. deletes exact local/remote issue branches when authorized and safe;
 6. fetches and fast-forwards authoritative `main`;
 7. proves a clean `HEAD == main == origin/main`;
-8. returns to IDLE or stops after current.
+8. retains any repository-declared shared validation cache;
+9. returns to IDLE or stops after current.
 
 If ordinary worktree removal fails, diagnose the exact holder and preserve evidence. Never kill Codex or Node, force-remove unknown work, or broaden the cleanup target.
 
@@ -246,6 +256,7 @@ WSL, Linux, macOS, and other hosts keep their ordinary topology and must not inh
 ## Safety boundaries
 
 - Every run reads one immutable activation bundle; Git-sourced bundles use exact commit-object bytes, not filterable checkout bytes.
+- Repository-declared validation uses candidate/lock/receipt-bound tools; a discovered bootstrap interpreter cannot satisfy validation evidence, and the shared cache is retained separately from run state.
 - Installed drift never silently changes a live run.
 - Every task has at most one creator-authoritative binding attestation covering immutable task ID, creator/source task, requested role, profile, project/workspace, CWD, and available stable host/environment identity. Role metadata reports are advisory and cannot satisfy, alter, or invalidate that binding.
 - GitHub is the durable trace; local files never override live Git/GitHub evidence.
