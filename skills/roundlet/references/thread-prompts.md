@@ -49,6 +49,8 @@ worktree: <absolute-path>
 worker_anchor: <absolute-path-or-not-applicable>
 last_durable_event: <event-id-or-none>
 owner_instruction: <exact-scope-or-none>
+validation_toolchain_contract: <repository-defined-summary-or-not-applicable>
+validation_cache_root: <absolute-path-or-not-applicable>
 END_ROUNDLET_CONTEXT
 ```
 
@@ -159,6 +161,8 @@ lease_path: <absolute-path>
 current_path: <absolute-path>
 heartbeat: none-before-binding
 backlog_reconciliation: <bounded-summary-and-live-evidence-pointers>
+validation_toolchain_contract: <repository-defined-summary-or-not-applicable>
+validation_cache_root: <absolute-path-or-not-applicable>
 selection_allowed: false
 END_ROUNDLET_ORCHESTRATOR_BOOTSTRAP
 ```
@@ -168,7 +172,7 @@ The Orchestrator must:
 1. Require the envelope to equal the creator binding attestation.
 2. Read `SKILL.md`, all required references, the exact configuration, and manifest only from the named bundle.
 3. Recompute and verify bundle paths/hashes, tree digest, contract ID, source identity, and configured profiles.
-4. Verify target/origin/default branch, clean aligned checkout, `.git/info/exclude`, authority block, owner identity/allowlist, task/heartbeat/Git/GitHub capabilities, and absence of stale run ownership.
+4. Verify target/origin/default branch, clean aligned checkout, `.git/info/exclude`, authority block, owner identity/allowlist, task/heartbeat/Git/GitHub capabilities, absence of stale run ownership, and any explicitly declared validation-toolchain contract/capability. Do not provision the validation cache during activation.
 5. Read back lease/current state and require the same run/contract/task.
 6. Reconcile the complete live backlog and umbrella scheduling notes without selecting an issue.
 7. Record `IDLE` and return exactly:
@@ -230,6 +234,7 @@ END_ROUNDLET_TICK_RESULT
 The Worker:
 
 - mutates only its assigned linked worktree and issue scope;
+- may affect an exact repository-declared shared validation cache only through the candidate's reviewed resolver and explicit cache-root argument; never edits that cache directly or treats it as source;
 - never mutates GitHub;
 - never creates/removes worktrees or deletes branches;
 - rereads the pinned Worker contract, root repository instructions, issue, pull request when present, and exact Git state;
@@ -249,6 +254,10 @@ Apply only when the verified runtime is native Windows:
 - A host process retaining the separate anchor CWD is not an exact-worktree holder.
 
 Do not apply this section to WSL, Linux, macOS, or another host.
+
+### Repository-defined validation toolchain
+
+When `validation_toolchain_contract` is not `not-applicable`, follow the exact operator-guide contract before returning a validation result. Discover a bootstrap interpreter satisfying the target repository's stated version, but use it only to run the candidate resolver. Lazily provision a wholly missing exact cache, verify or reuse a complete receipt, and execute actual validation only through the receipt-bound route. Stop on partial, stale, invalid, or drifted evidence without host-tool fallback or automatic rebuild. The cache root must equal the envelope and remain outside the removable issue worktree when the repository contract requires the authoritative shared cache.
 
 ### Initial implementation prompt
 
@@ -344,6 +353,11 @@ files:
 - <path>: <summary>
 validation:
 - <command-or-check>: <result>
+validation_toolchain_lock: <public-safe-lock-digest-or-not-applicable>
+validation_toolchain_receipt: <VERIFIED|NOT_APPLICABLE|BLOCKED>
+validation_toolchain_platform: <public-safe-platform-identity-or-not-applicable>
+validation_toolchain_cache: <public-safe-lock-and-platform-cache-key-or-not-applicable>
+bootstrap_interpreter: <discovered-command-and-version-or-not-applicable>
 finding_dispositions:
 - <finding-id-or-none>: <fixed|not-applicable|needs-owner> <evidence>
 windows_source_edit_route: <DIRECT_NORMAL_SANDBOX_APPLY_PATCH|NOT_APPLICABLE>
@@ -432,8 +446,10 @@ findings:
   required_change: <bounded-description>
 validation_reviewed:
 - <check>: <result>
+validation_toolchain_lock: <public-safe-lock-digest-or-not-applicable>
+validation_toolchain_receipt: <VERIFIED|NOT_APPLICABLE|INVALID_CONTEXT>
 read_only: <true|false>
 END_SUPERVISOR_RESULT
 ```
 
-`context_status: INVALID_CONTEXT` requires `verdict: NOT_APPLICABLE` and no findings. A valid PASS requires `context_status: VALID`, `verdict: PASS`, no findings, correct SHA/profile/round/mode, and `read_only: true`.
+`context_status: INVALID_CONTEXT` requires `verdict: NOT_APPLICABLE`, no findings, and `validation_toolchain_receipt: INVALID_CONTEXT` when required toolchain evidence is missing or conflicting. A valid PASS requires `context_status: VALID`, `verdict: PASS`, no findings, correct SHA/profile/round/mode, `read_only: true`, and a matching `VERIFIED` receipt whenever the repository contract requires one.
