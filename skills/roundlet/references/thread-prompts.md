@@ -51,6 +51,10 @@ last_durable_event: <event-id-or-none>
 owner_instruction: <exact-scope-or-none>
 validation_toolchain_contract: <repository-defined-summary-or-not-applicable>
 validation_cache_root: <absolute-path-or-not-applicable>
+external_validation_route: <none|toolbox|toolbox+disposable-target>
+external_validation_authority: <allow_external_validation_read_only=true-or-false;allow_external_validation_disposable_target_mutation=true-or-false>
+external_validation_binding: <authoritative-path/blob/repository/commit/action/read-back-summary-or-not-applicable>
+historical_evidence_time: <repository-field-and-captured-value-or-not-applicable>
 END_ROUNDLET_CONTEXT
 ```
 
@@ -163,6 +167,7 @@ heartbeat: none-before-binding
 backlog_reconciliation: <bounded-summary-and-live-evidence-pointers>
 validation_toolchain_contract: <repository-defined-summary-or-not-applicable>
 validation_cache_root: <absolute-path-or-not-applicable>
+external_validation_contracts: <bounded-authoritative-path-and-blob-summaries-or-not-applicable>
 selection_allowed: false
 END_ROUNDLET_ORCHESTRATOR_BOOTSTRAP
 ```
@@ -172,7 +177,7 @@ The Orchestrator must:
 1. Require the envelope to equal the creator binding attestation.
 2. Read `SKILL.md`, all required references, the exact configuration, and manifest only from the named bundle.
 3. Recompute and verify bundle paths/hashes, tree digest, contract ID, source identity, and configured profiles.
-4. Verify target/origin/default branch, clean aligned checkout, `.git/info/exclude`, authority block, owner identity/allowlist, task/heartbeat/Git/GitHub capabilities, absence of stale run ownership, and any explicitly declared validation-toolchain contract/capability. Do not provision the validation cache during activation.
+4. Verify target/origin/default branch, clean aligned checkout, `.git/info/exclude`, authority block, owner identity/allowlist, task/heartbeat/Git/GitHub capabilities, absence of stale run ownership, any explicitly declared validation-toolchain contract/capability, and every root-referenced external-validation contract path/blob identity. Do not provision the validation cache or select an external route during activation.
 5. Read back lease/current state and require the same run/contract/task.
 6. Reconcile the complete live backlog and umbrella scheduling notes without selecting an issue.
 7. Record `IDLE` and return exactly:
@@ -242,6 +247,8 @@ The Worker:
 - uses repository conventions and proportional validation;
 - commits atomically with required commit format;
 - returns structured evidence to the Orchestrator.
+- uses only the populated repository-owned external-validation binding; it never discovers or substitutes a toolbox, target, credential, commit, action, replay time, or authority value;
+- performs no disposable-target mutation. The Orchestrator remains the sole GitHub mutator and independently applies any authorized external mutation/read-back transition.
 
 ### Native Windows Worker topology and mutation route
 
@@ -258,6 +265,12 @@ Do not apply this section to WSL, Linux, macOS, or another host.
 ### Repository-defined validation toolchain
 
 When `validation_toolchain_contract` is not `not-applicable`, follow the exact operator-guide contract before returning a validation result. Discover a bootstrap interpreter satisfying the target repository's stated version, but use it only to run the candidate resolver. Lazily provision a wholly missing exact cache, verify or reuse a complete receipt, and execute actual validation only through the receipt-bound route. Stop on partial, stale, invalid, or drifted evidence without host-tool fallback or automatic rebuild. The cache root must equal the envelope and remain outside the removable issue worktree when the repository contract requires the authoritative shared cache.
+
+### Repository-owned external validation
+
+When `external_validation_route` is not `none`, reread the exact authoritative path/blob binding in the envelope and the selected leaf before acting. Read-only toolbox work requires the read-only authority switch. Never perform a disposable-target mutation; return the exact requested action and evidence to the Orchestrator, which owns mutation and semantic read-back. Do not discover, print, persist, relay, or automate credentials.
+
+For a historical replay, use only the captured value in `historical_evidence_time` and the immutable evidence bundle. Passing current wall-clock time is `CONTEXT_MISMATCH`. A missing, floating, stale, conflicting, out-of-allowlist, or partially read-back binding returns `BLOCKED` without substitution.
 
 ### Initial implementation prompt
 
@@ -358,6 +371,10 @@ validation_toolchain_receipt: <VERIFIED|NOT_APPLICABLE|BLOCKED>
 validation_toolchain_platform: <public-safe-platform-identity-or-not-applicable>
 validation_toolchain_cache: <public-safe-lock-and-platform-cache-key-or-not-applicable>
 bootstrap_interpreter: <discovered-command-and-version-or-not-applicable>
+external_validation_route: <none|toolbox|toolbox+disposable-target>
+external_validation_binding: <public-safe-exact-identities-or-not-applicable>
+historical_evidence_time: <repository-field-and-captured-value-or-not-applicable>
+external_validation_result: <VERIFIED|NOT_APPLICABLE|BLOCKED>
 finding_dispositions:
 - <finding-id-or-none>: <fixed|not-applicable|needs-owner> <evidence>
 windows_source_edit_route: <DIRECT_NORMAL_SANDBOX_APPLY_PATCH|NOT_APPLICABLE>
@@ -448,8 +465,12 @@ validation_reviewed:
 - <check>: <result>
 validation_toolchain_lock: <public-safe-lock-digest-or-not-applicable>
 validation_toolchain_receipt: <VERIFIED|NOT_APPLICABLE|INVALID_CONTEXT>
+external_validation_route: <none|toolbox|toolbox+disposable-target>
+external_validation_binding: <public-safe-exact-identities-or-not-applicable>
+historical_evidence_time: <repository-field-and-captured-value-or-not-applicable>
+external_validation_reviewed: <VERIFIED|NOT_APPLICABLE|INVALID_CONTEXT>
 read_only: <true|false>
 END_SUPERVISOR_RESULT
 ```
 
-`context_status: INVALID_CONTEXT` requires `verdict: NOT_APPLICABLE`, no findings, and `validation_toolchain_receipt: INVALID_CONTEXT` when required toolchain evidence is missing or conflicting. A valid PASS requires `context_status: VALID`, `verdict: PASS`, no findings, correct SHA/profile/round/mode, `read_only: true`, and a matching `VERIFIED` receipt whenever the repository contract requires one.
+`context_status: INVALID_CONTEXT` requires `verdict: NOT_APPLICABLE`, no findings, and `validation_toolchain_receipt: INVALID_CONTEXT` or `external_validation_reviewed: INVALID_CONTEXT` when its required evidence is missing or conflicting. A valid PASS requires `context_status: VALID`, `verdict: PASS`, no findings, correct SHA/profile/round/mode, `read_only: true`, a matching `VERIFIED` receipt whenever the repository toolchain contract requires one, and matching external-validation identity/evidence-time/read-back evidence whenever the selected route is not `none`.

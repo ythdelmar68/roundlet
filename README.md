@@ -28,6 +28,7 @@ flowchart LR
     W --> G["Issue branch and worktree"]
     S --> G
     R --> GH["GitHub issue and pull request trace"]
+    R --> EV["Repository-owned external validation"]
 ```
 
 The outer loop continuously reconciles and schedules:
@@ -94,6 +95,7 @@ Read the installed `SKILL.md` and all references. Validate:
 - heartbeat interval arrays and full-reconciliation bound;
 - review limits and merge method;
 - owner allowlist;
+- generic external-validation routes and the two independent Boolean authority switches;
 - links and required file set;
 - absence of executable orchestration artifacts.
 
@@ -118,6 +120,8 @@ Copy the authority template from [`repository-authority.md`](skills/roundlet/ref
 
 Authority switches can permit:
 
+- repository-owned read-only external validation;
+- exact allowlisted mutation in a repository-owned disposable target;
 - ready conversion;
 - merge;
 - leaf closure;
@@ -156,7 +160,7 @@ Umbrellas are scheduling context only:
 - express dependencies only as exact leaf or standalone issue numbers;
 - keep the umbrella open after a wave completes.
 
-A runnable leaf provides live scope, boundaries, acceptance intent, and dependency evidence. Owner-only security, destructive, product-scope, release, or publication decisions remain explicit.
+A runnable leaf provides live scope, boundaries, acceptance intent, and dependency evidence. When authoritative root instructions declare external validation, it also provides exactly one generic route: `none`, `toolbox`, or `toolbox+disposable-target`; without such a contract Roundlet binds `none`. Concrete toolbox/target repositories, exact commits, actions, rollback, evidence time, and read-back remain in authoritative target-repository instructions or a referenced repository-owned skill; they never become Roundlet-specific core policy. Owner-only security, destructive, product-scope, release, or publication decisions remain explicit.
 
 ## Activation
 
@@ -166,7 +170,7 @@ The Launcher:
 
 1. verifies its immutable profile and writable checkout binding;
 2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities;
-3. discovers and checks any explicitly declared repository validation-toolchain capability without provisioning it;
+3. discovers and checks any explicitly declared repository validation-toolchain capability and external-validation contract path/blob identities without provisioning or invoking either;
 4. reconciles every old local/remote Roundlet resource and fails closed on stale ownership;
 5. scans the complete backlog and Canonical scheduling notes without selecting an issue;
 6. reserves a new run ID;
@@ -204,6 +208,8 @@ Selection remains read-only while provisioning. The Orchestrator publishes and r
 - Rounds 1–3 are COMPLETE if reached; any valid PASS ends review.
 - Rounds 4–10 are CONVERGING.
 - Invalid Supervisor attempts do not consume the round.
+- Pause, resume, same-task continuation, authorized recovery, and satisfaction of an already-declared standing validation route preserve the same epoch and accepted-round count when scope, acceptance criteria, immutable contract, and candidate review basis are unchanged.
+- Only a material owner scope/acceptance change or main integration starts a new COMPLETE epoch.
 - Round-10 findings get one final Worker repair without round 11 or a claimed PASS.
 - Ready conversion and merge require live authority, correct exact SHA, successful required checks, mergeability, correct closing reference, and configured merge method `merge`.
 
@@ -212,6 +218,12 @@ Selection remains read-only while provisioning. The Orchestrator publishes and r
 If root instructions explicitly name a validation-toolchain contract, Roundlet binds affected validation to it. On first required validation, the Worker uses the candidate resolver and lock with the authoritative checkout's shared `.roundlet/validation-tools/` cache root. A valid receipt is verified and reused; a wholly absent exact cache is provisioned automatically. Partial, stale, invalid, moved, or drifted evidence blocks without fallback or automatic rebuild.
 
 The host may discover a suitable bootstrap interpreter, but it only invokes the resolver. Actual build, test, packaging, and smoke commands run through the receipt-bound environment. Repositories without an explicit contract keep ordinary proportional validation.
+
+### Repository-owned external validation
+
+When root instructions declare it, Roundlet resolves a selected leaf's generic route against exact authoritative instruction/skill blobs and repository-owned identities. Read-only execution requires `allow_external_validation_read_only: true`; a disposable-target mutation also requires `allow_external_validation_disposable_target_mutation: true`, an exact action allowlist, rollback, and semantic read-back. Matching standing authority avoids repetitive per-attempt owner prompts. Credential failure, identity conflict, an out-of-scope action, or partial mutation still stops for owner input.
+
+Historical replay always uses the evidence bundle's repository-declared capture time. It never substitutes the replay execution wall clock. Public trace contains only the allowed exact identities, digests, typed result, and read-back projection.
 
 ### Cleanup
 
@@ -265,6 +277,7 @@ WSL, Linux, macOS, and other hosts keep their ordinary topology and must not inh
 - Only the Orchestrator mutates GitHub.
 - Supervisors are fresh and read-only.
 - Merge, closure, branch deletion, and worktree removal require live authority.
+- External validation requires exact repository-owned route/identity/action/evidence-time bindings and the matching independent authority switch; no route authorizes an unknown or production target.
 - Cleanup never destroys unique work.
 - Release, tag, publish, version bump, repository visibility change, force-push, reset, rebase, and runtime self-promotion remain out of scope.
 
