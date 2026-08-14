@@ -48,6 +48,8 @@ branch: <exact-branch>
 worktree: <absolute-path>
 worker_anchor: <absolute-path-or-not-applicable>
 last_durable_event: <event-id-or-none>
+last_supervisor_result_event: <verified-event-id-or-none>
+last_worker_repair_handoff_event: <verified-event-id-or-none>
 owner_instruction: <exact-scope-or-none>
 validation_toolchain_contract: <repository-defined-summary-or-not-applicable>
 validation_cache_root: <absolute-path-or-not-applicable>
@@ -136,6 +138,8 @@ Search both the leaf issue and the pull request's top-level Conversation, when p
 ```text
 ROUNDLET_TRACE_READBACK event=<stable-event-id> binding=<ISSUE|PR> binding_number=<number> comment_surface=<ISSUE|PR_CONVERSATION|NONE> comment_number=<number-or-none> status=VERIFIED
 ```
+
+Do not advance review state after a missing or ambiguous trace acknowledgement. Keep the same epoch, round, attempt, and candidate, perform the idempotent cross-surface lookup, and retry only the canonical write/read-back. This pending trace state is not `NEEDS_OWNER_INPUT` unless separate live evidence proves an existing owner-input class.
 
 Before a pull request exists, selection, scope/owner decisions, the initial Worker handoff, and draft-PR creation target the issue. After it exists, Worker repair, candidate push/read-back, validation, Supervisor availability/results, and terminal review target the PR Conversation. Merge gates/results bind to PR metadata, with accompanying trace in its Conversation. Leaf closure, cleanup, `STOPPED`, `NEEDS_OWNER_INPUT`, and abort decisions return to the issue. Preserve misrouted historical comments; recovery may add one bounded pointer on the current canonical surface but never edits, deletes, moves, or bulk-reposts them.
 
@@ -230,6 +234,8 @@ candidate_sha: <full-sha-or-none>
 heartbeat_interval: <minutes-or-paused>
 blocking_condition: <value-or-none>
 last_durable_event: <event-id-or-none>
+last_supervisor_result_event: <verified-event-id-or-none>
+last_worker_repair_handoff_event: <verified-event-id-or-none>
 next_safe_action: <bounded-description>
 END_ROUNDLET_TICK_RESULT
 ```
@@ -474,3 +480,5 @@ END_SUPERVISOR_RESULT
 ```
 
 `context_status: INVALID_CONTEXT` requires `verdict: NOT_APPLICABLE`, no findings, and `validation_toolchain_receipt: INVALID_CONTEXT` or `external_validation_reviewed: INVALID_CONTEXT` when its required evidence is missing or conflicting. A valid PASS requires `context_status: VALID`, `verdict: PASS`, no findings, correct SHA/profile/round/mode, `read_only: true`, a matching `VERIFIED` receipt whenever the repository toolchain contract requires one, and matching external-validation identity/evidence-time/read-back evidence whenever the selected route is not `none`.
+
+A schema-valid PASS or FINDINGS is an accepted formal-round result. The Orchestrator publishes and reads back its event before any state change. FINDINGS returns to the same Worker; only after repair, exact candidate push/read-back, and a verified repair-handoff event does the Orchestrator increment the formal round and reset `supervisor_attempt` to 1. Invalid or unavailable attempts alone may increment `supervisor_attempt` while epoch, round, mode, and candidate remain fixed.
