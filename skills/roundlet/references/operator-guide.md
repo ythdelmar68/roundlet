@@ -182,7 +182,7 @@ The lease has no expiry:
 }
 ```
 
-`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, repository validation-toolchain summary/cache root and last public-safe lock/receipt status when applicable, selected external-validation route plus authoritative instruction/skill/target/action identities and historical evidence-time binding when applicable, review epoch/round/mode/attempt/profile, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never store the advisory role report, credential, raw external payload, or raw receipt. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
+`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, repository validation-toolchain summary/cache root and last public-safe lock/receipt status when applicable, selected external-validation route plus authoritative instruction/skill/target/action identities and historical evidence-time binding when applicable, review epoch/round/mode/attempt/profile, last verified Supervisor-result event, last verified Worker-repair-handoff event, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never store the advisory role report, credential, raw external payload, or raw receipt. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
 
 Before each tick or mutation, reconcile both files with the bundle, GitHub, Git, tasks, and heartbeat. Prefer live authoritative evidence. Conflicts enter `NEEDS_OWNER_INPUT` with reason `STATE_RECONCILIATION_CONFLICT`; never guess or overwrite them.
 
@@ -363,6 +363,17 @@ For each round:
 5. Independently verify context, read-only behavior, and result identity.
 6. If valid, publish it to the PR Conversation and read it back there, archive the Supervisor, and follow PASS or FINDINGS.
 7. If invalid/failed/cancelled/inaccessible/malformed/wrong-context/wrong-SHA, archive it, publish only bounded availability evidence to the PR Conversation, read it back there, and advance to the next profile. It does not consume the review round or become a finding/PASS.
+
+Apply this transition table mechanically:
+
+| Verified result | Candidate | Formal round | Attempt | Required durable transition |
+| --- | --- | --- | --- | --- |
+| Invalid or unavailable attempt | Unchanged | Unchanged | Next configured position | Publish/read back bounded availability; never create findings or consume the round. |
+| Valid PASS | Unchanged | Consumed and terminal | Accepted position | Publish/read back the Supervisor result, then enter terminal review gates. |
+| Valid FINDINGS before the limit | Repaired by the same Worker | Consumed; next round after repair | Reset to 1 | Publish/read back the Supervisor result, repair/push/read back the new candidate, publish/read back the repair handoff, then advance. |
+| Valid FINDINGS at the limit | Final repair by the same Worker | Consumed and terminal | No later attempt | Publish/read back the result and final-repair handoff, record `REVIEW_LIMIT_REACHED_WORKER_FINALIZED`, and dispatch no later Supervisor. |
+
+The current-state tuple may advance only when every event receipt required by its row is verified on the canonical surface. A missing or ambiguous trace receipt keeps the transition pending and uses the existing idempotent cross-surface lookup/retry. It is not owner input by itself. Candidate movement after a valid result always proves a new formal review basis in the same epoch and resets the next round to attempt 1; it can never select a fallback profile in the prior round.
 
 Rounds 1–3 are COMPLETE when reached; any valid PASS ends review. Rounds 4–10 are CONVERGING and focus on prior findings/delta while allowing new blocking regressions or missing evidence.
 

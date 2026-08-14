@@ -208,6 +208,8 @@ Selection remains read-only while provisioning. The Orchestrator publishes and r
 - Rounds 1–3 are COMPLETE if reached; any valid PASS ends review.
 - Rounds 4–10 are CONVERGING.
 - Invalid Supervisor attempts do not consume the round.
+- A valid FINDINGS consumes its formal round. After the same Worker repairs and the candidate changes, review continues in the same epoch at the next round's attempt 1; a changed candidate is never a fallback attempt in the prior round.
+- Supervisor-result and Worker-repair-handoff traces must be published and read back on the canonical surface before review state advances. A retryable missing trace remains pending rather than becoming owner input.
 - Pause, resume, same-task continuation, authorized recovery, and satisfaction of an already-declared standing validation route preserve the same epoch and accepted-round count when scope, acceptance criteria, immutable contract, and candidate review basis are unchanged.
 - Only a material owner scope/acceptance change or main integration starts a new COMPLETE epoch.
 - Round-10 findings get one final Worker repair without round 11 or a claimed PASS.
