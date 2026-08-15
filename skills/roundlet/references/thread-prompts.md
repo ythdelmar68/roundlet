@@ -56,6 +56,9 @@ validation_cache_root: <absolute-path-or-not-applicable>
 external_validation_route: <none|toolbox|toolbox+disposable-target>
 external_validation_authority: <allow_external_validation_read_only=true-or-false;allow_external_validation_disposable_target_mutation=true-or-false>
 external_validation_binding: <authoritative-path/blob/repository/commit/action/read-back-summary-or-not-applicable>
+external_validation_executor: <repository-owned-contract-version/path/blob/entrypoint/identity-or-not-applicable>
+external_validation_state: <NOT_APPLICABLE|UNPREPARED|PREFLIGHT_READY|ARMED|EXECUTED|VERIFIED|STALE>
+external_validation_plan: <public-safe-candidate/case/plan/evidence-time/consumption-summary-or-not-applicable>
 historical_evidence_time: <repository-field-and-captured-value-or-not-applicable>
 END_ROUNDLET_CONTEXT
 ```
@@ -140,6 +143,8 @@ ROUNDLET_TRACE_READBACK event=<stable-event-id> binding=<ISSUE|PR> binding_numbe
 ```
 
 Do not advance review state after a missing or ambiguous trace acknowledgement. Keep the same epoch, round, attempt, and candidate, perform the idempotent cross-surface lookup, and retry only the canonical write/read-back. This pending trace state is not `NEEDS_OWNER_INPUT` unless separate live evidence proves an existing owner-input class.
+
+For external validation, publish `VALIDATION_READY` only after the exact repository-owned executor returns `PREFLIGHT_READY` for one unconsumed candidate-bound plan with zero external action. Publish `VALIDATION_RESULT` only after that same plan reaches `VERIFIED`, or one durable terminal blocked result after a genuinely armed invocation. Keep runner construction, import, argument, schema, path, and external-action-free plan defects local; they must not produce repeated LIVE comments. Prefer a structured GitHub connector. A CLI fallback uses an exact body file and semantic marker/field read-back, never shell-interpolated Markdown.
 
 Before a pull request exists, selection, scope/owner decisions, the initial Worker handoff, and draft-PR creation target the issue. After it exists, Worker repair, candidate push/read-back, validation, Supervisor availability/results, and terminal review target the PR Conversation. Merge gates/results bind to PR metadata, with accompanying trace in its Conversation. Leaf closure, cleanup, `STOPPED`, `NEEDS_OWNER_INPUT`, and abort decisions return to the issue. Preserve misrouted historical comments; recovery may add one bounded pointer on the current canonical surface but never edits, deletes, moves, or bulk-reposts them.
 
@@ -254,6 +259,7 @@ The Worker:
 - commits atomically with required commit format;
 - returns structured evidence to the Orchestrator.
 - uses only the populated repository-owned external-validation binding; it never discovers or substitutes a toolbox, target, credential, commit, action, replay time, or authority value;
+- invokes only the populated repository-owned executor entrypoint; it never creates a candidate-specific wrapper, inspects private product attributes, rewrites a plan, or substitutes a second validate/execute path;
 - performs no disposable-target mutation. The Orchestrator remains the sole GitHub mutator and independently applies any authorized external mutation/read-back transition.
 
 ### Native Windows Worker topology and mutation route
@@ -275,6 +281,8 @@ When `validation_toolchain_contract` is not `not-applicable`, follow the exact o
 ### Repository-owned external validation
 
 When `external_validation_route` is not `none`, reread the exact authoritative path/blob binding in the envelope and the selected leaf before acting. Read-only toolbox work requires the read-only authority switch. Never perform a disposable-target mutation; return the exact requested action and evidence to the Orchestrator, which owns mutation and semantic read-back. Do not discover, print, persist, relay, or automate credentials.
+
+Require the exact `external_validation_executor` identity. Dry validation and execution must use the same repository-owned entrypoint and immutable plan. Return `BLOCKED` without external action when that contract is missing, malformed, stale, or internally inconsistent; do not assemble a replacement runner. Candidate or component movement returns `STALE` and requires a wholly fresh binding under unchanged standing authority. These dispositions consume no Supervisor attempt, review round, or owner approval.
 
 For a historical replay, use only the captured value in `historical_evidence_time` and the immutable evidence bundle. Passing current wall-clock time is `CONTEXT_MISMATCH`. A missing, floating, stale, conflicting, out-of-allowlist, or partially read-back binding returns `BLOCKED` without substitution.
 
@@ -473,12 +481,13 @@ validation_toolchain_lock: <public-safe-lock-digest-or-not-applicable>
 validation_toolchain_receipt: <VERIFIED|NOT_APPLICABLE|INVALID_CONTEXT>
 external_validation_route: <none|toolbox|toolbox+disposable-target>
 external_validation_binding: <public-safe-exact-identities-or-not-applicable>
+external_validation_executor_receipt: <VERIFIED|NOT_APPLICABLE|INVALID_CONTEXT>
 historical_evidence_time: <repository-field-and-captured-value-or-not-applicable>
 external_validation_reviewed: <VERIFIED|NOT_APPLICABLE|INVALID_CONTEXT>
 read_only: <true|false>
 END_SUPERVISOR_RESULT
 ```
 
-`context_status: INVALID_CONTEXT` requires `verdict: NOT_APPLICABLE`, no findings, and `validation_toolchain_receipt: INVALID_CONTEXT` or `external_validation_reviewed: INVALID_CONTEXT` when its required evidence is missing or conflicting. A valid PASS requires `context_status: VALID`, `verdict: PASS`, no findings, correct SHA/profile/round/mode, `read_only: true`, a matching `VERIFIED` receipt whenever the repository toolchain contract requires one, and matching external-validation identity/evidence-time/read-back evidence whenever the selected route is not `none`.
+`context_status: INVALID_CONTEXT` requires `verdict: NOT_APPLICABLE`, no findings, and `validation_toolchain_receipt: INVALID_CONTEXT`, `external_validation_executor_receipt: INVALID_CONTEXT`, or `external_validation_reviewed: INVALID_CONTEXT` when its required evidence is missing or conflicting. A valid PASS requires `context_status: VALID`, `verdict: PASS`, no findings, correct SHA/profile/round/mode, `read_only: true`, a matching `VERIFIED` receipt whenever the repository toolchain contract requires one, and matching executor/identity/evidence-time/read-back evidence whenever the selected external-validation route is not `none`.
 
 A schema-valid PASS or FINDINGS is an accepted formal-round result. The Orchestrator publishes and reads back its event before any state change. FINDINGS returns to the same Worker; only after repair, exact candidate push/read-back, and a verified repair-handoff event does the Orchestrator increment the formal round and reset `supervisor_attempt` to 1. Invalid or unavailable attempts alone may increment `supervisor_attempt` while epoch, round, mode, and candidate remain fixed.

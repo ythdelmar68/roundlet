@@ -112,13 +112,30 @@ Each actionable leaf declares exactly one route:
 Before provisioning a selected leaf:
 
 1. Read root `AGENTS.md` from authoritative `origin/main` and resolve every referenced operations contract or repository-owned skill used by the route. Bind each path and exact Git blob identity; a candidate-authored copy may narrow but never widen authority.
-2. Read the live leaf and canonical scheduling context. Bind the route, gate/evidence class, base, future candidate-binding rule, concrete public repositories, reviewed source commits, target baseline commit, action allowlist, rollback/kill-switch procedure, semantic read-back, evidence-time field, and public-safe projection. Reject floating refs or conflicting declarations.
+2. Read the live leaf and canonical scheduling context. Bind the route, gate/evidence class, base, future candidate-binding rule, concrete public repositories, reviewed source commits, one repository-owned executor contract and exact entrypoint identity, target baseline commit, action allowlist, rollback/kill-switch procedure, semantic read-back, evidence-time field, and public-safe projection. Reject floating refs or conflicting declarations.
 3. For any external observation, require `allow_external_validation_read_only: true`. For a target mutation, also require `allow_external_validation_disposable_target_mutation: true` and prove that the exact operation is allowlisted for the exact disposable target. Neither switch authorizes mutation of the repository under development.
 4. Record a bounded selection binding in advisory state, then include its allowed projection in the ordinary public-safe selection trace only after branch/worktree/Worker provisioning succeeds. Credentials, raw payloads, private paths, logs, and owner-private reasoning remain excluded.
 
 When these bindings and standing switches match, proceed without requesting a new owner approval for each attempt, commit, or replay. Enter `NEEDS_OWNER_INPUT` only for confirmed credential/login failure, repository or commit identity conflict, an operation outside the authoritative allowlist, unavailable required rollback, or observed/ambiguous partial mutation/read-back. Missing authority enters `REPOSITORY_AUTHORITY_REQUIRED`. Never substitute another toolbox, target, credential, action, or branch head.
 
 Immediately before each invocation, resolve and bind the current full candidate SHA plus the already-selected toolbox and target commits. Candidate movement invalidates prior gate evidence and requires a new evidence run under the same standing route; it does not itself request owner approval or start a review epoch.
+
+### Generic executor lifecycle
+
+Roundlet never constructs a repository-specific runner or understands its product profile, provider, Recorder, comparator, storage, or receipt schema. The repository-owned contract supplies one exact executor whose dry validation and live execution share the same parser, entrypoint, plan, component identities, candidate, case, evidence time, and read-back path.
+
+Track only these generic states:
+
+1. `UNPREPARED`: no executable binding exists; external action count is zero.
+2. `PREFLIGHT_READY`: the exact executor has returned a typed, public-safe, unconsumed readiness receipt for the current candidate with external action and mutation counts zero.
+3. `ARMED`: the readiness trace is semantically read back and the same one-shot plan is eligible for one invocation.
+4. `EXECUTED`: that plan was consumed once and returned one typed result; never retry or substitute unless the repository contract itself returned a bounded, still-unconsumed disposition.
+5. `VERIFIED`: repository-defined projection, retention, and semantic read-back all match the original plan.
+6. `STALE`: candidate, executor, toolbox, target, case, component, evidence time, plan, or authority identity moved. Preserve prior evidence and build a wholly fresh binding; never stitch it to a new candidate.
+
+An external-action-free preflight defect stays in implementation and returns to the same Worker or repository-owned toolbox correction. It is not `NEEDS_OWNER_INPUT`, does not consume a Supervisor attempt or review round, and does not publish `VALIDATION_READY` or repeated LIVE trace. Publish one readiness event only at `PREFLIGHT_READY`, and one result event only after `VERIFIED` (or one durable terminal blocked result after a genuinely armed invocation). Use a structured connector when available; a CLI fallback must use an exact body file, never shell-interpolated Markdown, and must read the event marker and required fields back semantically.
+
+Repository standing authority and host command execution are separate. A denial before the selected command reaches GitHub, a provider, or a target is an execution-routing result, not proof that repository authority or credentials are missing. Retry only the same exact operation through an already permitted low-privilege host boundary; never bypass a platform approval or broaden the command.
 
 For historical replay, read the immutable capture time from the evidence bundle using the repository-declared field and pass that value to the repository comparator. Wall-clock execution time is valid only for a contract that explicitly describes a current live decision; it must never replace historical evidence time. Bind the field name, captured value, bundle digest, and comparison result in private state, and publish only their allowed public-safe projection.
 
@@ -346,7 +363,7 @@ Use stable event IDs. Before writing, search both the leaf issue and the pull re
 
 Never edit, delete, move, or bulk-repost a historical trace to hide or repair a routing error. Preserve the original comment. When recovery needs to make the durable sequence clear, add at most one bounded pointer on the current canonical surface naming the prior event marker and URL without copying raw artifacts or the full prior comment.
 
-Record selection/ranking, Worker handoffs, draft PR creation, invalid Supervisor availability attempts, valid Supervisor results, repairs, terminal review, owner/authority/abort decisions, merge, leaf closure, and cleanup. Summarize files, tests, findings/dispositions, SHAs, and risks. Never publish hidden reasoning, credentials, private artifacts, raw task transcripts, or unbounded logs.
+Record selection/ranking, Worker handoffs, draft PR creation, verified external-validation readiness/result, invalid Supervisor availability attempts, valid Supervisor results, repairs, terminal review, owner/authority/abort decisions, merge, leaf closure, and cleanup. Keep provider-free executor construction and preflight corrections local unless they change the candidate or become one durable blocker. Summarize files, tests, findings/dispositions, SHAs, and risks. Never publish hidden reasoning, credentials, private artifacts, raw task transcripts, or unbounded logs.
 
 ## Review epochs and rounds
 
