@@ -225,6 +225,8 @@ The host may discover a suitable bootstrap interpreter, but it only invokes the 
 
 When root instructions declare it, Roundlet resolves a selected leaf's generic route against exact authoritative instruction/skill blobs and repository-owned identities. Read-only execution requires `allow_external_validation_read_only: true`; a disposable-target mutation also requires `allow_external_validation_disposable_target_mutation: true`, an exact action allowlist, rollback, and semantic read-back. Matching standing authority avoids repetitive per-attempt owner prompts. Credential failure, identity conflict, an out-of-scope action, or partial mutation still stops for owner input.
 
+The selected repository also supplies one exact executor contract. Roundlet treats its command, schemas, product adapters, recording, retention, and receipts as opaque; it never builds a candidate-specific runner. The generic lifecycle is `UNPREPARED -> PREFLIGHT_READY -> ARMED -> EXECUTED -> VERIFIED`, with `STALE` on any candidate or component movement. External-action-free preflight defects return to implementation without a LIVE trace, external dispatch, review-round change, or owner prompt. One readiness trace is published only when the plan is actually executable, and one result trace only after semantic verification.
+
 Historical replay always uses the evidence bundle's repository-declared capture time. It never substitutes the replay execution wall clock. Public trace contains only the allowed exact identities, digests, typed result, and read-back projection.
 
 ### Cleanup
