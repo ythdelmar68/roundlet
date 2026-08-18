@@ -58,6 +58,7 @@ GitHub issues and pull requests are durable scheduling/audit state. Local `.roun
 - Git and an authenticated GitHub route with issue, pull request, branch, review/check, and merge access.
 - Every exact model and reasoning effort in [`roundlet-config.json`](skills/roundlet/references/roundlet-config.json).
 - The creator's ability to read immutable task identity, creator/source task, configured model/effort, workspace/project, canonical CWD, and available stable host/environment identity independently of role output, then transport the resulting complete attestation into a top-level Launcher prompt. The Launcher role itself does not need an immutable self-metadata route.
+- The creator's ability to resolve the reviewed installed Roundlet skill to one canonical absolute root and place it in the populated Launcher prompt. The Launcher reads only that path and does not depend on the skill appearing in its role-side catalog.
 - A clean authoritative local checkout for the target repository.
 - When the target explicitly declares a validation-toolchain contract, any system-discoverable bootstrap interpreter satisfying that repository's stated version. It invokes only the repository resolver and is not build/test evidence.
 
@@ -164,9 +165,9 @@ A runnable leaf provides live scope, boundaries, acceptance intent, and dependen
 
 ## Activation
 
-Open [`launcher.md`](skills/roundlet/references/launcher.md#new-activation), fill only its placeholders, and create one Launcher directly against the authoritative checkout using the requested Launcher model/effort.
+Open [`launcher.md`](skills/roundlet/references/launcher.md#new-activation), resolve the reviewed installed skill to one canonical absolute root, fill only the explicit placeholders, and create one Launcher directly against the authoritative checkout using the requested Launcher model/effort.
 
-The Launcher receives one complete creator-verified binding attestation in its populated prompt, validates it without role-side immutable self-metadata discovery, then:
+The Launcher receives one complete creator-verified binding attestation and the exact installed-skill root in its populated prompt, validates both without role-side immutable self-metadata or skill-catalog discovery, then:
 
 1. validates the creator-attested immutable profile and writable-checkout binding;
 2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities;

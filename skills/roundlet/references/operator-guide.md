@@ -61,6 +61,7 @@ Before activation, prove:
 - GitHub identity, repository identity, issues, comments, formal issue relationships, branches, pull requests, reviews, checks, mergeability, and merge operations can be inspected;
 - the Orchestrator can perform repository-authorized GitHub mutations;
 - the contract file set can be materialized byte-for-byte to a content-addressed bundle and read back: from verified commit objects for `git`, or from the resolved installed directory for `installed-tree`;
+- the external creator can resolve the installed Roundlet skill used for new activation to one canonical absolute root and place it in the populated Launcher prompt; the Launcher can read the exact required file set from that root without a role-side skill-catalog entry, alternative-root scan, or substitution;
 - root `AGENTS.md` on `origin/main` contains exactly one valid Roundlet authority block;
 - when root instructions explicitly declare repository-owned external validation, every referenced contract resolves to one exact authoritative path and byte identity and every declared leaf route uses only `none`, `toolbox`, or `toolbox+disposable-target`;
 - the configured merge method is supported;

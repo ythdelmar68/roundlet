@@ -18,16 +18,17 @@ Return any role-visible metadata as a non-authoritative ROUNDLET_ROLE_METADATA_R
 END_ROUNDLET_ROLE_METADATA_REPORT_REQUEST
 ```
 
-Treat any response as a non-authoritative role report. Independently read the creator-side immutable task record and build the exact `CREATOR_TASK_BINDING_ATTESTATION` from `thread-prompts.md`, including this creator task, requested Launcher role, task ID, model, effort, writable project/workspace, canonical CWD, and available stable host/environment identity. A missing, short, noncanonical, or task-ID-free report does not block matching creator read-back. On an explicit contradiction, perform one bounded creator-side re-read; archive and stop only when authoritative evidence is missing, stale, malformed, mismatched, or still conflicting. Only after the attestation succeeds, replace the placeholders below, including `<LAUNCHER_TASK_ID>`, copy the complete attestation into the fixed block, and send this entire populated activation prompt to the same task:
+Treat any response as a non-authoritative role report. Independently read the creator-side immutable task record and build the exact `CREATOR_TASK_BINDING_ATTESTATION` from `thread-prompts.md`, including this creator task, requested Launcher role, task ID, model, effort, writable project/workspace, canonical CWD, and available stable host/environment identity. A missing, short, noncanonical, or task-ID-free report does not block matching creator read-back. On an explicit contradiction, perform one bounded creator-side re-read; archive and stop only when authoritative evidence is missing, stale, malformed, mismatched, or still conflicting. Independently resolve the installed Roundlet skill used to read this prompt to one canonical absolute root and verify its required file set. Only after both checks succeed, replace the placeholders below, including `<LAUNCHER_TASK_ID>` and `<INSTALLED_SKILL_ROOT>`, copy the complete attestation into the fixed block, and send this entire populated activation prompt to the same task:
 
 ```text
-Use $roundlet as a short-lived Launcher for exactly one completely fresh Roundlet run.
+Act as a short-lived Launcher for exactly one completely fresh Roundlet run, using only the creator-supplied installed Roundlet skill root below.
 
 Target:
 - GitHub repository: <OWNER/REPOSITORY>
 - Authoritative local checkout: <ABSOLUTE_PATH>
+- Installed Roundlet skill root: <INSTALLED_SKILL_ROOT>
 - Expected primary branch: main
-- Roundlet configuration: use references/roundlet-config.json within the installed $roundlet skill without changing, defaulting, or overriding any value
+- Roundlet configuration: use `references/roundlet-config.json` beneath the installed skill root above without changing, defaulting, or overriding any value
 - Expected Launcher task ID: <LAUNCHER_TASK_ID>
 - Expected Launcher creator/source task ID: <CREATOR_TASK_ID>
 - Expected Launcher model/effort: <MODEL> / <EFFORT>
@@ -47,7 +48,7 @@ stable_environment_identity: <STABLE_ENVIRONMENT_IDENTITY_OR_UNAVAILABLE>
 binding_source: creator-immutable-readback
 END_CREATOR_TASK_BINDING_ATTESTATION
 
-Do not recover, resume, reuse, migrate, adopt, or replace any former run or Orchestrator. Read the complete installed Roundlet SKILL.md and every required reference before acting. Do not select or implement an issue in this Launcher.
+Do not recover, resume, reuse, migrate, adopt, or replace any former run or Orchestrator. Read `SKILL.md` and every required reference only from the exact installed skill root above before acting. Do not invoke or require a role-side skill catalog. Do not select or implement an issue in this Launcher.
 
 Before creating any run resource, fail closed unless every item below is freshly proven:
 
@@ -57,6 +58,7 @@ Before creating any run resource, fail closed unless every item below is freshly
    - Require the attested canonical CWD and writable local-project workspace to equal the authoritative checkout.
    - Missing, duplicate, malformed, stale, or mismatched attestation fields fail closed before any repository, GitHub, Git, lease, contract, Orchestrator, or heartbeat action.
    - The creator binding attestation is the authority. A role metadata report is never sufficient and cannot invalidate matching creator evidence; a projectless task, unrelated project, read-only route, or removable linked worktree in creator read-back fails closed.
+   - Before any repository, GitHub, or Git access, canonicalize the literal installed-skill-root value above, require it to be absolute and unchanged, read only its `SKILL.md` to enumerate the required installed file set, and require every named file present strictly beneath that root. A missing, relative, noncanonical, incomplete, escaped, or ambiguous root fails closed here. Do not consult the role-side skill catalog or scan another path.
 
 2. Repository and Git identity
    - Fetch and resolve the exact GitHub repository, origin URL, default branch, local main, origin/main, and HEAD.
@@ -75,12 +77,13 @@ Before creating any run resource, fail closed unless every item below is freshly
    - If any live, stale, conflicting, or unreconciled Roundlet ownership remains, stop with `STALE_OR_ACTIVE_RUN_REQUIRES_OWNER`. Never expire, steal, replace, overwrite, or reuse it.
 
 4. Installed contract and configuration
-   - Resolve the exact installed skill root and required file set.
+   - Accept only the one creator-supplied installed skill root above. Require it to be canonical, absolute, existing, and unchanged; never discover, scan for, or substitute a role-side skill-catalog entry or another filesystem root.
+   - Resolve every required file strictly beneath that root, reject path escape, ambiguity, missing files, or extra generated inputs, and read back the same canonical root before and after bundle construction.
    - Classify the source as `git` only after verifying the containing repository root, canonical `owner/repository` origin, exact lowercase 40-character commit OID, and the skill root's exact tree prefix at that commit. Require every bundled relative path to map uniquely to an existing blob below that prefix. Otherwise use `installed-tree` and make no Git provenance claim.
    - Require every required reference present and internally consistent.
    - Parse the exact configuration without defaults or overrides.
    - Require unique Supervisor profile names; ordered profile count equal to `max_supervisor_attempts_per_round`; positive review limits; valid merge method; heartbeat arrays beginning at `active_minutes`, strictly increasing, and positive; positive full-reconciliation bound; and the authenticated owner in `owner_allowlist`.
-   - Build the exact content-addressed activation bundle defined in the operator guide. Do not include mutable or generated files.
+   - Derive and verify the exact content-addressed bundle inputs from that same bound root without persisting a bundle during preflight. Do not include mutable or generated files.
 
 5. Host and service capabilities
    - Verify exact configured task models/efforts, task create/address/wait/archive/inspect controls, recurring-heartbeat create/inspect/update/pause/resume/remove controls, Git, filesystem/worktree routes, GitHub issue/PR access, authenticated identity, branch/rule/check inspection, and merge-commit capability.
@@ -100,6 +103,7 @@ If and only if every preflight item passes:
 
 1. Reserve a new unguessable run ID that differs from every former run ID.
 2. Build `.roundlet/contracts/<contract-id>/` from the current installed skill and exact resolved configuration:
+   - immediately re-read the creator-supplied canonical root and every derived file identity; require an exact match with preflight before materializing any contract path;
    - when source kind is `git`, materialize every file directly from the verified commit object; never copy or hash working-tree bytes, even when the checkout is clean;
    - include exact bytes for SKILL.md, every required reference, and agents/openai.yaml;
    - use unique POSIX relative paths sorted by unsigned UTF-8 bytes;
