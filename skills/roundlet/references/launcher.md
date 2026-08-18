@@ -18,7 +18,7 @@ Return any role-visible metadata as a non-authoritative ROUNDLET_ROLE_METADATA_R
 END_ROUNDLET_ROLE_METADATA_REPORT_REQUEST
 ```
 
-Treat any response as a non-authoritative role report. Independently read the creator-side immutable task record and build the exact `CREATOR_TASK_BINDING_ATTESTATION` from `thread-prompts.md`, including this creator task, requested Launcher role, task ID, model, effort, writable project/workspace, canonical CWD, and available stable host/environment identity. A missing, short, noncanonical, or task-ID-free report does not block matching creator read-back. On an explicit contradiction, perform one bounded creator-side re-read; archive and stop only when authoritative evidence is missing, stale, malformed, mismatched, or still conflicting. Only after the attestation succeeds, replace the placeholders below, including `<LAUNCHER_TASK_ID>`, and send this entire populated activation prompt to the same task:
+Treat any response as a non-authoritative role report. Independently read the creator-side immutable task record and build the exact `CREATOR_TASK_BINDING_ATTESTATION` from `thread-prompts.md`, including this creator task, requested Launcher role, task ID, model, effort, writable project/workspace, canonical CWD, and available stable host/environment identity. A missing, short, noncanonical, or task-ID-free report does not block matching creator read-back. On an explicit contradiction, perform one bounded creator-side re-read; archive and stop only when authoritative evidence is missing, stale, malformed, mismatched, or still conflicting. Only after the attestation succeeds, replace the placeholders below, including `<LAUNCHER_TASK_ID>`, copy the complete attestation into the fixed block, and send this entire populated activation prompt to the same task:
 
 ```text
 Use $roundlet as a short-lived Launcher for exactly one completely fresh Roundlet run.
@@ -34,16 +34,28 @@ Target:
 - Expected stable host/environment identity: <STABLE_HOST_IDENTITY_OR_UNAVAILABLE> / <STABLE_ENVIRONMENT_IDENTITY_OR_UNAVAILABLE>
 - Authenticated and allowlisted owner: <OWNER_LOGIN>
 
+Creator binding authority:
+CREATOR_TASK_BINDING_ATTESTATION
+role_task: <LAUNCHER_TASK_ID>
+creator_task: <CREATOR_TASK_ID>
+requested_role: LAUNCHER
+execution_profile: model=<MODEL>;reasoning_effort=<EFFORT>
+task_workspace: <ABSOLUTE_PATH>
+task_cwd: <ABSOLUTE_PATH>
+stable_host_identity: <STABLE_HOST_IDENTITY_OR_UNAVAILABLE>
+stable_environment_identity: <STABLE_ENVIRONMENT_IDENTITY_OR_UNAVAILABLE>
+binding_source: creator-immutable-readback
+END_CREATOR_TASK_BINDING_ATTESTATION
+
 Do not recover, resume, reuse, migrate, adopt, or replace any former run or Orchestrator. Read the complete installed Roundlet SKILL.md and every required reference before acting. Do not select or implement an issue in this Launcher.
 
 Before creating any run resource, fail closed unless every item below is freshly proven:
 
 1. Immutable Launcher identity
-   - Discover and invoke the immutable task-metadata route.
-   - Require the actual Launcher task ID to equal the creator-verified expected task ID.
-   - Require the creator/source task, requested role, stable host/environment identity, and `binding_source: creator-immutable-readback` to equal the validated creator attestation.
-   - Require the actual Launcher task model and reasoning effort to equal the expected values.
-   - Require its canonical CWD and writable local-project workspace to equal the authoritative checkout.
+   - Read exactly one complete `CREATOR_TASK_BINDING_ATTESTATION` from this populated prompt. Do not discover or require a role-side immutable self-metadata route; the creator already performed that read-back before sending this prompt.
+   - Require its task ID, creator/source task, requested role, model/effort, project/workspace, canonical CWD, stable host/environment identity, and `binding_source: creator-immutable-readback` to equal every corresponding expected value above.
+   - Require the attested canonical CWD and writable local-project workspace to equal the authoritative checkout.
+   - Missing, duplicate, malformed, stale, or mismatched attestation fields fail closed before any repository, GitHub, Git, lease, contract, Orchestrator, or heartbeat action.
    - The creator binding attestation is the authority. A role metadata report is never sufficient and cannot invalidate matching creator evidence; a projectless task, unrelated project, read-only route, or removable linked worktree in creator read-back fails closed.
 
 2. Repository and Git identity
@@ -120,7 +132,7 @@ Never attach the heartbeat to this Launcher. Never create a second Orchestrator 
 
 Use recovery only after an allowlisted owner explicitly directs it. Recovery uses the existing run's immutable bundle; an installed update is never adopted. If the owner wants a newer skill, stop and clean the old run and use New activation.
 
-Create the recovery Launcher against the authoritative checkout using the old bundle's configured Orchestrator profile. Its first prompt is only the `ROUNDLET_ROLE_METADATA_REPORT_REQUEST` from `thread-prompts.md` with requested role `LAUNCHER`, the old bundle's exact model/effort, and the authoritative workspace/CWD. Treat the response as advisory, independently build the creator binding attestation, use one bounded creator re-read for an explicit contradiction, and archive/stop only on failed authoritative evidence. Then replace every recovery placeholder below, including the recovery Launcher/creator task IDs and stable host/environment identities, and send the populated recovery prompt to that same task:
+Create the recovery Launcher against the authoritative checkout using the old bundle's configured Orchestrator profile. Its first prompt is only the `ROUNDLET_ROLE_METADATA_REPORT_REQUEST` from `thread-prompts.md` with requested role `LAUNCHER`, the old bundle's exact model/effort, and the authoritative workspace/CWD. Treat the response as advisory, independently build the creator binding attestation, use one bounded creator re-read for an explicit contradiction, and archive/stop only on failed authoritative evidence. Then replace every recovery placeholder below, including the recovery Launcher/creator task IDs and stable host/environment identities, copy the complete attestation into the fixed block, and send the populated recovery prompt to that same task:
 
 ```text
 Act as a short-lived Roundlet recovery Launcher for exactly one previously activated target. Do not invoke or load the installed `$roundlet` skill.
@@ -136,9 +148,22 @@ Target:
 - Owner-authorized Orchestrator/heartbeat replacement: <true|false>
 - Owner recovery instruction: <EXACT_OWNER_INSTRUCTION>
 
+Creator binding authority:
+CREATOR_TASK_BINDING_ATTESTATION
+role_task: <RECOVERY_LAUNCHER_TASK_ID>
+creator_task: <RECOVERY_CREATOR_TASK_ID>
+requested_role: LAUNCHER
+execution_profile: model=<MODEL>;reasoning_effort=<EFFORT>
+task_workspace: <ABSOLUTE_PATH>
+task_cwd: <ABSOLUTE_PATH>
+stable_host_identity: <STABLE_HOST_IDENTITY_OR_UNAVAILABLE>
+stable_environment_identity: <STABLE_ENVIRONMENT_IDENTITY_OR_UNAVAILABLE>
+binding_source: creator-immutable-readback
+END_CREATOR_TASK_BINDING_ATTESTATION
+
 Read only the advisory activation pointers first, resolve the one immutable activation bundle, verify it completely, then read its SKILL.md and every required reference. Treat the installed skill only as an unrelated candidate that cannot enter this run.
 
-1. Verify this recovery Launcher's complete creator binding attestation against the creator-supplied task/creator IDs, requested role, profile, workspace/CWD, stable host/environment identity, and binding source; then perform the bundle's repository, authority, GitHub, host, and capability preflight.
+1. Read exactly one complete creator binding attestation from this prompt and verify it against the creator-supplied task/creator IDs, requested role, profile, workspace/CWD, stable host/environment identity, and binding source. Do not discover or require a role-side immutable self-metadata route. Missing, duplicate, malformed, stale, or mismatched fields fail closed before recovery work; otherwise perform the bundle's repository, authority, GitHub, host, and capability preflight.
 2. Reconcile lease/current state, activation bundle, GitHub traces and pull requests, branches, worktrees, checks, exact candidate SHA, all identifiable role tasks and recorded creator binding attestations, every selected external-validation path/blob/repository/commit/action/schema/opaque-sequence/evidence-time/read-back identity, the independent formal Supervisor tuple, and all heartbeats. Reuse each stable attestation normally. Treat any repository-declared validation cache and complete retained issue-evidence area as retained host-owned state, not run ownership; verify applicable receipt/digest evidence but do not remove, rebuild, or adopt it during recovery. If contradictory immutable creator-side, external-validation, or formal-review evidence appears, perform exactly one bounded re-read against the recorded identity; unresolved conflict fails closed without a second task, attestation, dispatch, trace, substituted route, copied sequence, or reset review epoch.
 3. If the old Orchestrator or heartbeat is live, ownership is ambiguous, the bundle is incomplete, or unique work cannot be attributed, stop with `RECOVERY_OWNER_DECISION_REQUIRED`. Do not replace or delete anything.
 4. If both old Orchestrator and heartbeat are conclusively unavailable, reconstruct the phase from durable GitHub and Git evidence. Preserve the run ID only when identity is certain; otherwise stop for owner input.

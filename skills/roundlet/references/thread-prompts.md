@@ -115,6 +115,8 @@ If a report explicitly contradicts the proposed envelope, perform exactly one bo
 
 The verified attestation remains stable and is copied into later role envelopes. Recovery/restart normally reuses it without duplicate task creation, binding, dispatch, or trace. Only contradictory immutable creator-side evidence triggers exactly one bounded re-read against the recorded attestation. An unchanged complete match preserves it; an unresolved difference fails closed without creating another task, attestation, dispatch, or trace. Do not repeat discovery on every turn.
 
+For a top-level new-activation or recovery Launcher, the external creator copies the complete verified attestation into the fixed `Creator binding authority` block of the populated Launcher prompt. That prompt carries the creator's authoritative read-back across the task boundary. The Launcher validates one complete block and exact equality with the prompt's expected fields; it never rediscovers or requires a role-side immutable self-metadata route. A Launcher or Orchestrator that creates a later role remains that role's creator and performs the same creator-side read-back before copying the resulting attestation into the child role envelope and advisory state.
+
 The Launcher and Orchestrator use the authoritative checkout as canonical CWD and writable project. A native-Windows Worker uses its distinct host-owned anchor as CWD and the descendant linked worktree from the envelope as its writable implementation path. Other Workers use their ordinary verified project/worktree binding. Supervisors are read-only and may use a non-removable host-owned task CWD while reviewing the named target/SHA.
 
 ## GitHub access recovery
