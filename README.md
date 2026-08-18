@@ -209,6 +209,7 @@ Selection remains read-only while provisioning. The Orchestrator publishes and r
 - Rounds 4–10 are CONVERGING.
 - Invalid Supervisor attempts do not consume the round.
 - A valid FINDINGS consumes its formal round. After the same Worker repairs and the candidate changes, review continues in the same epoch at the next round's attempt 1; a changed candidate is never a fallback attempt in the prior round.
+- Repository-owned external-validation sequence values remain separate from the formal Supervisor epoch/round/attempt. They cannot dispatch a Supervisor, satisfy review, or enter the merge gate. A misbound review is interrupted before verdict acceptance or trace and is recreated at the correct formal tuple.
 - Supervisor-result and Worker-repair-handoff traces must be published and read back on the canonical surface before review state advances. A retryable missing trace remains pending rather than becoming owner input.
 - Pause, resume, same-task continuation, authorized recovery, and satisfaction of an already-declared standing validation route preserve the same epoch and accepted-round count when scope, acceptance criteria, immutable contract, and candidate review basis are unchanged.
 - Only a material owner scope/acceptance change or main integration starts a new COMPLETE epoch.
@@ -225,7 +226,7 @@ The host may discover a suitable bootstrap interpreter, but it only invokes the 
 
 When root instructions declare it, Roundlet resolves a selected leaf's generic route against exact authoritative instruction/skill blobs and repository-owned identities. Read-only execution requires `allow_external_validation_read_only: true`; a disposable-target mutation also requires `allow_external_validation_disposable_target_mutation: true`, an exact action allowlist, rollback, and semantic read-back. Matching standing authority avoids repetitive per-attempt owner prompts. Credential failure, identity conflict, an out-of-scope action, or partial mutation still stops for owner input.
 
-The selected repository also supplies one exact executor contract. Roundlet treats its command, schemas, product adapters, recording, retention, and receipts as opaque; it never builds a candidate-specific runner. The generic lifecycle is `UNPREPARED -> PREFLIGHT_READY -> ARMED -> EXECUTED -> VERIFIED`, with `STALE` on any candidate or component movement. External-action-free preflight defects return to implementation without a LIVE trace, external dispatch, review-round change, or owner prompt. One readiness trace is published only when the plan is actually executable, and one result trace only after semantic verification.
+The selected repository also supplies one exact executor contract. Roundlet treats its command, schemas, product adapters, recording, retention, and receipts as opaque; it never builds a candidate-specific runner. Readiness/result schema identities are derived from the exact selected contract and typed receipts, never copied from an earlier binding. The generic lifecycle is `UNPREPARED -> PREFLIGHT_READY -> ARMED -> EXECUTED -> VERIFIED`, with `STALE` on any candidate or component movement. External-action-free preflight defects return to implementation without a LIVE trace, external dispatch, review-round change, or owner prompt. One readiness trace is published only when the plan is actually executable, and one result trace only after semantic verification.
 
 Historical replay always uses the evidence bundle's repository-declared capture time. It never substitutes the replay execution wall clock. Public trace contains only the allowed exact identities, digests, typed result, and read-back projection.
 
@@ -233,17 +234,19 @@ Historical replay always uses the evidence bundle's repository-declared capture 
 
 The same Worker performs read-only cleanup preflight. The Orchestrator then:
 
-1. verifies merge/leaf/remote/worktree/unique-work state;
-2. archives the Worker;
-3. removes the linked worktree non-force when authorized;
-4. verifies registration and physical path are absent;
-5. deletes exact local/remote issue branches when authorized and safe;
-6. fetches and fast-forwards authoritative `main`;
-7. proves a clean `HEAD == main == origin/main`;
-8. retains any repository-declared shared validation cache;
-9. returns to IDLE or stops after current.
+1. reads the live merge/leaf identities, fetches exact remote main and issue refs, and proves the merge commit locally before ancestry review;
+2. verifies merge/leaf/remote/Worker-worktree/unique-work state through the same Worker;
+3. archives the Worker;
+4. inventories every Orchestrator-created auxiliary worktree/state root and hash-retains unique evidence-bearing artifacts under the repository-declared retention boundary;
+5. removes exact linked worktrees non-force only after unique-work and retention proof;
+6. verifies registrations and physical paths are absent;
+7. deletes exact local/remote issue branches when authorized and safe;
+8. fetches and fast-forwards authoritative `main`;
+9. proves a clean `HEAD == main == origin/main`;
+10. retains issue evidence and any repository-declared shared validation cache;
+11. returns to IDLE or stops after current.
 
-If ordinary worktree removal fails, diagnose the exact holder and preserve evidence. Never kill Codex or Node, force-remove unknown work, or broaden the cleanup target.
+If ref refresh, retention, or ordinary worktree removal fails, stop cleanup, diagnose the exact conflict, and preserve evidence. Never infer ancestry, kill Codex or Node, force-remove unknown work, or broaden the cleanup target.
 
 ### Skill updates
 
@@ -282,7 +285,9 @@ WSL, Linux, macOS, and other hosts keep their ordinary topology and must not inh
 - Supervisors are fresh and read-only.
 - Merge, closure, branch deletion, and worktree removal require live authority.
 - External validation requires exact repository-owned route/identity/action/evidence-time bindings and the matching independent authority switch; no route authorizes an unknown or production target.
+- Executor schema expectations come only from the exact selected contract and typed receipts; opaque external-validation sequence values never replace formal Supervisor accounting.
 - Cleanup never destroys unique work.
+- Cleanup never removes unique auxiliary evidence before exact size/digest retention and read-back.
 - Release, tag, publish, version bump, repository visibility change, force-push, reset, rebase, and runtime self-promotion remain out of scope.
 
 ## Contributing

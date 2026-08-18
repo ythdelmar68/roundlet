@@ -124,6 +124,8 @@ Immediately before each invocation, resolve and bind the current full candidate 
 
 Roundlet never constructs a repository-specific runner or understands its product profile, provider, Recorder, comparator, storage, or receipt schema. The repository-owned contract supplies one exact executor whose dry validation and live execution share the same parser, entrypoint, plan, component identities, candidate, case, evidence time, and read-back path.
 
+Bind the executor's declared readiness and result schema identities from that exact contract and typed preflight receipts. Do not hard-code a target schema or copy an expected schema from an earlier candidate, executor commit, or binding. A schema mismatch before `ARMED` leaves external action count zero, preserves the failed namespace as diagnostic evidence, and requires a wholly fresh binding derived from the current executor. It is never repaired by changing an assertion inside the already-created namespace.
+
 Track only these generic states:
 
 1. `UNPREPARED`: no executable binding exists; external action count is zero.
@@ -132,6 +134,8 @@ Track only these generic states:
 4. `EXECUTED`: that plan was consumed once and returned one typed result; never retry or substitute unless the repository contract itself returned a bounded, still-unconsumed disposition.
 5. `VERIFIED`: repository-defined projection, retention, and semantic read-back all match the original plan.
 6. `STALE`: candidate, executor, toolbox, target, case, component, evidence time, plan, or authority identity moved. Preserve prior evidence and build a wholly fresh binding; never stitch it to a new candidate.
+
+If the repository-owned executor exposes epoch, round, attempt, session, or turn values, retain them only as an opaque `external_validation_sequence`. They are not Roundlet Supervisor accounting. Keep `external_validation_sequence` and `external_validation_schema_binding` distinct from the formal `review_epoch`, `review_round`, `review_mode`, and `supervisor_attempt` tuple in advisory state, prompts, trace, recovery, and merge-gate reconciliation. Never copy values between them.
 
 An external-action-free preflight defect stays in implementation and returns to the same Worker or repository-owned toolbox correction. It is not `NEEDS_OWNER_INPUT`, does not consume a Supervisor attempt or review round, and does not publish `VALIDATION_READY` or repeated LIVE trace. Publish one readiness event only at `PREFLIGHT_READY`, and one result event only after `VERIFIED` (or one durable terminal blocked result after a genuinely armed invocation). Use a structured connector when available; a CLI fallback must use an exact body file, never shell-interpolated Markdown, and must read the event marker and required fields back semantically.
 
@@ -199,7 +203,7 @@ The lease has no expiry:
 }
 ```
 
-`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, repository validation-toolchain summary/cache root and last public-safe lock/receipt status when applicable, selected external-validation route plus authoritative instruction/skill/target/action identities and historical evidence-time binding when applicable, review epoch/round/mode/attempt/profile, last verified Supervisor-result event, last verified Worker-repair-handoff event, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never store the advisory role report, credential, raw external payload, or raw receipt. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
+`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, repository validation-toolchain summary/cache root and last public-safe lock/receipt status when applicable, selected external-validation route plus authoritative instruction/skill/target/action identities, declared readiness/result schema identities, opaque external-validation sequence, and historical evidence-time binding when applicable, the separate formal review epoch/round/mode/attempt/profile, last verified Supervisor-result event, last verified Worker-repair-handoff event, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never alias or copy values between the external-validation sequence and formal review tuple. Never store the advisory role report, credential, raw external payload, or raw receipt. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
 
 Before each tick or mutation, reconcile both files with the bundle, GitHub, Git, tasks, and heartbeat. Prefer live authoritative evidence. Conflicts enter `NEEDS_OWNER_INPUT` with reason `STATE_RECONCILIATION_CONFLICT`; never guess or overwrite them.
 
@@ -369,6 +373,8 @@ Record selection/ranking, Worker handoffs, draft PR creation, verified external-
 
 Start epoch 1, round 1, bound to the exact pushed candidate. Preserve the same epoch, accepted-round count, and next mode across pause, resume, same-task continuation, and authorized recovery when the immutable activation contract, leaf scope, acceptance criteria, and candidate review basis are unchanged. Satisfying or refreshing an already-declared standing external-validation route is not a scope change. Ordinary repairs stay in the epoch.
 
+Formal review accounting is independent of repository-owned external-validation accounting. Only an accepted schema-valid Supervisor result at the exact formal tuple can consume a Roundlet review round. An external executor's epoch/round/attempt, even when numerically identical, never dispatches a Supervisor, satisfies a review result, or enters the merge gate. If a Supervisor was created with a stale or external-validation tuple, stop or archive it without accepting or tracing its verdict; interrupt it first when it is still running. Preserve prior accepted results, record the misbound task only as unaccepted local diagnostic evidence, and create one fresh Supervisor at the mechanically correct formal tuple.
+
 An allowlisted owner change that materially changes scope or acceptance criteria starts a new epoch at round 1 COMPLETE. Main integration also starts a new COMPLETE epoch under the merge-gate rule because the candidate review basis changes. Never start a new epoch merely because the Orchestrator/heartbeat restarts, an unchanged gate is retried, a credential is refreshed, or a previously permitted repository-owned route is mechanically rebound to the same identities.
 
 For each round:
@@ -416,6 +422,7 @@ Before ready conversion or merge, prove:
 - remote head equals terminal candidate SHA;
 - no uncommitted/unpushed Worker work;
 - terminal state is `SUPERVISOR_PASS` or `REVIEW_LIMIT_REACHED_WORKER_FINALIZED`;
+- that terminal state belongs to the independently verified formal Supervisor tuple, not an external-validation sequence or repository-owned acceptance;
 - mergeable with no conflict;
 - every required check for that SHA succeeded;
 - no new owner instruction blocks or changes scope;
@@ -440,18 +447,20 @@ After merge, read the leaf. If still open and authorized, close it explicitly. A
 
 Cleanup is part of the active issue:
 
-1. Send the same Worker cleanup preflight. It verifies pushed/merged state, leaf state, worktree status, unique commits, untracked files, and absence of unpreserved work. It does not remove its own worktree/branch.
-2. Independently verify the handoff and archive the Worker.
-3. Verify the Worker is no longer active.
-4. If authorized, remove the exact linked worktree non-force after proving no unique work.
-5. Independently prove Git registration and the physical worktree path are absent. Successful non-force removal plus these read-backs completes the worktree-removal proof.
-6. If ordinary removal fails, diagnose exact-worktree CWD holders. On native Windows, do not treat a distinct retained empty task anchor as the linked worktree. Never kill Codex or Node to obtain cleanup.
-7. Delete local/remote issue branches only when authorized and their unique work is merged or explicitly abandoned.
-8. Fetch, fast-forward local `main`, and prove a clean authoritative checkout with `HEAD == main == origin/main`.
-9. Retain any repository-declared `.roundlet/validation-tools/` shared cache; it is not an issue worktree or run-owned resource.
-10. Append the cleanup trace to the leaf issue, read it back there, and clear issue pointers. If continuing, retain lease/contract and set `IDLE`; if stopping, append/read back `STOPPED` on the issue, remove heartbeat, advisory state, and contract bundle after final reconciliation, then archive the Orchestrator.
+1. Read the live pull request and leaf, then fetch the exact remote main and issue-branch refs. Read back the expected remote head and merge commit locally before asking the Worker to prove ancestry. Missing local knowledge is a refreshable preflight state, not owner input and not permission to infer ancestry.
+2. Send the same Worker cleanup preflight. It verifies pushed/merged state, leaf state, worktree status, unique commits, untracked files, and absence of unpreserved work against those refreshed refs. It does not remove its own worktree/branch.
+3. Independently verify the handoff and archive the Worker.
+4. Verify the Worker is no longer active.
+5. Inventory every Orchestrator-created auxiliary worktree and state root. Classify each as source-only or evidence-bearing from the exact repository-owned contract and live contents. For every unique evidence-bearing artifact, copy exact closed bytes into the repository-declared local retention boundary, record source identity, destination identity, size, and digest, and read every retained byte/size/digest back. Ambiguous, open, changing, partially copied, or unverifiable evidence enters `CLEANUP_BLOCKED`.
+6. If authorized, remove the exact Worker and auxiliary linked worktrees non-force only after unique-work and retention proof succeeds.
+7. Independently prove every removed Git registration and physical worktree path is absent. Successful non-force removal plus these read-backs completes worktree-removal proof.
+8. If ordinary removal fails, diagnose exact-worktree CWD holders. On native Windows, do not treat a distinct retained empty task anchor as the linked worktree. Never kill Codex or Node to obtain cleanup.
+9. Delete local/remote issue branches only when authorized and their unique work is merged or explicitly abandoned.
+10. Fetch, fast-forward local `main`, and prove a clean authoritative checkout with `HEAD == main == origin/main`.
+11. Retain repository-declared issue evidence and any `.roundlet/validation-tools/` shared cache; neither is an issue worktree or ordinary run-owned removal target.
+12. Append the cleanup trace to the leaf issue, including the bounded retention-manifest identity, read it back there, and clear issue pointers. If continuing, retain lease/contract and set `IDLE`; if stopping, append/read back `STOPPED` on the issue, remove heartbeat, advisory state, and contract bundle after final reconciliation, then archive the Orchestrator.
 
-Failed ordinary removal, surviving registration/path, unique work, or ambiguous read-back enters `CLEANUP_BLOCKED` and selects no next issue. Do not reopen a leaf solely because cleanup failed.
+Failed ref refresh, ordinary removal, surviving registration/path, unique work, incomplete retention, or ambiguous read-back enters `CLEANUP_BLOCKED` and selects no next issue. Do not reopen a leaf solely because cleanup failed.
 
 ## Active issue closed, ignored, or withdrawn
 
@@ -519,6 +528,6 @@ If the Orchestrator or heartbeat is inaccessible, use the Explicit recovery Laun
 - An inaccessible persistent Worker requires owner direction before replacement.
 - A failed Supervisor is disposable under the bounded attempt rule.
 - Verify the immutable activation bundle first, then reconstruct from GitHub trace, exact Git, task/heartbeat evidence, and advisory files.
-- Reconstruct and verify the selected repository-owned external-validation binding and historical evidence-time value when applicable. Preserve the epoch/round on an exact match; conflict fails closed instead of resetting review accounting.
+- Reconstruct and verify the selected repository-owned external-validation binding, declared schema identities, opaque external-validation sequence, and historical evidence-time value when applicable. Reconstruct the formal Supervisor tuple independently. Preserve each sequence on its own exact match; conflict fails closed instead of copying one sequence into the other or resetting review accounting.
 - Treat the installed skill as unrelated candidate material. It cannot repair or replace the active contract.
 - Stop on contradictions and append corrections rather than editing old trace.
