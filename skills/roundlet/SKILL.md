@@ -60,7 +60,7 @@ Treat every referenced file as required.
 
 Use the New activation prompt in `references/launcher.md` without changing anything except its explicit placeholders. The short-lived Launcher must:
 
-1. Validate the complete creator-supplied binding attestation and its immutable model/effort and authoritative writable-checkout fields, then prove repository, owner, GitHub, task, heartbeat, Git, authority, and cleanup capabilities.
+1. Validate the complete creator-supplied binding attestation, immutable model/effort and authoritative writable-checkout fields, plus one canonical absolute installed-skill root supplied by the creator. Read the installed contract only from that root; never require or scan the Launcher's role-side skill catalog.
 2. Reconcile all local and remote evidence and stop on any stale or active run.
 3. Reserve one unguessable run ID; build, persist, and read back one immutable activation bundle.
 4. Create and read back advisory lease/current state for that run.
