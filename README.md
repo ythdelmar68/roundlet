@@ -167,7 +167,7 @@ A runnable leaf provides live scope, boundaries, acceptance intent, and dependen
 
 Open [`launcher.md`](skills/roundlet/references/launcher.md#new-activation), resolve the reviewed installed skill to one canonical absolute root, fill only the explicit placeholders, and create one Launcher directly against the authoritative checkout using the requested Launcher model/effort.
 
-The Launcher receives one complete creator-verified binding attestation and the exact installed-skill root in its populated prompt, validates both without role-side immutable self-metadata or skill-catalog discovery, then:
+The Launcher receives one complete creator-verified binding attestation and the exact installed-skill root in its populated prompt, validates both without role-side immutable self-metadata or skill-catalog discovery, and binds the root's exact seven-file identity map before repository access and again around bundle materialization, then:
 
 1. validates the creator-attested immutable profile and writable-checkout binding;
 2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities;

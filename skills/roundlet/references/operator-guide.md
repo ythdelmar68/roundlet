@@ -222,6 +222,8 @@ The exact bundle file set is:
 
 Paths are unique POSIX relative paths without `..`, NUL, CR, or LF and are sorted by unsigned UTF-8 bytes. Hash each file's exact stored bytes without newline normalization.
 
+For a new activation, preflight binds the creator-supplied canonical installed root, this exact seven-path set, and every per-file byte identity before repository access. Immediately before materialization and again before finalizing the contract path, require the same root, path set, and identity map. Each materialized bundle file must equal its preflight identity. This applies to exact verified blob identities for `git` and exact installed bytes for `installed-tree`; same-path drift or a mixed-generation bundle fails closed without a finalized contract or advisory state.
+
 Compute `tree_digest` from ASCII `roundlet-tree/v1\n`, followed for each sorted file by its UTF-8 path, byte `0x00`, 64 lowercase ASCII SHA-256 hex bytes, and byte `0x0a`. Store it as `sha256:<lowercase-hex>`.
 
 The hash-input manifest has exactly:
@@ -241,7 +243,7 @@ The hash-input manifest has exactly:
 
 `resolved_config` is the complete parsed JSON configuration. For `git`, `locator` is canonical `owner/repository` and `ref` is the verified lowercase 40-character OID matching every bundled byte. Materialize and hash Git-sourced files directly from that commit object, never from working-tree bytes; checkout filters, attributes, or line-ending conversion must not affect the bundle. For `installed-tree`, `locator` is the resolved absolute skill directory and `ref` is the exact tree digest. `contract_version` appends that ref.
 
-Serialize with RFC 8785 JCS, no BOM, trailing newline, or floats. The contract ID is SHA-256 of these canonical hash-input bytes. Add only top-level `"contract_id":"<64-lowercase-hex>"`, reserialize, copy exact files and manifest to `.roundlet/contracts/<contract-id>/`, and read back every path, byte hash, manifest field, tree digest, role profile, and ID. Different bytes at an existing ID are `CONTRACT_BUNDLE_CONFLICT`.
+Serialize with RFC 8785 JCS, no BOM, trailing newline, or floats. The contract ID is SHA-256 of these canonical hash-input bytes. Add only top-level `"contract_id":"<64-lowercase-hex>"` and reserialize. Materialize the exact files and manifest in one new unfinalized staging path below `.roundlet/contracts/`, apply the post-materialization root/path/identity checks above, then atomically finalize it as `.roundlet/contracts/<contract-id>/`. Reuse an existing final path only after exact equality; different bytes are `CONTRACT_BUNDLE_CONFLICT`. Read back every finalized path, byte hash, manifest field, tree digest, role profile, and ID. On failure remove only the exact validated unfinalized staging path and create no lease/current state.
 
 The activation record is immutable for the run. Every role, heartbeat, owner command, and recovery reads only that bundle. An installed change is reported separately but never enters the run. Updating Roundlet requires a safe stop, complete cleanup, installed-skill update, and a new run ID/contract.
 

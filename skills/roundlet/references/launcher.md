@@ -58,7 +58,7 @@ Before creating any run resource, fail closed unless every item below is freshly
    - Require the attested canonical CWD and writable local-project workspace to equal the authoritative checkout.
    - Missing, duplicate, malformed, stale, or mismatched attestation fields fail closed before any repository, GitHub, Git, lease, contract, Orchestrator, or heartbeat action.
    - The creator binding attestation is the authority. A role metadata report is never sufficient and cannot invalidate matching creator evidence; a projectless task, unrelated project, read-only route, or removable linked worktree in creator read-back fails closed.
-   - Before any repository, GitHub, or Git access, canonicalize the literal installed-skill-root value above, require it to be absolute and unchanged, read only its `SKILL.md` to enumerate the required installed file set, and require every named file present strictly beneath that root. A missing, relative, noncanonical, incomplete, escaped, or ambiguous root fails closed here. Do not consult the role-side skill catalog or scan another path.
+   - Before any repository, GitHub, or Git access, canonicalize the literal installed-skill-root value above and require it to be absolute and unchanged. Require exactly the seven bundle inputs `SKILL.md`, `agents/openai.yaml`, `references/launcher.md`, `references/operator-guide.md`, `references/repository-authority.md`, `references/roundlet-config.json`, and `references/thread-prompts.md` present strictly beneath that root, with no path escape or ambiguous resolution. Record the exact path set and per-file byte identity for later comparison. A missing, relative, noncanonical, incomplete, escaped, or ambiguous root fails closed here. Do not consult the role-side skill catalog or scan another path.
 
 2. Repository and Git identity
    - Fetch and resolve the exact GitHub repository, origin URL, default branch, local main, origin/main, and HEAD.
@@ -78,7 +78,7 @@ Before creating any run resource, fail closed unless every item below is freshly
 
 4. Installed contract and configuration
    - Accept only the one creator-supplied installed skill root above. Require it to be canonical, absolute, existing, and unchanged; never discover, scan for, or substitute a role-side skill-catalog entry or another filesystem root.
-   - Resolve every required file strictly beneath that root, reject path escape, ambiguity, missing files, or extra generated inputs, and read back the same canonical root before and after bundle construction.
+   - Resolve every required file strictly beneath that root, reject path escape, ambiguity, missing files, or extra generated inputs, and require the same canonical root, exact seven-path set, and per-file byte-identity map before and after bundle construction.
    - Classify the source as `git` only after verifying the containing repository root, canonical `owner/repository` origin, exact lowercase 40-character commit OID, and the skill root's exact tree prefix at that commit. Require every bundled relative path to map uniquely to an existing blob below that prefix. Otherwise use `installed-tree` and make no Git provenance claim.
    - Require every required reference present and internally consistent.
    - Parse the exact configuration without defaults or overrides.
@@ -102,17 +102,20 @@ Before creating any run resource, fail closed unless every item below is freshly
 If and only if every preflight item passes:
 
 1. Reserve a new unguessable run ID that differs from every former run ID.
-2. Build `.roundlet/contracts/<contract-id>/` from the current installed skill and exact resolved configuration:
+2. Prepare and atomically finalize `.roundlet/contracts/<contract-id>/` from the current installed skill and exact resolved configuration:
    - immediately re-read the creator-supplied canonical root and every derived file identity; require an exact match with preflight before materializing any contract path;
-   - when source kind is `git`, materialize every file directly from the verified commit object; never copy or hash working-tree bytes, even when the checkout is clean;
+   - when source kind is `git`, select every file directly from the verified commit object; never copy or hash working-tree bytes, even when the checkout is clean;
    - include exact bytes for SKILL.md, every required reference, and agents/openai.yaml;
    - use unique POSIX relative paths sorted by unsigned UTF-8 bytes;
    - record SHA-256 of exact bytes;
    - compute `tree_digest` from ASCII `roundlet-tree/v1\n` followed for each file by UTF-8 path, NUL, 64 lowercase hash hex bytes, and LF;
    - build `roundlet-contract/v1` with exact source identity, resolved configuration, ordered files, and tree digest;
    - serialize with RFC 8785 JCS, no BOM, trailing newline, or floats;
-   - derive lowercase-hex contract ID from the canonical manifest with `contract_id` omitted, add only that ID, reserialize, persist the exact files and manifest, and read back every byte, path, hash, role profile, source identity, tree digest, and contract ID.
-   - Stop with `CONTRACT_BUNDLE_CONFLICT` if an existing path differs.
+   - derive lowercase-hex contract ID from the canonical manifest with `contract_id` omitted, add only that ID, and reserialize without persisting the final contract path;
+   - materialize the exact selected files and manifest into one new unfinalized staging path below `.roundlet/contracts/`;
+   - before finalizing any contract path or advisory state, re-read the bound installed root and require its canonical identity, exact seven-path set, and every per-file byte identity to equal preflight; also require each materialized bundle file to equal that preflight identity. Any same-path content drift or mixed-generation bundle fails closed without finalizing the bundle.
+   - if the final contract path is absent, atomically finalize the verified staging path there; if it exists, reuse it only after exact equality and remove the redundant staging path, otherwise stop with `CONTRACT_BUNDLE_CONFLICT`;
+   - read back every finalized byte, path, hash, role profile, source identity, tree digest, and contract ID; on any failure remove only the new unfinalized staging path after exact path validation and leave no lease/current state.
 3. Create fresh `.roundlet/lease.json` and `.roundlet/current.md` for this run and read them back. Bind the exact target, checkout, owner, run ID, contract ID/bundle, activation time, state `ACTIVATING`, and empty Orchestrator/heartbeat fields. Do not add an expiry.
 4. Create exactly one long-lived Orchestrator using the configured Orchestrator model and effort from the pinned bundle. Give it only the role metadata report request from `thread-prompts.md` as its first prompt. Before its populated bootstrap:
    - treat its returned report as advisory and independently build the creator binding attestation from immutable task ID, creator task, requested role, model, effort, project/workspace, canonical CWD, and available stable host/environment identity;
