@@ -57,7 +57,7 @@ GitHub issues and pull requests are durable scheduling/audit state. Local `.roun
 - Recurring heartbeat creation, inspection, update, pause/resume, and removal.
 - Git and an authenticated GitHub route with issue, pull request, branch, review/check, and merge access.
 - Every exact model and reasoning effort in [`roundlet-config.json`](skills/roundlet/references/roundlet-config.json).
-- The ability to read immutable creator-side task identity, creator/source task, configured model/effort, workspace/project, canonical CWD, and available stable host/environment identity independently of role output.
+- The creator's ability to read immutable task identity, creator/source task, configured model/effort, workspace/project, canonical CWD, and available stable host/environment identity independently of role output, then transport the resulting complete attestation into a top-level Launcher prompt. The Launcher role itself does not need an immutable self-metadata route.
 - A clean authoritative local checkout for the target repository.
 - When the target explicitly declares a validation-toolchain contract, any system-discoverable bootstrap interpreter satisfying that repository's stated version. It invokes only the repository resolver and is not build/test evidence.
 
@@ -166,9 +166,9 @@ A runnable leaf provides live scope, boundaries, acceptance intent, and dependen
 
 Open [`launcher.md`](skills/roundlet/references/launcher.md#new-activation), fill only its placeholders, and create one Launcher directly against the authoritative checkout using the requested Launcher model/effort.
 
-The Launcher:
+The Launcher receives one complete creator-verified binding attestation in its populated prompt, validates it without role-side immutable self-metadata discovery, then:
 
-1. verifies its immutable profile and writable checkout binding;
+1. validates the creator-attested immutable profile and writable-checkout binding;
 2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities;
 3. discovers and checks any explicitly declared repository validation-toolchain capability and external-validation contract path/blob identities without provisioning or invoking either;
 4. reconciles every old local/remote Roundlet resource and fails closed on stale ownership;
@@ -277,7 +277,7 @@ WSL, Linux, macOS, and other hosts keep their ordinary topology and must not inh
 - Every run reads one immutable activation bundle; Git-sourced bundles use exact commit-object bytes, not filterable checkout bytes.
 - Repository-declared validation uses candidate/lock/receipt-bound tools; a discovered bootstrap interpreter cannot satisfy validation evidence, and the shared cache is retained separately from run state.
 - Installed drift never silently changes a live run.
-- Every task has at most one creator-authoritative binding attestation covering immutable task ID, creator/source task, requested role, profile, project/workspace, CWD, and available stable host/environment identity. Role metadata reports are advisory and cannot satisfy, alter, or invalidate that binding.
+- Every task has at most one creator-authoritative binding attestation covering immutable task ID, creator/source task, requested role, profile, project/workspace, CWD, and available stable host/environment identity. The external creator transports the top-level Launcher's complete attestation in its populated prompt; later creators copy child attestations into their role envelopes and advisory state. Role metadata reports are advisory and cannot satisfy, alter, or invalidate that binding.
 - GitHub is the durable trace; local files never override live Git/GitHub evidence.
 - Lightweight observations never authorize mutation.
 - Only one active leaf and Worker exist per run.
