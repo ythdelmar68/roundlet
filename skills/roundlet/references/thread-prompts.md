@@ -62,10 +62,14 @@ external_validation_schema_binding: <executor-declared-readiness/result-schema-i
 external_validation_sequence: <opaque-repository-owned-epoch/round/attempt/session/turn-summary-or-not-applicable>
 external_validation_plan: <public-safe-candidate/case/plan/evidence-time/consumption-summary-or-not-applicable>
 historical_evidence_time: <repository-field-and-captured-value-or-not-applicable>
+lifecycle_observation_sink: <authoritative-contract-path/blob/entrypoint/producer/store-summary-or-not-selected>
+lifecycle_observation_state: <NOT_SELECTED|UNARMED|ARMED|APPENDING|SEALED|VERIFIED|STALE>
+lifecycle_observation_window: <plan/window/candidate/capture-time/formal-review-binding-or-not-applicable>
+lifecycle_observation_head: <append-sequence/event-head/entry-head/seal/retention-receipt-summary-or-not-applicable>
 END_ROUNDLET_CONTEXT
 ```
 
-The Orchestrator populates the envelope from live evidence. The `role` field must equal the attestation's `requested_role`; the other creator-binding fields must equal the same recorded attestation exactly. `external_validation_schema_binding` and `external_validation_sequence` come only from the exact repository-owned executor binding and typed receipts. They never populate or alter `review_epoch`, `review_round`, `review_mode`, or `supervisor_attempt`, which remain the formal Supervisor tuple. The role rereads the pinned bundle, root repository instructions, and relevant GitHub/Git state before acting. Return `CONTEXT_MISMATCH` without mutation when the envelope conflicts with live evidence.
+The Orchestrator populates the envelope from live evidence. The `role` field must equal the attestation's `requested_role`; the other creator-binding fields must equal the same recorded attestation exactly. `external_validation_schema_binding` and `external_validation_sequence` come only from the exact repository-owned executor binding and typed receipts. Lifecycle observation fields come only from the exact repository-owned sink receipts. Neither external sequence may populate or alter `review_epoch`, `review_round`, `review_mode`, or `supervisor_attempt`, which remain the formal Supervisor tuple. The role rereads the pinned bundle, root repository instructions, and relevant GitHub/Git state before acting. Return `CONTEXT_MISMATCH` without mutation when the envelope conflicts with live evidence.
 
 ## Role metadata report and creator binding attestation
 
@@ -181,6 +185,7 @@ backlog_reconciliation: <bounded-summary-and-live-evidence-pointers>
 validation_toolchain_contract: <repository-defined-summary-or-not-applicable>
 validation_cache_root: <absolute-path-or-not-applicable>
 external_validation_contracts: <bounded-authoritative-path-and-blob-summaries-or-not-applicable>
+lifecycle_observation_contracts: <bounded-authoritative-path-and-blob-summaries-or-not-applicable>
 selection_allowed: false
 END_ROUNDLET_ORCHESTRATOR_BOOTSTRAP
 ```
@@ -190,7 +195,7 @@ The Orchestrator must:
 1. Require the envelope to equal the creator binding attestation.
 2. Read `SKILL.md`, all required references, the exact configuration, and manifest only from the named bundle.
 3. Recompute and verify bundle paths/hashes, tree digest, contract ID, source identity, and configured profiles.
-4. Verify target/origin/default branch, clean aligned checkout, `.git/info/exclude`, authority block, owner identity/allowlist, task/heartbeat/Git/GitHub capabilities, absence of stale run ownership, any explicitly declared validation-toolchain contract/capability, and every root-referenced external-validation contract path/blob identity. Do not provision the validation cache or select an external route during activation.
+4. Verify target/origin/default branch, clean aligned checkout, `.git/info/exclude`, authority block, owner identity/allowlist, task/heartbeat/Git/GitHub capabilities, absence of stale run ownership, any explicitly declared validation-toolchain contract/capability, every root-referenced external-validation contract path/blob identity, and every optional lifecycle-observation contract path/blob identity. Do not provision a validation cache, select an external route, arm a lifecycle window, or create sink storage during activation.
 5. Read back lease/current state and require the same run/contract/task.
 6. Reconcile the complete live backlog and umbrella scheduling notes without selecting an issue.
 7. Record `IDLE` and return exactly:
@@ -247,6 +252,7 @@ last_supervisor_result_event: <verified-event-id-or-none>
 last_worker_repair_handoff_event: <verified-event-id-or-none>
 formal_review_tuple: <epoch/round/mode/attempt/profile/candidate-or-not-applicable>
 external_validation_tuple: <state/schema-binding/opaque-sequence/plan-or-not-applicable>
+lifecycle_observation_tuple: <state/plan/window/sequence/head/seal-receipt-or-not-selected>
 next_safe_action: <bounded-description>
 END_ROUNDLET_TICK_RESULT
 ```
@@ -266,6 +272,7 @@ The Worker:
 - returns structured evidence to the Orchestrator.
 - uses only the populated repository-owned external-validation binding; it never discovers or substitutes a toolbox, target, credential, commit, action, replay time, or authority value;
 - invokes only the populated repository-owned executor entrypoint; it never creates a candidate-specific wrapper, inspects private product attributes, rewrites a plan, or substitutes a second validate/execute path;
+- never invokes or writes the lifecycle observation sink; it returns ordinary structured handoffs to the Orchestrator, which alone appends verified generic transition facts;
 - performs no disposable-target mutation. The Orchestrator remains the sole GitHub mutator and independently applies any authorized external mutation/read-back transition.
 
 ### Native Windows Worker topology and mutation route
@@ -464,6 +471,7 @@ Every Supervisor is fresh and read-only. Its creator verifies the configured att
 - reads the pinned contract, issue, PR, root instructions, exact candidate diff/tree, relevant tests/checks, prior findings, and Worker handoffs;
 - reviews only the named full candidate SHA;
 - never edits, commits, pushes, mutates GitHub, or changes branch/worktree state;
+- never invokes or writes a lifecycle observation sink; it returns only its structured read-only result to the Orchestrator;
 - returns `INVALID_CONTEXT` when required context is missing/conflicting;
 - reports actionable findings with evidence and severity, or PASS.
 
