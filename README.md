@@ -97,6 +97,7 @@ Read the installed `SKILL.md` and all references. Validate:
 - review limits and merge method;
 - owner allowlist;
 - generic external-validation routes and the two independent Boolean authority switches;
+- optional repository-owned lifecycle-observation contract selection with zero behavior when not selected;
 - links and required file set;
 - absence of executable orchestration artifacts.
 
@@ -148,6 +149,8 @@ Roundlet may then keep:
 - `.roundlet/contracts/<contract-id>/`;
 - `.roundlet/validation-tools/` when the target repository declares it as a shared validation cache.
 
+A repository may separately declare a retained lifecycle-evidence boundary. Its sealed ledgers survive task/worktree cleanup but are not part of the Roundlet activation bundle or ordinary run-owned state.
+
 All are local-only. The bundle contains exact activation-time instructions and configuration; it is read-only after activation. A validation cache is separate host-owned reusable state: it is not part of the bundle, does not indicate a live run, and survives ordinary issue/run cleanup.
 
 ## Backlog preparation
@@ -161,7 +164,7 @@ Umbrellas are scheduling context only:
 - express dependencies only as exact leaf or standalone issue numbers;
 - keep the umbrella open after a wave completes.
 
-A runnable leaf provides live scope, boundaries, acceptance intent, and dependency evidence. When authoritative root instructions declare external validation, it also provides exactly one generic route: `none`, `toolbox`, or `toolbox+disposable-target`; without such a contract Roundlet binds `none`. Concrete toolbox/target repositories, exact commits, actions, rollback, evidence time, and read-back remain in authoritative target-repository instructions or a referenced repository-owned skill; they never become Roundlet-specific core policy. Owner-only security, destructive, product-scope, release, or publication decisions remain explicit.
+A runnable leaf provides live scope, boundaries, acceptance intent, and dependency evidence. When authoritative root instructions declare external validation, it also provides exactly one generic route: `none`, `toolbox`, or `toolbox+disposable-target`; without such a contract Roundlet binds `none`. A leaf that requires ephemeral lifecycle capture also declares its arm-before boundary and selects one exact root-referenced repository-owned sink; every other leaf binds `NOT_SELECTED`. Concrete toolbox/target repositories, exact commits, sink implementation/storage, actions, rollback, evidence time, and read-back remain in authoritative target-repository instructions or a referenced repository-owned skill; they never become Roundlet-specific core policy. Owner-only security, destructive, product-scope, release, or publication decisions remain explicit.
 
 ## Activation
 
@@ -171,7 +174,7 @@ The Launcher receives one complete creator-verified binding attestation and the 
 
 1. validates the creator-attested immutable profile and writable-checkout binding;
 2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities;
-3. discovers and checks any explicitly declared repository validation-toolchain capability and external-validation contract path/blob identities without provisioning or invoking either;
+3. discovers and checks any explicitly declared repository validation-toolchain capability, external-validation contract, and optional lifecycle-observation contract path/blob identities without provisioning or invoking them;
 4. reconciles every old local/remote Roundlet resource and fails closed on stale ownership;
 5. scans the complete backlog and Canonical scheduling notes without selecting an issue;
 6. reserves a new run ID;
@@ -211,6 +214,7 @@ Selection remains read-only while provisioning. The Orchestrator publishes and r
 - Invalid Supervisor attempts do not consume the round.
 - A valid FINDINGS consumes its formal round. After the same Worker repairs and the candidate changes, review continues in the same epoch at the next round's attempt 1; a changed candidate is never a fallback attempt in the prior round.
 - Repository-owned external-validation sequence values remain separate from the formal Supervisor epoch/round/attempt. They cannot dispatch a Supervisor, satisfy review, or enter the merge gate. A misbound review is interrupted before verdict acceptance or trace and is recreated at the correct formal tuple.
+- A selected lifecycle-observation window remains separate from formal review accounting and must be sealed/verified for the terminal candidate before its evidence can satisfy a merge gate.
 - Supervisor-result and Worker-repair-handoff traces must be published and read back on the canonical surface before review state advances. A retryable missing trace remains pending rather than becoming owner input.
 - Pause, resume, same-task continuation, authorized recovery, and satisfaction of an already-declared standing validation route preserve the same epoch and accepted-round count when scope, acceptance criteria, immutable contract, and candidate review basis are unchanged.
 - Only a material owner scope/acceptance change or main integration starts a new COMPLETE epoch.
@@ -231,6 +235,14 @@ The selected repository also supplies one exact executor contract. Roundlet trea
 
 Historical replay always uses the evidence bundle's repository-declared capture time. It never substitutes the replay execution wall clock. Public trace contains only the allowed exact identities, digests, typed result, and read-back projection.
 
+### Optional lifecycle observation sink
+
+Repositories may opt a specific leaf into transition-time evidence capture. Roundlet binds the exact authoritative sink contract and arms one candidate/review/window before the leaf's first declared ephemeral event. Only the Orchestrator invokes the repository-owned prepare, append/read-back, and seal/verify paths; Worker and Supervisor tasks never write the sink.
+
+The generic event surface distinguishes role-attempt start/completion, cancellation or invalid context, PASS/FINDINGS, accepted/unaccepted result, candidate movement, and formal-round advancement. It carries only opaque public-safe identities, exact candidate/review tuple, immutable event time, predecessor, and bounded artifact digests. Raw provider output, credentials, private paths, transcripts, hidden reasoning, and product-only fields are prohibited.
+
+Each append receipt is read back before Roundlet advances that transition. Candidate, formal tuple, producer, store, schema, capture plan, window, time, predecessor, or receipt movement makes the window stale. A missed pre-arm event requires a fresh live window; Roundlet never reconstructs it. Repositories that do not select a sink have no sink storage, calls, approval, or lifecycle overhead.
+
 ### Cleanup
 
 The same Worker performs read-only cleanup preflight. The Orchestrator then:
@@ -244,7 +256,7 @@ The same Worker performs read-only cleanup preflight. The Orchestrator then:
 7. deletes exact local/remote issue branches when authorized and safe;
 8. fetches and fast-forwards authoritative `main`;
 9. proves a clean `HEAD == main == origin/main`;
-10. retains issue evidence and any repository-declared shared validation cache;
+10. retains issue evidence, every sealed or diagnostic lifecycle window, and any repository-declared shared validation cache;
 11. returns to IDLE or stops after current.
 
 If ref refresh, retention, or ordinary worktree removal fails, stop cleanup, diagnose the exact conflict, and preserve evidence. Never infer ancestry, kill Codex or Node, force-remove unknown work, or broaden the cleanup target.
@@ -287,6 +299,7 @@ WSL, Linux, macOS, and other hosts keep their ordinary topology and must not inh
 - Merge, closure, branch deletion, and worktree removal require live authority.
 - External validation requires exact repository-owned route/identity/action/evidence-time bindings and the matching independent authority switch; no route authorizes an unknown or production target.
 - Executor schema expectations come only from the exact selected contract and typed receipts; opaque external-validation sequence values never replace formal Supervisor accounting.
+- Lifecycle observation is opt-in, Orchestrator-only, append/read-back before advancement, and sealed/verified before evidence acceptance; missing pre-arm history is never reconstructed.
 - Cleanup never destroys unique work.
 - Cleanup never removes unique auxiliary evidence before exact size/digest retention and read-back.
 - Release, tag, publish, version bump, repository visibility change, force-push, reset, rebase, and runtime self-promotion remain out of scope.

@@ -8,6 +8,7 @@ This is Roundlet's detailed operating contract. The Orchestrator rereads the pin
 - [Configuration and capability preflight](#configuration-and-capability-preflight)
 - [Repository-defined validation toolchains](#repository-defined-validation-toolchains)
 - [Repository-owned external validation](#repository-owned-external-validation)
+- [Optional lifecycle observation sink](#optional-lifecycle-observation-sink)
 - [Task creation and immutable binding](#task-creation-and-immutable-binding)
 - [Native Windows Worker topology](#native-windows-worker-topology)
 - [Advisory local state](#advisory-local-state)
@@ -42,6 +43,7 @@ Roundlet operates only inside this envelope:
 - one fresh read-only Supervisor for each review attempt;
 - one isolated worktree and one `codex/` branch for that leaf;
 - one Orchestrator as the only GitHub mutator;
+- zero or one leaf-selected repository-owned lifecycle observation sink invoked only by that Orchestrator;
 - one immutable activation-time contract bundle.
 
 Do not start a second run for the same target from another task, clone, or machine. A local lease is advisory and cannot prevent split-brain. Activation preflight, GitHub traces, exact task identities, and refusal to take over reduce risk; they do not create distributed locking.
@@ -64,6 +66,7 @@ Before activation, prove:
 - the external creator can resolve the installed Roundlet skill used for new activation to one canonical absolute root and place it in the populated Launcher prompt; the Launcher can read the exact required file set from that root without a role-side skill-catalog entry, alternative-root scan, or substitution;
 - root `AGENTS.md` on `origin/main` contains exactly one valid Roundlet authority block;
 - when root instructions explicitly declare repository-owned external validation, every referenced contract resolves to one exact authoritative path and byte identity and every declared leaf route uses only `none`, `toolbox`, or `toolbox+disposable-target`;
+- when root instructions declare an optional lifecycle observation sink, every referenced contract resolves to one exact authoritative path and byte identity and exposes deterministic prepare, append/read-back, seal/verify, closed-event, and retention capabilities without invocation during activation;
 - the configured merge method is supported;
 - the checkout is clean and `HEAD == main == origin/main`;
 - no other Roundlet run or unreconciled resource may own the target;
@@ -144,6 +147,33 @@ Repository standing authority and host command execution are separate. A denial 
 
 For historical replay, read the immutable capture time from the evidence bundle using the repository-declared field and pass that value to the repository comparator. Wall-clock execution time is valid only for a contract that explicitly describes a current live decision; it must never replace historical evidence time. Bind the field name, captured value, bundle digest, and comparison result in private state, and publish only their allowed public-safe projection.
 
+## Optional lifecycle observation sink
+
+This contract is opt-in. It applies only when authoritative root instructions reference one repository-owned sink contract and the selected leaf declares that ephemeral lifecycle evidence is required. Otherwise bind `NOT_SELECTED`: do not resolve a window, create storage, call a producer, add a prompt field beyond `not-applicable`, or change any lifecycle transition.
+
+Roundlet treats the sink implementation, command names, filesystem layout, and seal/retention schemas as opaque. The repository-owned contract must expose one exact prepare/arm path, one append/read-back path, and one seal/verify path whose identities can be pinned to authoritative instructions. Roundlet does not import that implementation and does not understand a product profile, phase, gate, comparator, target fixture, or semantic decision.
+
+Before the first transition named by the leaf's `arm before` boundary:
+
+1. Bind the authoritative contract path/blob, entrypoint identities, producer, store, closed event schema, opaque window, exact full candidate SHA, capture-plan/evidence-time identity, and formal `review_epoch`, `review_round`, and `review_mode`. Resolve any repository-supplied identity projection without inventing a value.
+2. Invoke the exact prepare path once and require a typed path-free `ARMED` receipt with zero provider, GitHub, target, and product mutation. Semantically read back every required binding. A construction, import, path, schema, or external-action-free readiness defect returns to implementation and is not owner input.
+3. Create no role task selected for that observation window, and advance no selected transition, until arming succeeds. Unobserved implementation work may proceed when the leaf's arm-before boundary is later. If a short-lived selected event already occurred while unarmed, that window can never qualify; preserve it as `STALE` and repeat the live sequence only in a genuinely fresh bound window.
+
+Only the Orchestrator invokes the sink. Worker and Supervisor tasks return ordinary structured handoffs/results and never receive credentials, store access, or mutation authority from the sink. At the transition boundary, the Orchestrator supplies only this closed generic fact set through the repository contract:
+
+- opaque repository, window, task, attempt, predecessor, and bounded public-safe artifact identities;
+- exact candidate SHA, immutable event time, role (`worker` or `supervisor`), and append sequence;
+- formal review epoch, round, mode, and within-round attempt;
+- one distinct transition: attempt started/completed, result accepted/unaccepted, candidate moved, or formal round advanced;
+- one typed disposition such as pending, cancelled, invalid context, pass, findings, failed, accepted, unaccepted, or stale; and
+- accepted-result Boolean plus an optional exact successor candidate for candidate movement.
+
+Raw provider/model input or output, exception prose, credentials, tokens, private paths, task transcripts, hidden reasoning, owner reasoning, UI text, and product-only fields are prohibited. The sink receipt is evidence, not a Roundlet verdict: it cannot accept a Supervisor result, classify prose, consume a formal round, authorize a mutation, or replace GitHub trace.
+
+After each selected event, require append success and semantic receipt read-back before the corresponding Roundlet transition advances. Record only the bounded plan/window identity, sequence, event/head digest, and receipt status in advisory state. The exact candidate, review tuple, sink, schema, producer, store, capture plan, evidence time, predecessor, or receipt moving makes the window `STALE`; never stitch chains or retry with changed bytes under the same sequence.
+
+When the leaf's declared window ends, invoke the exact seal path and independently verify the retained chain, manifest, content identity, evidence time, retention receipt, and zero unauthorized mutation. A selected evidence gate can proceed only in `VERIFIED`. Preserve sealed ledgers beyond task/worktree cleanup. Preserve partial or conflicting windows as non-qualifying diagnostics and open a new live window; never backfill, infer, normalize, or fabricate missing history.
+
 ## Task creation and immutable binding
 
 For every Launcher, Orchestrator, Worker, and Supervisor:
@@ -204,7 +234,7 @@ The lease has no expiry:
 }
 ```
 
-`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, repository validation-toolchain summary/cache root and last public-safe lock/receipt status when applicable, selected external-validation route plus authoritative instruction/skill/target/action identities, declared readiness/result schema identities, opaque external-validation sequence, and historical evidence-time binding when applicable, the separate formal review epoch/round/mode/attempt/profile, last verified Supervisor-result event, last verified Worker-repair-handoff event, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never alias or copy values between the external-validation sequence and formal review tuple. Never store the advisory role report, credential, raw external payload, or raw receipt. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
+`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, repository validation-toolchain summary/cache root and last public-safe lock/receipt status when applicable, selected external-validation route plus authoritative instruction/skill/target/action identities, declared readiness/result schema identities, opaque external-validation sequence, and historical evidence-time binding when applicable, optional lifecycle-sink contract/state plus plan/window/sequence/head/receipt identities, the separate formal review epoch/round/mode/attempt/profile, last verified Supervisor-result event, last verified Worker-repair-handoff event, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never alias or copy values between an external-validation or lifecycle-sink sequence and the formal review tuple. Never store the advisory role report, credential, raw external payload, raw sink event, or raw receipt. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
 
 Before each tick or mutation, reconcile both files with the bundle, GitHub, Git, tasks, and heartbeat. Prefer live authoritative evidence. Conflicts enter `NEEDS_OWNER_INPUT` with reason `STATE_RECONCILIATION_CONFLICT`; never guess or overwrite them.
 
@@ -297,6 +327,7 @@ For each ready candidate, build a compact evidence record:
 - exact dependency list and completion evidence;
 - formal parent and relevant Canonical scheduling note;
 - external-validation route and exact authoritative contract/standing-authority readiness, or explicit `none`;
+- lifecycle observation requirement plus exact authoritative sink-contract readiness, or explicit `NOT_SELECTED`;
 - blocker/owner/active-resource evidence;
 - readiness reason.
 
@@ -322,7 +353,7 @@ One heartbeat tick may perform at most one externally meaningful transition. Bou
 After selecting one ready leaf:
 
 1. Enter `ISSUE_PROVISIONING` without posting selection.
-2. Resolve and verify any repository-owned external-validation route and standing authority, then create one unpublished local `codex/` branch from exact `origin/main`.
+2. Resolve and verify any repository-owned external-validation route, optional lifecycle-sink contract, and standing authority, then create one unpublished local `codex/` branch from exact `origin/main`.
 3. Create one isolated linked worktree and one persistent Worker:
    - native Windows: create/verify anchor and Worker first, then create the separate descendant worktree;
    - other hosts: create/verify worktree first, then create the Worker in the ordinary topology.
@@ -370,13 +401,13 @@ Use stable event IDs. Before writing, search both the leaf issue and the pull re
 
 Never edit, delete, move, or bulk-repost a historical trace to hide or repair a routing error. Preserve the original comment. When recovery needs to make the durable sequence clear, add at most one bounded pointer on the current canonical surface naming the prior event marker and URL without copying raw artifacts or the full prior comment.
 
-Record selection/ranking, Worker handoffs, draft PR creation, verified external-validation readiness/result, invalid Supervisor availability attempts, valid Supervisor results, repairs, terminal review, owner/authority/abort decisions, merge, leaf closure, and cleanup. Keep provider-free executor construction and preflight corrections local unless they change the candidate or become one durable blocker. Summarize files, tests, findings/dispositions, SHAs, and risks. Never publish hidden reasoning, credentials, private artifacts, raw task transcripts, or unbounded logs.
+Record selection/ranking, Worker handoffs, draft PR creation, verified external-validation readiness/result, invalid Supervisor availability attempts, valid Supervisor results, repairs, terminal review, owner/authority/abort decisions, merge, leaf closure, and cleanup. Keep provider-free executor construction, lifecycle-sink arm/append traffic, and preflight corrections local unless they change the candidate or become one durable blocker; publish at most the repository-allowed arm/seal identities as part of the existing validation readiness/result events. Summarize files, tests, findings/dispositions, SHAs, and risks. Never publish hidden reasoning, credentials, private artifacts, raw sink events, raw task transcripts, or unbounded logs.
 
 ## Review epochs and rounds
 
 Start epoch 1, round 1, bound to the exact pushed candidate. Preserve the same epoch, accepted-round count, and next mode across pause, resume, same-task continuation, and authorized recovery when the immutable activation contract, leaf scope, acceptance criteria, and candidate review basis are unchanged. Satisfying or refreshing an already-declared standing external-validation route is not a scope change. Ordinary repairs stay in the epoch.
 
-Formal review accounting is independent of repository-owned external-validation accounting. Only an accepted schema-valid Supervisor result at the exact formal tuple can consume a Roundlet review round. An external executor's epoch/round/attempt, even when numerically identical, never dispatches a Supervisor, satisfies a review result, or enters the merge gate. If a Supervisor was created with a stale or external-validation tuple, stop or archive it without accepting or tracing its verdict; interrupt it first when it is still running. Preserve prior accepted results, record the misbound task only as unaccepted local diagnostic evidence, and create one fresh Supervisor at the mechanically correct formal tuple.
+Formal review accounting is independent of repository-owned external-validation and lifecycle-sink accounting. Only an accepted schema-valid Supervisor result at the exact formal tuple can consume a Roundlet review round. An external executor or sink's epoch/round/attempt, even when numerically identical, never dispatches a Supervisor, satisfies a review result, or enters the merge gate. If a Supervisor was created with a stale external or sink tuple, stop or archive it without accepting or tracing its verdict; interrupt it first when it is still running. Preserve prior accepted results, record the misbound task only as unaccepted local diagnostic evidence, and create one fresh Supervisor at the mechanically correct tuple.
 
 An allowlisted owner change that materially changes scope or acceptance criteria starts a new epoch at round 1 COMPLETE. Main integration also starts a new COMPLETE epoch under the merge-gate rule because the candidate review basis changes. Never start a new epoch merely because the Orchestrator/heartbeat restarts, an unchanged gate is retried, a credential is refreshed, or a previously permitted repository-owned route is mechanically rebound to the same identities.
 
@@ -435,6 +466,7 @@ Before ready conversion or merge, prove:
 - configured merge method is available and equals `merge`.
 - every repository-required validation-toolchain receipt and result is valid for the terminal candidate SHA; bootstrap-only or host-tool output cannot satisfy this gate.
 - every selected external-validation binding, evidence-time value, semantic read-back, rollback disposition, and public-safe result is current for the terminal candidate; an ambiguous or partially applied target mutation cannot satisfy this gate.
+- every selected lifecycle window is sealed and verified for the terminal candidate and required formal tuple, with a current content/retention receipt and no missing pre-arm event; `UNARMED`, `APPENDING`, `STALE`, partial, or conflicting evidence cannot satisfy this gate.
 
 If `origin/main` advanced, reread mergeability and rules. Merge directly only when GitHub still accepts it and no rule requires an update. Otherwise send the same Worker a main-integration turn that merges `origin/main` into the issue branch without rebase/force. The Orchestrator independently verifies the integration handoff/diff/tests, pushes the exact new candidate without force, reads back the remote head, appends and reads back the handoff trace in the PR Conversation, and then starts a new COMPLETE epoch.
 
@@ -460,7 +492,7 @@ Cleanup is part of the active issue:
 8. If ordinary removal fails, diagnose exact-worktree CWD holders. On native Windows, do not treat a distinct retained empty task anchor as the linked worktree. Never kill Codex or Node to obtain cleanup.
 9. Delete local/remote issue branches only when authorized and their unique work is merged or explicitly abandoned.
 10. Fetch, fast-forward local `main`, and prove a clean authoritative checkout with `HEAD == main == origin/main`.
-11. Retain repository-declared issue evidence and any `.roundlet/validation-tools/` shared cache; neither is an issue worktree or ordinary run-owned removal target.
+11. Retain repository-declared issue evidence, every sealed lifecycle ledger plus partial/conflicting diagnostic window, and any `.roundlet/validation-tools/` shared cache; none is an issue worktree or ordinary run-owned removal target.
 12. Append the cleanup trace to the leaf issue, including the bounded retention-manifest identity, read it back there, and clear issue pointers. If continuing, retain lease/contract and set `IDLE`; if stopping, append/read back `STOPPED` on the issue, remove heartbeat, advisory state, and contract bundle after final reconciliation, then archive the Orchestrator.
 
 Failed ref refresh, ordinary removal, surviving registration/path, unique work, incomplete retention, or ambiguous read-back enters `CLEANUP_BLOCKED` and selects no next issue. Do not reopen a leaf solely because cleanup failed.
@@ -495,7 +527,7 @@ In the existing Orchestrator task, inspect the active Roundlet run without advan
 Target repository: <OWNER/REPOSITORY>
 Authoritative checkout: <ABSOLUTE_PATH>
 
-Reconcile GitHub, exact Git state, role tasks, heartbeat, lease, and current state. Do not mutate GitHub/Git or advance a tick. Report run/contract/Orchestrator/heartbeat identities, phase, active leaf/PR, Worker/current Supervisor, candidate SHA, review epoch/round/attempt/profile, blocker, last durable event, heartbeat interval, last full reconciliation, and next safe action. Stop on contradictory evidence.
+Reconcile GitHub, exact Git state, role tasks, heartbeat, lease, and current state. Do not mutate GitHub/Git or advance a tick. Report run/contract/Orchestrator/heartbeat identities, phase, active leaf/PR, Worker/current Supervisor, candidate SHA, review epoch/round/attempt/profile, external-validation state, lifecycle-observation state/window/head, blocker, last durable event, heartbeat interval, last full reconciliation, and next safe action. Stop on contradictory evidence.
 ```
 
 ### Pause at a safe checkpoint
@@ -532,5 +564,6 @@ If the Orchestrator or heartbeat is inaccessible, use the Explicit recovery Laun
 - A failed Supervisor is disposable under the bounded attempt rule.
 - Verify the immutable activation bundle first, then reconstruct from GitHub trace, exact Git, task/heartbeat evidence, and advisory files.
 - Reconstruct and verify the selected repository-owned external-validation binding, declared schema identities, opaque external-validation sequence, and historical evidence-time value when applicable. Reconstruct the formal Supervisor tuple independently. Preserve each sequence on its own exact match; conflict fails closed instead of copying one sequence into the other or resetting review accounting.
+- Reconstruct any selected lifecycle-sink contract, exact arm receipt, window/candidate/formal binding, append sequence/head, seal state, and retained receipt independently. Missing pre-arm history or an unverifiable chain stays `STALE` and requires a fresh live window; recovery never creates or backfills an event.
 - Treat the installed skill as unrelated candidate material. It cannot repair or replace the active contract.
 - Stop on contradictions and append corrections rather than editing old trace.
