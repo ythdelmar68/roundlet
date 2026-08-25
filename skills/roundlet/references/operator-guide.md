@@ -10,7 +10,7 @@ This is Roundlet's detailed operating contract. The Orchestrator rereads the pin
 - [Repository-owned external validation](#repository-owned-external-validation)
 - [Optional lifecycle observation sink](#optional-lifecycle-observation-sink)
 - [Task creation and immutable binding](#task-creation-and-immutable-binding)
-- [Native Windows Worker topology](#native-windows-worker-topology)
+- [Repository project/worktree topology](#repository-projectworktree-topology)
 - [Advisory local state](#advisory-local-state)
 - [Immutable activation contract](#immutable-activation-contract)
 - [Observation and heartbeat cadence](#observation-and-heartbeat-cadence)
