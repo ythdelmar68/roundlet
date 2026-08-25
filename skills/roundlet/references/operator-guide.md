@@ -178,10 +178,10 @@ When the leaf's declared window ends, invoke the exact seal path and independent
 
 For every Launcher, Orchestrator, Worker, and Supervisor:
 
-1. Record the creator/source task, requested role, exact configured model and effort, and intended project/workspace/CWD.
+1. Record the creator/source task, requested role, exact configured model and effort, and intended task route. For a repository role also record the uniquely resolved saved-project identity, canonical repository path, Git common directory, existing starting ref, and expected full starting SHA. A project/worktree route's actual CWD is creator-resolved after asynchronous creation; it is not a caller-chosen path.
 2. Create exactly one role task with only the `ROUNDLET_ROLE_METADATA_REPORT_REQUEST` from the role contract as its first prompt. That metadata-only turn performs no role, repository, GitHub, Git, heartbeat, or filesystem action.
 3. Treat any `ROUNDLET_ROLE_METADATA_REPORT` or other returned rendering as advisory. It may be absent, one line, reordered, noncanonical, or omit a self-reported task ID.
-4. Independently read immutable creator-side metadata before the first populated role prompt and construct a proposed `CREATOR_TASK_BINDING_ATTESTATION` containing the role task ID, creator/source task, requested role, configured model/effort, project/workspace, canonical CWD, and available stable host/environment identity.
+4. Wait for task creation to finish, then independently read immutable creator-side metadata before the first populated role prompt. Construct a proposed `CREATOR_TASK_BINDING_ATTESTATION` containing the role task ID, creator/source task, requested role, configured model/effort, route, requested saved project, actual project/workspace and canonical CWD, Git common directory and starting ref/SHA where applicable, and available stable host/environment identity.
 5. If the role report explicitly contradicts the proposed attestation, perform exactly one bounded creator-side immutable re-read. If the authoritative values remain complete and match the request, keep the same proposed attestation and treat the report as untrusted contradictory prose. If authoritative metadata is missing, stale, malformed, mismatched, changes across the re-read, or otherwise conflicts, archive the task and fail closed before role work.
 6. Require every authoritative field to match the creation request, then record exactly one creator attestation. Only that validated attestation authorizes the first populated role prompt.
 7. For a top-level new-activation or recovery Launcher, copy the complete stable attestation into the fixed creator-authority block of the populated Launcher prompt; that Launcher consumes the block and does not perform role-side immutable self-metadata discovery. For roles created by a Launcher or Orchestrator, copy the stable attestation into the role envelope and advisory state where applicable. Recovery and restart normally reuse it. Only contradictory immutable creator-side evidence triggers exactly one bounded re-read against the recorded attestation; an unchanged complete match preserves it, while an unresolved difference fails closed. Neither path creates a second task, second attestation, duplicate dispatch, or duplicate availability event.
@@ -190,20 +190,22 @@ Role text never satisfies, alters, or invalidates binding by itself. Missing, sh
 
 An `invalid-binding` disposition or public availability trace may name only a creator-evidence class: `CREATOR_METADATA_MISSING`, `CREATOR_METADATA_STALE`, `CREATOR_METADATA_MALFORMED`, `CREATOR_METADATA_MISMATCH`, or `CREATOR_METADATA_CONFLICT_AFTER_REREAD`. Never cite role-report formatting, omitted fields, prose, title, summary, or missing self-reported task ID as the reason. A valid creator attestation plus a noncanonical role report does not consume a Supervisor attempt, advance the attempt profile, consume a review round, or publish a discard trace.
 
-## Native Windows Worker topology
+## Repository project/worktree topology
 
-This section applies only when the verified Worker runtime is native Windows.
+Use this topology for every Git-repository Worker and Supervisor on every supported host:
 
-1. Create a unique host-owned task anchor and create the Worker with that anchor as canonical CWD.
-2. Require the anchor to be distinct from the removable linked worktree and not inside it.
-3. Create the linked worktree at a separate writable descendant path, such as `<anchor>/work/repository`.
-4. Read back the exact anchor/worktree pair before implementation.
-5. Use direct normal-sandbox `apply_patch` for every source edit. Do not wrap it in PowerShell, a pipeline, a here-string/here-document, a batch file, or elevation.
-6. If the linked-worktree index or `index.lock` resolves outside the Worker's normal writable roots, request only a narrow approval for the exact Git metadata operation that needs it. Source edits stay in the normal sandbox.
+1. Resolve the target by canonical authoritative-checkout path against the live saved-project list. Require exactly one matching writable Git project. Canonicalize `git rev-parse --git-common-dir` to an absolute path relative to the checkout that produced it before comparison. A missing, duplicate, path-mismatched, or non-Git project blocks provisioning; never guess by display name.
+2. Create the candidate branch/ref locally from the exact base before requesting a task; the task route accepts an existing ref and does not create Roundlet's candidate ref.
+3. Create the task asynchronously with that saved project, the App-managed worktree environment, and the existing starting ref. Wait for readiness and immutable creator metadata before sending role work.
+4. Verify that the actual CWD is the task's App-managed repository worktree, is not the authoritative checkout, and does not equal any retained tombstone path. Require `git rev-parse --show-toplevel` to equal that CWD, the canonical absolute `git rev-parse --git-common-dir` to equal the authoritative repository's common Git directory, `HEAD` to equal the expected full SHA, the checkout to be clean, and `git symbolic-ref -q HEAD` to report detached. Detached `HEAD` is mandatory so only the Orchestrator advances the candidate ref.
+5. Reuse the same Worker task and worktree for every repair, main integration, final repair, and cleanup preflight. Never create a replacement worktree for a reachable Worker.
+6. Before each Supervisor creation, update an existing local candidate ref to the exact verified candidate SHA. Create a fresh read-only project/worktree task from that ref and verify its independent detached worktree at the same SHA. Worker and Supervisor never share a physical directory.
+7. A task record may omit a project ID even though the creator requested a uniquely resolved saved project. Do not invent the missing field. Bind the creator's saved-project request together with actual CWD, Git common-directory, ref, and SHA read-back.
+8. Before every project/worktree task dispatch, compare its actual CWD with every unresolved route-probe or run-local task-worktree tombstone. Equality is `CREATOR_METADATA_CONFLICT_AFTER_REREAD` and blocks dispatch; a former tombstone may be retired only after a fresh read proves its physical path absent.
 
-The separate anchor prevents a host process that retains the task CWD from holding the child linked worktree. Cleanup evaluates the child worktree itself. An empty host-owned anchor may remain as host lifecycle evidence and is not a Roundlet worktree.
+Projectless task creation is not a repository fallback. It may be used only for a non-repository role or when a separately verified capability guarantees a caller-supplied canonical CWD. A `directoryName` or similar output-folder hint is not evidence of task CWD.
 
-WSL, Linux, macOS, and other hosts use their ordinary worktree/task topology and do not inherit these rules.
+On native Windows, Workers additionally use direct normal-sandbox `apply_patch` for every source edit. Do not wrap it in PowerShell, a pipeline, a here-string/here-document, a batch file, or elevation. If the linked-worktree index or `index.lock` resolves outside the Worker's normal writable roots, request only a narrow approval for the exact Git metadata operation; source edits stay in the normal sandbox.
 
 ## Advisory local state
 
@@ -234,7 +236,7 @@ The lease has no expiry:
 }
 ```
 
-`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, branch/worktree/Worker anchor, base and candidate full SHAs, repository validation-toolchain summary/cache root and last public-safe lock/receipt status when applicable, selected external-validation route plus authoritative instruction/skill/target/action identities, declared readiness/result schema identities, opaque external-validation sequence, and historical evidence-time binding when applicable, optional lifecycle-sink contract/state plus plan/window/sequence/head/receipt identities, the separate formal review epoch/round/mode/attempt/profile, last verified Supervisor-result event, last verified Worker-repair-handoff event, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never alias or copy values between an external-validation or lifecycle-sink sequence and the formal review tuple. Never store the advisory role report, credential, raw external payload, raw sink event, or raw receipt. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
+`current.md` records only bounded recovery facts: run/contract IDs, bundle, phase, issue and umbrella numbers/URLs, pull request, Worker/current Supervisor, each active role's creator binding attestation fields, task route, requested saved-project identity, actual worktree/CWD, canonical Git common directory, starting ref/SHA, verified activation route-probe receipt/retained-ledger identity, base and candidate full SHAs, the run-local task-worktree cleanup-ledger identity, repository validation-toolchain summary/cache root and last public-safe lock/receipt status when applicable, selected external-validation route plus authoritative instruction/skill/target/action identities, declared readiness/result schema identities, opaque external-validation sequence, and historical evidence-time binding when applicable, optional lifecycle-sink contract/state plus plan/window/sequence/head/receipt identities, the separate formal review epoch/round/mode/attempt/profile, last verified Supervisor-result event, last verified Worker-repair-handoff event, last durable event, blocking condition, heartbeat interval, last full reconciliation, and bounded observation state. Never alias or copy values between an external-validation or lifecycle-sink sequence and the formal review tuple. Never store the advisory role report, credential, raw external payload, raw sink event, or raw receipt. Do not append transcripts, issue bodies, raw comments, diffs, logs, or reasoning.
 
 Before each tick or mutation, reconcile both files with the bundle, GitHub, Git, tasks, and heartbeat. Prefer live authoritative evidence. Conflicts enter `NEEDS_OWNER_INPUT` with reason `STATE_RECONCILIATION_CONFLICT`; never guess or overwrite them.
 
@@ -353,11 +355,9 @@ One heartbeat tick may perform at most one externally meaningful transition. Bou
 After selecting one ready leaf:
 
 1. Enter `ISSUE_PROVISIONING` without posting selection.
-2. Resolve and verify any repository-owned external-validation route, optional lifecycle-sink contract, and standing authority, then create one unpublished local `codex/` branch from exact `origin/main`.
-3. Create one isolated linked worktree and one persistent Worker:
-   - native Windows: create/verify anchor and Worker first, then create the separate descendant worktree;
-   - other hosts: create/verify worktree first, then create the Worker in the ordinary topology.
-4. Independently verify clean base SHA, branch, worktree registration/path/status, Worker task/profile/workspace/CWD binding, repository instructions, and absence of conflicting resources.
+2. Resolve and verify any repository-owned external-validation route, optional lifecycle-sink contract, standing authority, and the one saved local project matching the authoritative repository; then create one unpublished local `codex/` candidate ref from exact `origin/main`.
+3. Create one persistent Worker asynchronously through the saved project's App-managed worktree route using that existing ref.
+4. After task readiness, independently verify detached `HEAD`, clean base SHA, candidate ref, App worktree registration/path/status, canonical Git common directory, Worker task/profile/route/requested-project/actual-CWD binding, non-reuse of every retained tombstone path, repository instructions, and absence of conflicting resources.
 5. On any provisioning failure, remove only proven empty/unpublished resources, verify cleanup, and return to `IDLE`; otherwise stop in `CLEANUP_BLOCKED`.
 6. Only after successful read-back, publish the selection trace to the leaf issue, read it back there, enter `ISSUE_SELECTED`, and send the initial implementation prompt to that same Worker.
 
@@ -367,7 +367,7 @@ After a valid initial handoff:
 
 1. Independently verify before/after SHAs, diff, status, tests, issue scope, and any repository-required candidate/lock/receipt validation binding.
 2. On native Windows, verify direct normal-sandbox `apply_patch` for source edits and reject contradictory routing evidence.
-3. Push the exact candidate without force.
+3. Require the detached Worker checkout and local candidate ref still at the expected prior SHA. Atomically update that ref from the expected prior SHA to the verified Worker candidate, then push that exact ref/candidate without force and read back the remote head. The detached Worker checkout is never treated as the authoritative ref by itself.
 4. Append the initial Worker handoff to the leaf issue and read it back from that issue.
 5. Create a draft pull request linking the umbrella non-closing when present and including `Closes #<leaf>` for the active leaf only.
 6. Append the draft-PR creation trace to the leaf issue, read it back from that issue, update advisory state, and then use the pull request's top-level Conversation for all later candidate/review/repair/validation evidence.
@@ -415,11 +415,14 @@ For each round:
 
 1. Hold epoch, round, mode, and candidate SHA fixed.
 2. Select the configured attempt profile at the exact one-based position.
-3. Create one fresh Supervisor with that exact profile and independently record/verify its creator binding attestation. Do not interpret its advisory role report as binding evidence.
-4. Send the read-only review prompt and require a structured result bound to the attempt/profile/epoch/round/mode/SHA.
-5. Independently verify context, read-only behavior, and result identity.
-6. If valid, publish it to the PR Conversation and read it back there, archive the Supervisor, and follow PASS or FINDINGS.
-7. If invalid/failed/cancelled/inaccessible/malformed/wrong-context/wrong-SHA, archive it, publish only bounded availability evidence to the PR Conversation, read it back there, and advance to the next profile. It does not consume the review round or become a finding/PASS.
+3. Update the existing local candidate ref to the exact candidate SHA, then create one fresh Supervisor through the same saved project's App-managed worktree route with that exact profile/ref. Independently verify its distinct detached worktree, canonical repository common directory, `HEAD`, non-tombstone path, and creator binding attestation. Do not interpret its advisory role report as binding evidence.
+4. Before dispatch, record an independent read-only snapshot of that exact worktree: task/CWD/registration identity, detached `HEAD`, full candidate SHA, porcelain-v2 tracked/untracked/index status, and the exact candidate ref OID. Require clean status. Do not digest unrelated refs from the shared Git common directory.
+5. Send the read-only review prompt and require a structured result bound to the attempt/profile/epoch/round/mode/SHA.
+6. Before accepting any result, repeat the independent snapshot and require exact equality. Any HEAD, tracked/untracked/index, exact-candidate-ref, registration, common-directory, or CWD drift is `INVALID_CONTEXT`; the Supervisor's `read_only: true` field cannot override it. Unrelated shared refs are reconciled independently and never attributed to the Supervisor by this snapshot.
+7. If valid, publish it to the PR Conversation and read it back there, archive the Supervisor, perform the mandatory per-task cleanup read-back below, and follow PASS or FINDINGS.
+8. If invalid/failed/cancelled/inaccessible/malformed/wrong-context/wrong-SHA, archive it, perform the same mandatory per-task cleanup read-back, publish only bounded availability evidence to the PR Conversation, read it back there, and advance to the next profile. It does not consume the review round or become a finding/PASS.
+
+After every Supervisor archive, wait for task state for at most 30 seconds, then perform exactly one registration/path snapshot and append one `ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT` to the run-local ledger. `REMOVED` permits continuation. A conforming empty tombstone also permits continuation. Any still-active task, registration, `.git`, content, changing state, path reuse, or ambiguous read-back is `BLOCKED` and creates no later Supervisor until reconciled. Final cleanup consumes every ledger entry; it never rediscovers old Supervisor paths by guesswork.
 
 Apply this transition table mechanically:
 
@@ -468,7 +471,7 @@ Before ready conversion or merge, prove:
 - every selected external-validation binding, evidence-time value, semantic read-back, rollback disposition, and public-safe result is current for the terminal candidate; an ambiguous or partially applied target mutation cannot satisfy this gate.
 - every selected lifecycle window is sealed and verified for the terminal candidate and required formal tuple, with a current content/retention receipt and no missing pre-arm event; `UNARMED`, `APPENDING`, `STALE`, partial, or conflicting evidence cannot satisfy this gate.
 
-If `origin/main` advanced, reread mergeability and rules. Merge directly only when GitHub still accepts it and no rule requires an update. Otherwise send the same Worker a main-integration turn that merges `origin/main` into the issue branch without rebase/force. The Orchestrator independently verifies the integration handoff/diff/tests, pushes the exact new candidate without force, reads back the remote head, appends and reads back the handoff trace in the PR Conversation, and then starts a new COMPLETE epoch.
+If `origin/main` advanced, reread mergeability and rules. Merge directly only when GitHub still accepts it and no rule requires an update. Otherwise send the same Worker a main-integration turn that merges `origin/main` into its exact candidate checkout without rebase/force. The Orchestrator independently verifies the integration handoff/diff/tests, updates and pushes the exact candidate ref without force, reads back the remote head, appends and reads back the handoff trace in the PR Conversation, and then starts a new COMPLETE epoch.
 
 Mark ready only with authority. Record the merge-gate decision in the PR Conversation and read its inputs from live pull-request metadata. Merge using a merge commit only with both merge and leaf-close authority. Read the merge result, merge commit, and exact head SHA back from pull-request metadata; put any accompanying curated result trace in the PR Conversation.
 
@@ -485,17 +488,17 @@ Cleanup is part of the active issue:
 1. Read the live pull request and leaf, then fetch the exact remote main and issue-branch refs. Read back the expected remote head and merge commit locally before asking the Worker to prove ancestry. Missing local knowledge is a refreshable preflight state, not owner input and not permission to infer ancestry.
 2. Send the same Worker cleanup preflight. It verifies pushed/merged state, leaf state, worktree status, unique commits, untracked files, and absence of unpreserved work against those refreshed refs. It does not remove its own worktree/branch.
 3. Independently verify the handoff and archive the Worker.
-4. Verify the Worker is no longer active.
-5. Inventory every Orchestrator-created auxiliary worktree and state root. Classify each as source-only or evidence-bearing from the exact repository-owned contract and live contents. For every unique evidence-bearing artifact, copy exact closed bytes into the repository-declared local retention boundary, record source identity, destination identity, size, and digest, and read every retained byte/size/digest back. Ambiguous, open, changing, partially copied, or unverifiable evidence enters `CLEANUP_BLOCKED`.
-6. If authorized, remove the exact Worker and auxiliary linked worktrees non-force only after unique-work and retention proof succeeds.
-7. Independently prove every removed Git registration and physical worktree path is absent. Successful non-force removal plus these read-backs completes worktree-removal proof.
-8. If ordinary removal fails, diagnose exact-worktree CWD holders. On native Windows, do not treat a distinct retained empty task anchor as the linked worktree. Never kill Codex or Node to obtain cleanup.
+4. Wait for Worker task state for at most 30 seconds, verify it is no longer active, then perform exactly one registration/path snapshot and append its `ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT` to the same run-local ledger.
+5. Consume the complete run-local task-worktree cleanup ledger, then inventory every Orchestrator-created auxiliary worktree and state root. Require one terminal cleanup result for every Worker, Supervisor, and route probe task. Classify every remaining resource as source-only or evidence-bearing from the exact repository-owned contract and live contents. For every unique evidence-bearing artifact, copy exact closed bytes into the repository-declared local retention boundary, record source identity, destination identity, size, and digest, and read every retained byte/size/digest back. Missing task entries, ambiguous/open/changing resources, partially copied artifacts, or unverifiable evidence enters `CLEANUP_BLOCKED`.
+6. If authorized, remove any remaining exact Worker and auxiliary linked-worktree registrations non-force only after unique-work and retention proof succeeds. Do not race or duplicate an App removal already proven in progress.
+7. Independently prove every removed Git registration absent. A physical task-worktree path also must be absent unless it satisfies the typed tombstone rule below.
+8. When an archived, non-active App task has no Git registration, no `.git`, and an exactly empty directory that remains locked after the bounded wait, record one local cleanup-ledger tombstone containing task ID, exact managed-worktree path, archive/non-active evidence, absent-registration evidence, and zero-content read-back. Continue cleanup without retrying deletion. Any registration, file, subdirectory, unique work, changing state, ambiguous ownership, or path outside the App-managed root enters `CLEANUP_BLOCKED`. Never kill Codex or Node to obtain cleanup, and never reuse or silently forget a tombstone.
 9. Delete local/remote issue branches only when authorized and their unique work is merged or explicitly abandoned.
 10. Fetch, fast-forward local `main`, and prove a clean authoritative checkout with `HEAD == main == origin/main`.
 11. Retain repository-declared issue evidence, every sealed lifecycle ledger plus partial/conflicting diagnostic window, and any `.roundlet/validation-tools/` shared cache; none is an issue worktree or ordinary run-owned removal target.
 12. Append the cleanup trace to the leaf issue, including the bounded retention-manifest identity, read it back there, and clear issue pointers. If continuing, retain lease/contract and set `IDLE`; if stopping, append/read back `STOPPED` on the issue, remove heartbeat, advisory state, and contract bundle after final reconciliation, then archive the Orchestrator.
 
-Failed ref refresh, ordinary removal, surviving registration/path, unique work, incomplete retention, or ambiguous read-back enters `CLEANUP_BLOCKED` and selects no next issue. Do not reopen a leaf solely because cleanup failed.
+Failed ref refresh, surviving registration, a non-tombstone path, unique work, incomplete retention, or ambiguous read-back enters `CLEANUP_BLOCKED` and selects no next issue. A verified typed empty task-worktree tombstone is retained local host-lifecycle evidence and does not reopen the leaf or block the next issue.
 
 ## Active issue closed, ignored, or withdrawn
 
