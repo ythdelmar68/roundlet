@@ -26,8 +26,13 @@ role: <WORKER|SUPERVISOR>
 role_task: <creator-verified-task-id>
 creator_task: <creator-verified-source-task-id>
 execution_profile: model=<exact-model>;reasoning_effort=<exact-effort>
+task_route: <LOCAL_PROJECT|PROJECT_WORKTREE|PROJECTLESS_NONREPOSITORY>
+requested_saved_project: <creator-resolved-project-id-and-canonical-path-or-not-applicable>
 task_workspace: <creator-verified-project-or-workspace>
 task_cwd: <creator-verified-canonical-cwd>
+git_common_dir: <creator-verified-common-dir-or-not-applicable>
+starting_ref: <creator-verified-existing-ref-or-not-applicable>
+starting_sha: <creator-verified-full-sha-or-not-applicable>
 stable_host_identity: <creator-verified-value-or-unavailable>
 stable_environment_identity: <creator-verified-value-or-unavailable>
 binding_source: creator-immutable-readback
@@ -44,9 +49,8 @@ supervisor_attempt: <positive-integer-or-0-for-worker>
 supervisor_profile: <configured-profile-name-or-not-applicable>
 base_sha: <full-sha>
 candidate_sha: <full-sha-or-none-before-first-commit>
-branch: <exact-branch>
+branch: <exact-candidate-ref; checkout-is-detached>
 worktree: <absolute-path>
-worker_anchor: <absolute-path-or-not-applicable>
 last_durable_event: <event-id-or-none>
 last_supervisor_result_event: <verified-event-id-or-none>
 last_worker_repair_handoff_event: <verified-event-id-or-none>
@@ -69,7 +73,7 @@ lifecycle_observation_head: <append-sequence/event-head/entry-head/seal/retentio
 END_ROUNDLET_CONTEXT
 ```
 
-The Orchestrator populates the envelope from live evidence. The `role` field must equal the attestation's `requested_role`; the other creator-binding fields must equal the same recorded attestation exactly. `external_validation_schema_binding` and `external_validation_sequence` come only from the exact repository-owned executor binding and typed receipts. Lifecycle observation fields come only from the exact repository-owned sink receipts. Neither external sequence may populate or alter `review_epoch`, `review_round`, `review_mode`, or `supervisor_attempt`, which remain the formal Supervisor tuple. The role rereads the pinned bundle, root repository instructions, and relevant GitHub/Git state before acting. Return `CONTEXT_MISMATCH` without mutation when the envelope conflicts with live evidence.
+The Orchestrator populates the envelope from live evidence. The `role` field must equal the attestation's `requested_role`; the other creator-binding fields must equal the same recorded attestation exactly. For a repository role, `task_route` is `PROJECT_WORKTREE`; the creator-requested saved project, actual task CWD, Git common directory, starting ref, and starting SHA form one binding. `starting_ref` is the existing ref requested by the creator and proven to resolve to `starting_sha`; it does not imply the App checkout is attached to that ref. Require detached `HEAD`. An immutable task record may omit its project ID; preserve that field as unavailable instead of inventing it, while requiring the creator request and Git/CWD/SHA read-back to reconcile. `external_validation_schema_binding` and `external_validation_sequence` come only from the exact repository-owned executor binding and typed receipts. Lifecycle observation fields come only from the exact repository-owned sink receipts. Neither external sequence may populate or alter `review_epoch`, `review_round`, `review_mode`, or `supervisor_attempt`, which remain the formal Supervisor tuple. The role rereads the pinned bundle, root repository instructions, and relevant GitHub/Git state before acting. Return `CONTEXT_MISMATCH` without mutation when the envelope conflicts with live evidence.
 
 ## Role metadata report and creator binding attestation
 
@@ -79,8 +83,12 @@ Create a Launcher, Orchestrator, Worker, or Supervisor with only this first prom
 ROUNDLET_ROLE_METADATA_REPORT_REQUEST
 requested_role: <LAUNCHER|ORCHESTRATOR|WORKER|SUPERVISOR>
 requested_profile: model=<MODEL>;reasoning_effort=<EFFORT>
+requested_route: <LOCAL_PROJECT|PROJECT_WORKTREE|PROJECTLESS_NONREPOSITORY>
+requested_saved_project: <PROJECT_ID_AND_CANONICAL_PATH_OR_NOT_APPLICABLE>
+requested_starting_ref: <EXISTING_REF_OR_NOT_APPLICABLE>
+requested_starting_sha: <FULL_SHA_OR_NOT_APPLICABLE>
 requested_workspace: <PROJECT_OR_WORKSPACE>
-requested_cwd: <CANONICAL_CWD>
+requested_cwd: <CANONICAL_CWD|APP_MANAGED_WORKTREE>
 Return any role-visible metadata as a non-authoritative ROUNDLET_ROLE_METADATA_REPORT. Perform no role, repository, GitHub, Git, heartbeat, or filesystem action.
 END_ROUNDLET_ROLE_METADATA_REPORT_REQUEST
 ```
@@ -91,6 +99,7 @@ When the task can render the report canonically it may return:
 ROUNDLET_ROLE_METADATA_REPORT
 reported_role: <role-or-unknown>
 reported_profile: <profile-or-unknown>
+reported_route: <route-or-unknown>
 reported_workspace: <workspace-or-unknown>
 reported_cwd: <cwd-or-unknown>
 reported_task_id: <task-id-if-visible-or-unknown>
@@ -107,21 +116,26 @@ role_task: <exact-created-task-id>
 creator_task: <exact-creator-or-source-task-id>
 requested_role: <LAUNCHER|ORCHESTRATOR|WORKER|SUPERVISOR>
 execution_profile: model=<exact-configured-model>;reasoning_effort=<exact-configured-effort>
+task_route: <LOCAL_PROJECT|PROJECT_WORKTREE|PROJECTLESS_NONREPOSITORY>
+requested_saved_project: <exact-creator-request-or-not-applicable>
 task_workspace: <exact-project-or-workspace>
 task_cwd: <exact-canonical-cwd>
+git_common_dir: <exact-common-dir-or-not-applicable>
+starting_ref: <exact-existing-ref-or-not-applicable>
+starting_sha: <exact-full-sha-or-not-applicable>
 stable_host_identity: <exact-value-or-unavailable>
 stable_environment_identity: <exact-value-or-unavailable>
 binding_source: creator-immutable-readback
 END_CREATOR_TASK_BINDING_ATTESTATION
 ```
 
-If a report explicitly contradicts the proposed envelope, perform exactly one bounded creator-side immutable re-read. A complete unchanged read-back that still matches the request preserves the proposed values and the contradictory report remains non-authoritative. Missing, stale, malformed, mismatched, or still-conflicting creator metadata fails closed before role work. Only after every authoritative field matches the creation request does the creator record exactly one attestation; only that attestation authorizes role work. Invalid-binding evidence may name only the creator failure class; it must never cite report formatting, omitted fields, prose, or a missing self-reported task ID.
+If a report explicitly contradicts the proposed envelope, perform exactly one bounded creator-side immutable re-read. A complete unchanged read-back that still matches the request preserves the proposed values and the contradictory report remains non-authoritative. For `PROJECT_WORKTREE`, matching the creation request means the requested saved project/ref/profile equal the creator request and the actual App-managed CWD, canonical absolute Git common directory, detached `HEAD`, and exact SHA equal the resolved repository and expected state; the CWD itself is discovered after asynchronous creation and must differ from every unresolved tombstone path. Missing, stale, malformed, mismatched, or still-conflicting creator metadata fails closed before role work. Only after every authoritative field matches the route-specific request does the creator record exactly one attestation; only that attestation authorizes role work. Invalid-binding evidence may name only the creator failure class; it must never cite report formatting, omitted fields, prose, or a missing self-reported task ID.
 
 The verified attestation remains stable and is copied into later role envelopes. Recovery/restart normally reuses it without duplicate task creation, binding, dispatch, or trace. Only contradictory immutable creator-side evidence triggers exactly one bounded re-read against the recorded attestation. An unchanged complete match preserves it; an unresolved difference fails closed without creating another task, attestation, dispatch, or trace. Do not repeat discovery on every turn.
 
 For a top-level new-activation or recovery Launcher, the external creator copies the complete verified attestation into the fixed `Creator binding authority` block of the populated Launcher prompt. That prompt carries the creator's authoritative read-back across the task boundary. The Launcher validates one complete block and exact equality with the prompt's expected fields; it never rediscovers or requires a role-side immutable self-metadata route. A Launcher or Orchestrator that creates a later role remains that role's creator and performs the same creator-side read-back before copying the resulting attestation into the child role envelope and advisory state.
 
-The Launcher and Orchestrator use the authoritative checkout as canonical CWD and writable project. A native-Windows Worker uses its distinct host-owned anchor as CWD and the descendant linked worktree from the envelope as its writable implementation path. Other Workers use their ordinary verified project/worktree binding. Supervisors are read-only and may use a non-removable host-owned task CWD while reviewing the named target/SHA.
+The Launcher and Orchestrator use the authoritative checkout through `LOCAL_PROJECT`. Every Git-repository Worker uses one persistent `PROJECT_WORKTREE` task, and every Supervisor uses a fresh read-only `PROJECT_WORKTREE` task. Their physical worktrees are distinct; the saved-project request, Git common directory, and exact full SHA establish shared candidate identity. `PROJECTLESS_NONREPOSITORY` is never a repository fallback and requires a separately proven caller-controlled CWD capability.
 
 ## GitHub access recovery
 
@@ -169,8 +183,13 @@ role_task: <creator-verified-orchestrator-task-id>
 creator_task: <creator-verified-launcher-task-id>
 requested_role: ORCHESTRATOR
 execution_profile: model=<configured-model>;reasoning_effort=<configured-effort>
+task_route: LOCAL_PROJECT
+requested_saved_project: <creator-resolved-project-id-and-canonical-path>
 task_workspace: <authoritative-writable-project>
 task_cwd: <authoritative-checkout>
+git_common_dir: <creator-verified-common-dir>
+starting_ref: not-applicable
+starting_sha: not-applicable
 stable_host_identity: <creator-verified-value-or-unavailable>
 stable_environment_identity: <creator-verified-value-or-unavailable>
 binding_source: creator-immutable-readback
@@ -275,15 +294,14 @@ The Worker:
 - never invokes or writes the lifecycle observation sink; it returns ordinary structured handoffs to the Orchestrator, which alone appends verified generic transition facts;
 - performs no disposable-target mutation. The Orchestrator remains the sole GitHub mutator and independently applies any authorized external mutation/read-back transition.
 
-### Native Windows Worker topology and mutation route
+### Native Windows Worker mutation route
 
 Apply only when the verified runtime is native Windows:
 
-- `task_cwd` is the host-owned anchor and is distinct from/outside the removable worktree.
-- `worktree` is the separate writable descendant bound by the Orchestrator.
+- `task_cwd` and `worktree` are the same verified App-managed project worktree. Do not create a manual anchor or nested linked worktree.
 - Use direct normal-sandbox `apply_patch` for source edits. Never invoke it through PowerShell, a shell/pipeline, here-string/here-document, batch wrapper, or elevation.
 - If an actual Git operation needs out-of-root linked-worktree metadata, request the narrowest approval for that exact command/worktree only. Do not broaden it to source edits.
-- A host process retaining the separate anchor CWD is not an exact-worktree holder.
+- Cleanup may retain only a creator-verified typed empty task-worktree tombstone under the operator-guide rule; the Worker never removes or reuses it.
 
 Do not apply this section to WSL, Linux, macOS, or another host.
 
@@ -354,7 +372,7 @@ After the shared envelope:
 WORKER_INTEGRATE_MAIN
 expected_origin_main: <full-sha>
 
-Verify a clean worktree and exact candidate. Merge current origin/main into the issue branch
+Verify a clean worktree and exact candidate. Merge current origin/main into the issue candidate checkout
 without rebase or force-push, resolve only in-scope conflicts, validate, commit when needed,
 and return WORKER_HANDOFF kind=MAIN_INTEGRATION. Do not push or mutate GitHub.
 ```
@@ -387,7 +405,7 @@ contract_id: <activation-contract-id>
 role_task: <verified-task-id>
 execution_profile: model=<model>;reasoning_effort=<effort>
 active_leaf: <issue-number>
-branch: <exact-branch>
+branch: <exact-candidate-ref; checkout-is-detached>
 worktree: <absolute-path>
 before_sha: <full-sha>
 candidate_sha: <full-sha>
@@ -441,6 +459,27 @@ cleanup_safe: <true|false>
 blocking_evidence: <none-or-bounded-description>
 END_WORKER_CLEANUP_RESULT
 ```
+
+After every archived App-managed repository role task, the Orchestrator must append exactly one terminal local-only receipt to the run-local task-worktree cleanup ledger:
+
+```text
+ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT
+scope_id: <stable-run-id-or-activation-probe-id>
+active_leaf: <issue-number-or-none>
+role: <WORKER|SUPERVISOR|ROUTE_PROBE>
+role_task: <creator-verified-task-id>
+worktree: <exact-app-managed-absolute-path>
+task_state_after_wait: <ARCHIVED_AND_NONACTIVE|ACTIVE|AMBIGUOUS>
+wait_bound_seconds: 30
+git_registration: <ABSENT|PRESENT|AMBIGUOUS>
+dot_git: <ABSENT|PRESENT|AMBIGUOUS>
+directory_entries: <nonnegative-integer-or-ambiguous>
+path_reuses_prior_tombstone: <true|false|ambiguous>
+status: <REMOVED|RETAINED_EMPTY_TOMBSTONE|BLOCKED>
+END_ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT
+```
+
+`REMOVED` requires absent registration and physical path. `RETAINED_EMPTY_TOMBSTONE` requires an archived/non-active task, absent registration and `.git`, zero directory entries, and no prior-tombstone reuse. Every other result is `BLOCKED`. This receipt is never public GitHub trace, permission to remove content, or a reusable task directory.
 
 Before removing an Orchestrator-created auxiliary worktree or state root, the Orchestrator privately records and reads back:
 
