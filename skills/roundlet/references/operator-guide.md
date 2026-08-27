@@ -207,6 +207,18 @@ Projectless task creation is not a repository fallback. It may be used only for 
 
 On native Windows, Workers additionally use direct normal-sandbox `apply_patch` for every source edit. Do not wrap it in PowerShell, a pipeline, a here-string/here-document, a batch file, or elevation. If the linked-worktree index or `index.lock` resolves outside the Worker's normal writable roots, request only a narrow approval for the exact Git metadata operation; source edits stay in the normal sandbox.
 
+### Bounded App-managed cleanup settlement
+
+Codex task archival and App-managed worktree cleanup are separate observations. After an archive request is acknowledged, start one bounded cleanup-settlement window of at most 30 seconds. Observe the creator-verified task state together with the exact worktree's Git registration, physical-path presence, `.git` presence, directory-entry count, and prior-tombstone reuse. Continue bounded, non-busy, read-only observation while neither success predicate below is true; an archived/non-active task by itself is not terminal cleanup evidence.
+
+| Final combined predicate | Terminal result |
+| --- | --- |
+| Task archived/non-active, Git registration absent, and physical path absent | `REMOVED` |
+| Task archived/non-active, Git registration absent, physical path present below the App-managed root, `.git` absent, exactly zero directory entries, and no prior-tombstone reuse | `RETAINED_EMPTY_TOMBSTONE` |
+| Deadline reached with either predicate false, or any active/ambiguous task, registration, `.git`, content, path reuse, drift, or ambiguity | `BLOCKED` |
+
+Interim observations do not authorize deletion, reuse, mutation, or a cleanup result and are not retained as terminal snapshots. The first combined observation that proves a success predicate becomes the one terminal snapshot; if none succeeds, the combined observation at the deadline becomes terminal. Append exactly one `ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT` and record the fixed bound, actual elapsed milliseconds, total observation count, and terminal time. Never report the 30-second bound as elapsed time, replace a prior terminal receipt, or continue observing in order to rewrite `BLOCKED`. A later post-settlement read-back may be retained separately as diagnostic evidence but cannot mutate the immutable terminal result.
+
 ## Advisory local state
 
 Add `.roundlet/` only to the authoritative checkout's local `.git/info/exclude`. Never commit the exclusion or a `.roundlet` file.
@@ -426,7 +438,7 @@ For each round:
 9. If valid, publish it to the PR Conversation and read it back there, archive the Supervisor, perform the mandatory per-task cleanup read-back below, and follow PASS or FINDINGS.
 10. If invalid/failed/cancelled/inaccessible/malformed/wrong-context/wrong-SHA, archive it, perform the same mandatory per-task cleanup read-back, publish only bounded availability evidence to the PR Conversation, read it back there, and advance to the next profile. It does not consume the review round or become a finding/PASS.
 
-After every Supervisor archive, wait for task state for at most 30 seconds, then perform exactly one registration/path snapshot and append one `ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT` to the run-local ledger. `REMOVED` permits continuation. A conforming empty tombstone also permits continuation. Any still-active task, registration, `.git`, content, changing state, path reuse, or ambiguous read-back is `BLOCKED` and creates no later Supervisor until reconciled. Final cleanup consumes every ledger entry; it never rediscovers old Supervisor paths by guesswork.
+After every Supervisor archive, run the bounded App-managed cleanup-settlement procedure. Append its one terminal `ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT` to the run-local ledger. `REMOVED` or a conforming empty tombstone permits continuation; `BLOCKED` creates no later Supervisor until reconciled. Final cleanup consumes every ledger entry; it never rediscovers old Supervisor paths by guesswork.
 
 Apply this transition table mechanically:
 
@@ -492,11 +504,11 @@ Cleanup is part of the active issue:
 1. Read the live pull request and leaf, then fetch the exact remote main and issue-branch refs. Read back the expected remote head and merge commit locally before asking the Worker to prove ancestry. Missing local knowledge is a refreshable preflight state, not owner input and not permission to infer ancestry.
 2. Send the same Worker cleanup preflight. It verifies pushed/merged state, leaf state, worktree status, unique commits, untracked files, and absence of unpreserved work against those refreshed refs. It does not remove its own worktree/branch.
 3. Independently verify the handoff and archive the Worker.
-4. Wait for Worker task state for at most 30 seconds, verify it is no longer active, then perform exactly one registration/path snapshot and append its `ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT` to the same run-local ledger.
+4. After the Worker archive acknowledgement, run the bounded App-managed cleanup-settlement procedure and append its one terminal `ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT` to the same run-local ledger.
 5. Consume the complete run-local task-worktree cleanup ledger, then inventory every Orchestrator-created auxiliary worktree and state root. Require one terminal cleanup result for every Worker, Supervisor, and route probe task. Classify every remaining resource as source-only or evidence-bearing from the exact repository-owned contract and live contents. For every unique evidence-bearing artifact, copy exact closed bytes into the repository-declared local retention boundary, record source identity, destination identity, size, and digest, and read every retained byte/size/digest back. Missing task entries, ambiguous/open/changing resources, partially copied artifacts, or unverifiable evidence enters `CLEANUP_BLOCKED`.
 6. If authorized, remove any remaining exact Worker and auxiliary linked-worktree registrations non-force only after unique-work and retention proof succeeds. Do not race or duplicate an App removal already proven in progress.
 7. Independently prove every removed Git registration absent. A physical task-worktree path also must be absent unless it satisfies the typed tombstone rule below.
-8. When an archived, non-active App task has no Git registration, no `.git`, and an exactly empty directory that remains locked after the bounded wait, record one local cleanup-ledger tombstone containing task ID, exact managed-worktree path, archive/non-active evidence, absent-registration evidence, and zero-content read-back. Continue cleanup without retrying deletion. Any registration, file, subdirectory, unique work, changing state, ambiguous ownership, or path outside the App-managed root enters `CLEANUP_BLOCKED`. Never kill Codex or Node to obtain cleanup, and never reuse or silently forget a tombstone.
+8. When the bounded settlement procedure ends with an archived, non-active App task, no Git registration, no `.git`, and an exactly empty directory below the App-managed root, record the one terminal cleanup-ledger tombstone containing task ID, exact managed-worktree path, elapsed/observation metadata, archive/non-active evidence, absent-registration evidence, and zero-content read-back. Continue cleanup without retrying deletion. State still outside that predicate at the deadline, unique work, ambiguous ownership, or a path outside the App-managed root enters `CLEANUP_BLOCKED`. Never kill Codex or Node to obtain cleanup, and never reuse or silently forget a tombstone.
 9. Delete local/remote issue branches only when authorized and their unique work is merged or explicitly abandoned.
 10. Fetch, fast-forward local `main`, and prove a clean authoritative checkout with `HEAD == main == origin/main`.
 11. Retain repository-declared issue evidence, every sealed lifecycle ledger plus partial/conflicting diagnostic window, and any `.roundlet/validation-tools/` shared cache; none is an issue worktree or ordinary run-owned removal target.
