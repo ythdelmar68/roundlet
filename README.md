@@ -174,7 +174,7 @@ Open [`launcher.md`](skills/roundlet/references/launcher.md#new-activation), res
 The Launcher receives one complete creator-verified binding attestation and the exact installed-skill root in its populated prompt, validates both without role-side immutable self-metadata or skill-catalog discovery, and binds the root's exact seven-file identity map before repository access and again around bundle materialization, then:
 
 1. validates the creator-attested immutable profile and writable-checkout binding;
-2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities, including one metadata-only project/worktree route probe with detached exact-SHA read-back and a terminal cleanup receipt produced only after the combined task/registration/path predicate settles or its 30-second bound expires, before any run ID exists;
+2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities, including one metadata-only project/worktree route probe with detached exact-SHA read-back and a terminal cleanup receipt produced only after the combined task/registration/path predicate settles or its activation-pinned cleanup bound (120 seconds in the reviewed configuration) expires, before any run ID exists;
 3. discovers and checks any explicitly declared repository validation-toolchain capability, external-validation contract, and optional lifecycle-observation contract path/blob identities without provisioning or invoking them;
 4. reconciles every old local/remote Roundlet resource and fails closed on stale ownership;
 5. scans the complete backlog and Canonical scheduling notes without selecting an issue;
@@ -252,7 +252,7 @@ The same Worker performs read-only cleanup preflight. The Orchestrator then:
 
 1. reads the live merge/leaf identities, fetches exact remote main and issue refs, and proves the merge commit locally before ancestry review;
 2. verifies merge/leaf/remote/Worker-worktree/unique-work state through the same Worker;
-3. archives the Worker, observes the combined task/registration/path cleanup predicate for at most 30 seconds, and appends exactly one terminal task-worktree cleanup result with actual elapsed wait and observation count;
+3. archives the Worker, observes the combined task/registration/path cleanup predicate for at most the activation-pinned `cleanup.settlement_seconds` value, stops immediately when cleanup succeeds, and appends exactly one terminal task-worktree cleanup result with the pinned bound, actual elapsed wait, and observation count;
 4. consumes the run-local cleanup ledger for every Worker and Supervisor, inventories every Orchestrator-created auxiliary worktree/state root, and hash-retains unique evidence-bearing artifacts under the repository-declared retention boundary;
 5. removes any remaining exact linked-worktree registrations non-force only after unique-work and retention proof;
 6. verifies registrations and physical paths are absent, or records a strictly empty, unregistered, no-`.git`, archived/non-active App-managed path as a typed local tombstone when the bounded cleanup-settlement observation reaches that complete predicate;

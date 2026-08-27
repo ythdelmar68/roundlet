@@ -209,7 +209,7 @@ On native Windows, Workers additionally use direct normal-sandbox `apply_patch` 
 
 ### Bounded App-managed cleanup settlement
 
-Codex task archival and App-managed worktree cleanup are separate observations. After an archive request is acknowledged, start one bounded cleanup-settlement window of at most 30 seconds. Observe the creator-verified task state together with the exact worktree's Git registration, physical-path presence, `.git` presence, directory-entry count, and prior-tombstone reuse. Continue bounded, non-busy, read-only observation while neither success predicate below is true; an archived/non-active task by itself is not terminal cleanup evidence.
+Codex task archival and App-managed worktree cleanup are separate observations. After an archive request is acknowledged, start one bounded cleanup-settlement window using the exact activation-pinned `cleanup.settlement_seconds` value (120 seconds in the reviewed configuration). Observe the creator-verified task state together with the exact worktree's Git registration, physical-path presence, `.git` presence, directory-entry count, and prior-tombstone reuse. Continue bounded, non-busy, read-only observation while neither success predicate below is true; an archived/non-active task by itself is not terminal cleanup evidence.
 
 | Final combined predicate | Terminal result |
 | --- | --- |
@@ -217,7 +217,7 @@ Codex task archival and App-managed worktree cleanup are separate observations. 
 | Task archived/non-active, Git registration absent, physical path present below the App-managed root, `.git` absent, exactly zero directory entries, and no prior-tombstone reuse | `RETAINED_EMPTY_TOMBSTONE` |
 | Deadline reached with either predicate false, or any active/ambiguous task, registration, `.git`, content, path reuse, drift, or ambiguity | `BLOCKED` |
 
-Interim observations do not authorize deletion, reuse, mutation, or a cleanup result and are not retained as terminal snapshots. The first combined observation that proves a success predicate becomes the one terminal snapshot; if none succeeds, the combined observation at the deadline becomes terminal. Append exactly one `ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT` and record the fixed bound, actual elapsed milliseconds, total observation count, and terminal time. Never report the 30-second bound as elapsed time, replace a prior terminal receipt, or continue observing in order to rewrite `BLOCKED`. A later post-settlement read-back may be retained separately as diagnostic evidence but cannot mutate the immutable terminal result.
+Interim observations do not authorize deletion, reuse, mutation, or a cleanup result and are not retained as terminal snapshots. The first combined observation that proves a success predicate becomes the one terminal snapshot; if none succeeds, the combined observation at the deadline becomes terminal. Append exactly one `ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT` and record the activation-pinned bound, actual elapsed milliseconds, total observation count, and terminal time. Stop immediately after a success predicate; never wait out the remaining bound. Never report the configured bound as elapsed time, replace a prior terminal receipt, or continue observing in order to rewrite `BLOCKED`. A later post-settlement read-back may be retained separately as diagnostic evidence but cannot mutate the immutable terminal result.
 
 ## Advisory local state
 
