@@ -210,10 +210,11 @@ Selection remains read-only while provisioning. The Orchestrator resolves the un
 
 ### Review and merge
 
-- Rounds 1–3 are COMPLETE if reached; any valid PASS ends review.
-- Rounds 4–10 are CONVERGING.
+- Review mode is derived only from the activation-pinned config: rounds through `review.complete_rounds` are COMPLETE, and later rounds through `review.max_rounds` are CONVERGING. It is never selected or recovered independently.
 - Invalid Supervisor attempts do not consume the round.
+- Before creating a Supervisor, the Orchestrator semantically reads back the exact initial-candidate basis or, after FINDINGS, the accepted result, same-Worker repair, remote head, and canonical candidate-movement trace. Missing or conflicting evidence remains pending and creates no review task.
 - Every Supervisor starts in a fresh detached worktree at the exact candidate. The Orchestrator independently requires matching clean pre/post worktree and exact-candidate-ref snapshots, excluding unrelated refs in the shared common directory; the Supervisor's own `read_only` claim is not proof.
+- After creator metadata exists and immediately before review work, the Orchestrator validates one fully populated shared envelope, dispatch attestation, review block, and required structured-result schema. Marker, placeholder, task/profile, tuple/mode, repository, leaf, PR, base, candidate, and trace mismatches return to reconciliation without consuming review accounting.
 - A valid FINDINGS consumes its formal round. After the same Worker repairs and the candidate changes, review continues in the same epoch at the next round's attempt 1; a changed candidate is never a fallback attempt in the prior round.
 - Repository-owned external-validation sequence values remain separate from the formal Supervisor epoch/round/attempt. They cannot dispatch a Supervisor, satisfy review, or enter the merge gate. A misbound review is interrupted before verdict acceptance or trace and is recreated at the correct formal tuple.
 - A selected lifecycle-observation window remains separate from formal review accounting and must be sealed/verified for the terminal candidate before its evidence can satisfy a merge gate.

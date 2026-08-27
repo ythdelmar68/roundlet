@@ -45,6 +45,7 @@ phase: <phase>
 review_epoch: <positive-integer-or-0-before-review>
 review_round: <positive-integer-or-0-before-review>
 review_mode: <COMPLETE|CONVERGING|NOT_APPLICABLE>
+review_mode_source: <activation-pinned-review.complete_rounds-and-review.max_rounds-projection-or-not-applicable>
 supervisor_attempt: <positive-integer-or-0-for-worker>
 supervisor_profile: <configured-profile-name-or-not-applicable>
 base_sha: <full-sha>
@@ -73,7 +74,7 @@ lifecycle_observation_head: <append-sequence/event-head/entry-head/seal/retentio
 END_ROUNDLET_CONTEXT
 ```
 
-The Orchestrator populates the envelope from live evidence. The `role` field must equal the attestation's `requested_role`; the other creator-binding fields must equal the same recorded attestation exactly. For a repository role, `task_route` is `PROJECT_WORKTREE`; the creator-requested saved project, actual task CWD, Git common directory, starting ref, and starting SHA form one binding. `starting_ref` is the existing ref requested by the creator and proven to resolve to `starting_sha`; it does not imply the App checkout is attached to that ref. Require detached `HEAD`. An immutable task record may omit its project ID; preserve that field as unavailable instead of inventing it, while requiring the creator request and Git/CWD/SHA read-back to reconcile. `external_validation_schema_binding` and `external_validation_sequence` come only from the exact repository-owned executor binding and typed receipts. Lifecycle observation fields come only from the exact repository-owned sink receipts. Neither external sequence may populate or alter `review_epoch`, `review_round`, `review_mode`, or `supervisor_attempt`, which remain the formal Supervisor tuple. The role rereads the pinned bundle, root repository instructions, and relevant GitHub/Git state before acting. Return `CONTEXT_MISMATCH` without mutation when the envelope conflicts with live evidence.
+The Orchestrator populates the envelope from live evidence. The `role` field must equal the attestation's `requested_role`; the other creator-binding fields must equal the same recorded attestation exactly. For a repository role, `task_route` is `PROJECT_WORKTREE`; the creator-requested saved project, actual task CWD, Git common directory, starting ref, and starting SHA form one binding. `starting_ref` is the existing ref requested by the creator and proven to resolve to `starting_sha`; it does not imply the App checkout is attached to that ref. Require detached `HEAD`. An immutable task record may omit its project ID; preserve that field as unavailable instead of inventing it, while requiring the creator request and Git/CWD/SHA read-back to reconcile. `external_validation_schema_binding` and `external_validation_sequence` come only from the exact repository-owned executor binding and typed receipts. Lifecycle observation fields come only from the exact repository-owned sink receipts. Neither external sequence may populate or alter `review_epoch`, `review_round`, `review_mode`, `review_mode_source`, or `supervisor_attempt`, which remain the formal Supervisor tuple and pinned-config projection. The role rereads the pinned bundle, root repository instructions, and relevant GitHub/Git state before acting. Return `CONTEXT_MISMATCH` without mutation when the envelope conflicts with live evidence.
 
 ## Role metadata report and creator binding attestation
 
@@ -505,7 +506,7 @@ END_ROUNDLET_AUXILIARY_RETENTION_RESULT
 
 ## Supervisor contract
 
-Every Supervisor is fresh and read-only. Its creator verifies the configured attempt profile and creator binding attestation once before review. The Supervisor's metadata report is never attempt-validity evidence. The Supervisor:
+Every Supervisor is fresh and read-only. Its creator verifies the configured attempt profile and creator binding attestation once before review. The Supervisor's metadata report is never attempt-validity evidence. Before creating the task, the Orchestrator derives mode from the activation-pinned review bounds and semantically reads back the exact candidate dispatch basis described in the operator guide. Missing or contradictory basis evidence creates no task and consumes no formal attempt or round. The Supervisor:
 
 - reads the pinned contract, issue, PR, root instructions, exact candidate diff/tree, relevant tests/checks, prior findings, and Worker handoffs;
 - reviews only the named full candidate SHA;
@@ -516,15 +517,48 @@ Every Supervisor is fresh and read-only. Its creator verifies the configured att
 
 ### Review prompt
 
-After the shared envelope:
+After task creation and creator binding, populate and validate the shared envelope plus both blocks below. Then include the structured-result schema in the same review-work message. Do not send the message unless every dispatch placeholder outside the result schema is resolved, every start/end marker occurs exactly once, repeated identities match, and `review_mode` equals the activation-pinned config projection.
+
+```text
+SUPERVISOR_DISPATCH_ATTESTATION
+status: READY
+mode_source: review.complete_rounds=<positive-integer>;review.max_rounds=<positive-integer>
+formal_tuple: epoch=<positive-integer>;round=<positive-integer>;mode=<COMPLETE|CONVERGING>;attempt=<positive-integer>
+attempt_profile: <configured-name>
+role_task: <creator-verified-task-id>
+target: <owner/repository>
+active_leaf: <issue-number>
+pull_request: <number>
+base_sha: <full-sha>
+candidate_ref: <exact-candidate-ref>
+candidate_sha: <full-sha>
+candidate_dispatch_basis: <initial-candidate-event-and-readback-or-prior-findings/repair/push/movement-event-and-readback>
+canonical_result_route: PR_CONVERSATION:<pull-request-number>
+required_result_marker: SUPERVISOR_RESULT
+required_result_end_marker: END_SUPERVISOR_RESULT
+END_SUPERVISOR_DISPATCH_ATTESTATION
+```
+
+The attestation is a local pre-dispatch projection, not a GitHub event or role result. `status: READY` is valid only when the pre-task trace basis, creator binding, clean exact-candidate snapshot, configured attempt profile, and fully populated prompt all reconcile. Otherwise send no review work, archive the unused task, append/read back its mandatory task-worktree cleanup result, and return to reconciliation without asking for owner input unless an independent owner-input boundary applies.
+
+After the attestation:
 
 ```text
 SUPERVISOR_REVIEW
 attempt: <one-based-attempt>
 attempt_profile: <configured-name>
 mode: <COMPLETE|CONVERGING>
+mode_source: review.complete_rounds=<positive-integer>;review.max_rounds=<positive-integer>
+review_epoch: <positive-integer>
+review_round: <positive-integer>
+target: <owner/repository>
+active_leaf: <issue-number>
+pull_request: <number>
+base_sha: <full-sha>
+candidate_ref: <exact-candidate-ref>
 candidate_sha: <full-sha>
 prior_valid_result_event: <event-id-or-none>
+candidate_movement_event: <verified-event-id-or-initial-candidate-event>
 prior_findings:
 <verified-findings-or-none>
 
@@ -573,6 +607,6 @@ read_only: <true|false>
 END_SUPERVISOR_RESULT
 ```
 
-`context_status: INVALID_CONTEXT` requires `verdict: NOT_APPLICABLE`, no findings, and `validation_toolchain_receipt: INVALID_CONTEXT`, `external_validation_executor_receipt: INVALID_CONTEXT`, or `external_validation_reviewed: INVALID_CONTEXT` when its required evidence is missing or conflicting. A valid PASS requires `context_status: VALID`, `verdict: PASS`, no findings, correct formal SHA/profile/round/mode, `read_only: true`, a matching `VERIFIED` receipt whenever the repository toolchain contract requires one, and matching executor/identity/evidence-time/read-back evidence whenever the selected external-validation route is not `none`. External-validation sequence values are evidence reviewed by the Supervisor, never replacements for the result's formal review fields.
+`context_status: INVALID_CONTEXT` requires `verdict: NOT_APPLICABLE`, no findings, and `validation_toolchain_receipt: INVALID_CONTEXT`, `external_validation_executor_receipt: INVALID_CONTEXT`, or `external_validation_reviewed: INVALID_CONTEXT` when its required evidence is missing or conflicting. A valid PASS requires `context_status: VALID`, `verdict: PASS`, no findings, correct formal SHA/profile/round/mode, `read_only: true`, a matching `VERIFIED` receipt whenever the repository toolchain contract requires one, and matching executor/identity/evidence-time/read-back evidence whenever the selected external-validation route is not `none`. External-validation sequence values are evidence reviewed by the Supervisor, never replacements for the result's formal review fields. This post-result validation remains mandatory and separate from the pre-dispatch attestation; passing one cannot substitute for the other.
 
 A schema-valid PASS or FINDINGS at the exact formal Supervisor tuple is an accepted formal-round result. The Orchestrator publishes and reads back its event before any state change. Stop or archive a Supervisor created with a stale, external-validation, or otherwise wrong formal tuple without accepting or tracing its verdict; interrupt it first when it is still running. Retain it only as unaccepted local diagnostic evidence, then create a fresh Supervisor at the mechanically correct formal tuple without changing epoch or accepted-round count. FINDINGS returns to the same Worker; only after repair, exact candidate push/read-back, and a verified repair-handoff event does the Orchestrator increment the formal round and reset `supervisor_attempt` to 1. Invalid or unavailable attempts alone may increment `supervisor_attempt` while epoch, round, mode, and candidate remain fixed.
