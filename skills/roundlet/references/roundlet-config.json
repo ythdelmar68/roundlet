@@ -43,6 +43,9 @@
     ],
     "max_lightweight_ticks_before_full_reconciliation": 12
   },
+  "cleanup": {
+    "settlement_seconds": 120
+  },
   "review": {
     "complete_rounds": 3,
     "max_rounds": 10,
