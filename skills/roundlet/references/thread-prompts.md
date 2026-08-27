@@ -472,7 +472,11 @@ role_task: <creator-verified-task-id>
 worktree: <exact-app-managed-absolute-path>
 task_state_after_wait: <ARCHIVED_AND_NONACTIVE|ACTIVE|AMBIGUOUS>
 wait_bound_seconds: 30
+wait_elapsed_milliseconds: <integer-0-through-30000>
+observation_count: <positive-integer>
+terminal_snapshot_at_utc: <immutable-rfc3339-utc>
 git_registration: <ABSENT|PRESENT|AMBIGUOUS>
+physical_path: <ABSENT|PRESENT|AMBIGUOUS>
 dot_git: <ABSENT|PRESENT|AMBIGUOUS>
 directory_entries: <nonnegative-integer-or-ambiguous>
 path_reuses_prior_tombstone: <true|false|ambiguous>
@@ -480,7 +484,7 @@ status: <REMOVED|RETAINED_EMPTY_TOMBSTONE|BLOCKED>
 END_ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT
 ```
 
-`REMOVED` requires absent registration and physical path. `RETAINED_EMPTY_TOMBSTONE` requires an archived/non-active task, absent registration and `.git`, zero directory entries, and no prior-tombstone reuse. Every other result is `BLOCKED`. This receipt is never public GitHub trace, permission to remove content, or a reusable task directory.
+`REMOVED` requires an archived/non-active task, absent registration, and absent physical path. `RETAINED_EMPTY_TOMBSTONE` requires an archived/non-active task, absent registration and `.git`, zero directory entries, and no prior-tombstone reuse. The creator observes that combined predicate for at most 30 seconds; archive state alone is not terminal, interim observations create no receipt, and exactly one terminal snapshot/result records actual elapsed time and observation count. Every other result at the deadline is `BLOCKED`. This receipt is never public GitHub trace, permission to remove content, or a reusable task directory.
 
 Before removing an Orchestrator-created auxiliary worktree or state root, the Orchestrator privately records and reads back:
 

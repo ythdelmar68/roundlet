@@ -174,7 +174,7 @@ Open [`launcher.md`](skills/roundlet/references/launcher.md#new-activation), res
 The Launcher receives one complete creator-verified binding attestation and the exact installed-skill root in its populated prompt, validates both without role-side immutable self-metadata or skill-catalog discovery, and binds the root's exact seven-file identity map before repository access and again around bundle materialization, then:
 
 1. validates the creator-attested immutable profile and writable-checkout binding;
-2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities, including one metadata-only project/worktree route probe with detached exact-SHA read-back and terminal cleanup receipt before any run ID exists;
+2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities, including one metadata-only project/worktree route probe with detached exact-SHA read-back and a terminal cleanup receipt produced only after the combined task/registration/path predicate settles or its 30-second bound expires, before any run ID exists;
 3. discovers and checks any explicitly declared repository validation-toolchain capability, external-validation contract, and optional lifecycle-observation contract path/blob identities without provisioning or invoking them;
 4. reconciles every old local/remote Roundlet resource and fails closed on stale ownership;
 5. scans the complete backlog and Canonical scheduling notes without selecting an issue;
@@ -252,17 +252,17 @@ The same Worker performs read-only cleanup preflight. The Orchestrator then:
 
 1. reads the live merge/leaf identities, fetches exact remote main and issue refs, and proves the merge commit locally before ancestry review;
 2. verifies merge/leaf/remote/Worker-worktree/unique-work state through the same Worker;
-3. archives the Worker and appends its terminal task-worktree cleanup result after one task-state wait of at most 30 seconds;
+3. archives the Worker, observes the combined task/registration/path cleanup predicate for at most 30 seconds, and appends exactly one terminal task-worktree cleanup result with actual elapsed wait and observation count;
 4. consumes the run-local cleanup ledger for every Worker and Supervisor, inventories every Orchestrator-created auxiliary worktree/state root, and hash-retains unique evidence-bearing artifacts under the repository-declared retention boundary;
 5. removes any remaining exact linked-worktree registrations non-force only after unique-work and retention proof;
-6. verifies registrations and physical paths are absent, or records a strictly empty, unregistered, no-`.git`, archived/non-active App-managed path as a typed local tombstone after the single task-state wait of at most 30 seconds;
+6. verifies registrations and physical paths are absent, or records a strictly empty, unregistered, no-`.git`, archived/non-active App-managed path as a typed local tombstone when the bounded cleanup-settlement observation reaches that complete predicate;
 7. deletes exact local/remote issue branches when authorized and safe;
 8. fetches and fast-forwards authoritative `main`;
 9. proves a clean `HEAD == main == origin/main`;
 10. retains issue evidence, every sealed or diagnostic lifecycle window, and any repository-declared shared validation cache;
 11. returns to IDLE or stops after current.
 
-If ref refresh, retention, registration removal, a non-empty path, or any ownership/read-back check fails, stop cleanup, diagnose the exact conflict, and preserve evidence. A verified typed empty task-worktree tombstone is local host-lifecycle evidence and does not block the next issue; it is never reused or silently forgotten. Never infer ancestry, kill Codex or Node, force-remove unknown work, or broaden the cleanup target.
+Task archival is not itself cleanup completion: Codex App may remove registration and path state asynchronously. Interim read-only observations are nonterminal; Roundlet records only the final combined snapshot when removal/tombstone succeeds or the deadline expires. If ref refresh, retention, registration removal, a non-empty path, or any ownership/read-back check remains unresolved at that deadline, stop cleanup, diagnose the exact conflict, and preserve evidence. A verified typed empty task-worktree tombstone is local host-lifecycle evidence and does not block the next issue; it is never reused or silently forgotten. Never infer ancestry, kill Codex or Node, force-remove unknown work, or broaden the cleanup target.
 
 ### Skill updates
 
