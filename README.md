@@ -97,6 +97,7 @@ Read the installed `SKILL.md` and all references. Validate:
 - heartbeat interval arrays and full-reconciliation bound;
 - review limits and merge method;
 - owner allowlist;
+- independent machine-readable normal remote-branch create/update and draft-PR authority switches;
 - generic external-validation routes and the two independent Boolean authority switches;
 - optional repository-owned lifecycle-observation contract selection with zero behavior when not selected;
 - links and required file set;
@@ -123,6 +124,9 @@ Copy the authority template from [`repository-authority.md`](skills/roundlet/ref
 
 Authority switches can permit:
 
+- normal non-force creation of the exact remote candidate branch;
+- normal non-force fast-forward updates of that exact branch;
+- creation of one exact draft pull request;
 - repository-owned read-only external validation;
 - exact allowlisted mutation in a repository-owned disposable target;
 - ready conversion;
@@ -131,7 +135,7 @@ Authority switches can permit:
 - remote/local branch deletion;
 - worktree removal.
 
-They may narrow Roundlet but never override repository, host, or platform policy. Umbrella issues remain open.
+The branch-create, branch-update, and draft-PR switches are required independently and are never inferred from the master `enabled` value or prose. Matching `true` values avoid repetitive per-candidate approval only after exact candidate/state/ancestry and semantic read-back gates pass. All switches may narrow Roundlet but never override repository, host, or platform policy. Umbrella issues remain open.
 
 ### Local state exclusion
 
@@ -297,6 +301,7 @@ WSL, Linux, macOS, and other hosts use the same repository project/worktree topo
 - Only one active leaf and Worker exist per run.
 - Only the Orchestrator mutates GitHub.
 - Supervisors are fresh and read-only.
+- Normal remote branch creation, normal fast-forward update, and draft-PR creation each require their own live machine-readable authority switch; none is inferred from `enabled` or prose.
 - Merge, closure, branch deletion, and worktree removal require live authority.
 - External validation requires exact repository-owned route/identity/action/evidence-time bindings and the matching independent authority switch; no route authorizes an unknown or production target.
 - Executor schema expectations come only from the exact selected contract and typed receipts; opaque external-validation sequence values never replace formal Supervisor accounting.
