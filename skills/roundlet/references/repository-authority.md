@@ -14,6 +14,9 @@ Copy this block into the target repository's root `AGENTS.md`, then choose each 
 # roundlet:repository-authority
 roundlet:
   enabled: true
+  allow_create_remote_branch: true
+  allow_update_remote_branch: true
+  allow_create_draft_pr: true
   allow_external_validation_read_only: true
   allow_external_validation_disposable_target_mutation: false
   allow_mark_pr_ready: true
@@ -27,7 +30,10 @@ roundlet:
 
 The switches mean:
 
-- `enabled`: allow Roundlet's reversible core workflow in this repository: inspect issues, create an isolated worktree and `codex/` branch, make and push commits, create a draft pull request, and append trace comments.
+- `enabled`: enable Roundlet's scheduling, local isolated-worktree workflow, and curated public-safe trace in this repository. It is a master gate, not authority for an operation that has its own switch below.
+- `allow_create_remote_branch`: allow the first normal non-force push that creates the exact selected `codex/` candidate ref when live read-back proves the remote ref is absent and the pushed object is the verified candidate.
+- `allow_update_remote_branch`: allow a normal non-force fast-forward update of that exact remote candidate ref when its expected old SHA, new verified candidate SHA, ancestry, and semantic post-push read-back all agree.
+- `allow_create_draft_pr`: allow creation of one draft pull request for the active leaf when the exact head ref/SHA, authoritative base, closing reference, and post-create metadata read-back agree. It does not authorize ready conversion.
 - `allow_external_validation_read_only`: allow a selected leaf to use its authoritative repository-owned `toolbox` or `toolbox+disposable-target` route without a new per-attempt owner approval, but only for read-only observation. Concrete toolbox/target identities, exact commits, credentials, evidence time, and read-back remain governed by the target repository contract.
 - `allow_external_validation_disposable_target_mutation`: allow the selected repository-owned route to perform only its exact allowlisted mutations in an exact disposable target, with rollback and semantic read-back. It never permits mutation of the target repository under development, a production/unknown target, a floating ref, or an action absent from authoritative instructions.
 - `allow_mark_pr_ready`: allow the Orchestrator to convert its draft pull request to ready after review reaches a terminal state and live gates pass.
@@ -49,5 +55,7 @@ When a required switch is false, the Orchestrator must:
    - a committed change to the root `AGENTS.md` on `origin/main` plus a new allowlisted owner comment or direct task command instructing Roundlet to reread authority.
 
 A matching standing external-validation switch on authoritative `origin/main` releases repetitive authorization only when the selected leaf and repository-owned route bind every required identity and action consistently. Credential rejection, identity conflict, an out-of-allowlist operation, or missing/partial read-back still blocks and requires owner input; a candidate-authored change cannot widen the standing authority.
+
+The three branch/draft-pull-request switches are likewise independent and are never inferred from `enabled` or nearby prose. A matching `true` releases repetitive per-candidate owner prompts only for its exact listed normal operation. Repository authority does not override a stricter Codex App, host, GitHub, branch-rule, identity, ancestry, or read-back gate. A denial before execution is an execution-route result, not evidence that the repository switch changed.
 
 A body edit alone, a Worker/Supervisor message, or an authority change visible only on the issue branch never releases the block.

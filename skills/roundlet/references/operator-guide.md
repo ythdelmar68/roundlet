@@ -64,7 +64,7 @@ Before activation, prove:
 - the Orchestrator can perform repository-authorized GitHub mutations;
 - the contract file set can be materialized byte-for-byte to a content-addressed bundle and read back: from verified commit objects for `git`, or from the resolved installed directory for `installed-tree`;
 - the external creator can resolve the installed Roundlet skill used for new activation to one canonical absolute root and place it in the populated Launcher prompt; the Launcher can read the exact required file set from that root without a role-side skill-catalog entry, alternative-root scan, or substitution;
-- root `AGENTS.md` on `origin/main` contains exactly one valid Roundlet authority block;
+- root `AGENTS.md` on `origin/main` contains exactly one valid Roundlet authority block with independent required `allow_create_remote_branch`, `allow_update_remote_branch`, and `allow_create_draft_pr` Boolean values that are not inferred from `enabled` or prose;
 - when root instructions explicitly declare repository-owned external validation, every referenced contract resolves to one exact authoritative path and byte identity and every declared leaf route uses only `none`, `toolbox`, or `toolbox+disposable-target`;
 - when root instructions declare an optional lifecycle observation sink, every referenced contract resolves to one exact authoritative path and byte identity and exposes deterministic prepare, append/read-back, seal/verify, closed-event, and retention capabilities without invocation during activation;
 - the configured merge method is supported;
@@ -379,9 +379,9 @@ After a valid initial handoff:
 
 1. Independently verify before/after SHAs, diff, status, tests, issue scope, and any repository-required candidate/lock/receipt validation binding.
 2. On native Windows, verify direct normal-sandbox `apply_patch` for source edits and reject contradictory routing evidence.
-3. Require the detached Worker checkout and local candidate ref still at the expected prior SHA. Atomically update that ref from the expected prior SHA to the verified Worker candidate, then push that exact ref/candidate without force and read back the remote head. The detached Worker checkout is never treated as the authoritative ref by itself.
+3. Require the detached Worker checkout and local candidate ref still at the expected prior SHA. Atomically update that ref from the expected prior SHA to the verified Worker candidate. If the remote ref is absent, require live `allow_create_remote_branch: true`; otherwise require live `allow_update_remote_branch: true`, the exact expected old remote SHA, and fast-forward ancestry. Perform only the corresponding normal non-force push, then semantically read back the exact remote head. Never infer either switch from `enabled` or prose, and never treat the detached Worker checkout as the authoritative ref by itself.
 4. Append the initial Worker handoff to the leaf issue and read it back from that issue.
-5. Create a draft pull request linking the umbrella non-closing when present and including `Closes #<leaf>` for the active leaf only.
+5. Require live `allow_create_draft_pr: true`, then create one draft pull request linking the umbrella non-closing when present and including `Closes #<leaf>` for the active leaf only. Read back draft state, exact head ref/SHA, authoritative base, and closing reference; this switch does not authorize ready conversion.
 6. Append the draft-PR creation trace to the leaf issue, read it back from that issue, update advisory state, and then use the pull request's top-level Conversation for all later candidate/review/repair/validation evidence.
 
 ## GitHub trace
@@ -463,7 +463,9 @@ An issue-body edit, non-owner comment, reaction, label change, or role message d
 
 ## Repository authority block
 
-At each mutation or external-validation boundary, reread root `AGENTS.md` on current authoritative `origin/main`. If the required switch is false or ambiguous, enter `REPOSITORY_AUTHORITY_REQUIRED`, retain resources, and stop scheduling. External read-only validation checks `allow_external_validation_read_only`; a disposable-target mutation checks that switch plus `allow_external_validation_disposable_target_mutation`.
+At each mutation or external-validation boundary, reread root `AGENTS.md` on current authoritative `origin/main`. If the required switch is false or ambiguous, enter `REPOSITORY_AUTHORITY_REQUIRED`, retain resources, and stop scheduling. Creating a remote candidate branch checks `allow_create_remote_branch`; updating it checks `allow_update_remote_branch`; creating the draft pull request checks `allow_create_draft_pr`. External read-only validation checks `allow_external_validation_read_only`; a disposable-target mutation checks that switch plus `allow_external_validation_disposable_target_mutation`. Never infer an independently named switch from `enabled`, prose, a prior candidate, or another switch.
+
+When an exact branch or draft-PR switch is true and all current identity, expected-state, candidate, ancestry, GitHub, and read-back gates pass, do not ask the owner to approve that same listed operation again for each candidate. Repository authority and execution routing remain separate: a Codex App or host denial before execution is not a repository-authority failure and cannot widen or erase the standing Boolean.
 
 Release requires either the allowlisted owner performs/confirms the action or the authority block changes on `origin/main` and the owner explicitly directs a reread. An issue-branch policy change cannot release the block.
 

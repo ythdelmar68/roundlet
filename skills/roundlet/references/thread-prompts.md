@@ -197,7 +197,7 @@ binding_source: creator-immutable-readback
 target: <owner/repository>
 authoritative_checkout: <absolute-path>
 owner_allowlist: <exact-list>
-authority: <resolved-switches>
+authority: <exact-resolved-Booleans-including-enabled/allow_create_remote_branch/allow_update_remote_branch/allow_create_draft_pr>
 lease_path: <absolute-path>
 current_path: <absolute-path>
 heartbeat: none-before-binding
@@ -215,7 +215,7 @@ The Orchestrator must:
 1. Require the envelope to equal the creator binding attestation.
 2. Read `SKILL.md`, all required references, the exact configuration, and manifest only from the named bundle.
 3. Recompute and verify bundle paths/hashes, tree digest, contract ID, source identity, and configured profiles.
-4. Verify target/origin/default branch, clean aligned checkout, `.git/info/exclude`, authority block, owner identity/allowlist, task/heartbeat/Git/GitHub capabilities, absence of stale run ownership, any explicitly declared validation-toolchain contract/capability, every root-referenced external-validation contract path/blob identity, and every optional lifecycle-observation contract path/blob identity. Do not provision a validation cache, select an external route, arm a lifecycle window, or create sink storage during activation.
+4. Verify target/origin/default branch, clean aligned checkout, `.git/info/exclude`, every required authority Boolean (including independent `allow_create_remote_branch`, `allow_update_remote_branch`, and `allow_create_draft_pr` values), owner identity/allowlist, task/heartbeat/Git/GitHub capabilities, absence of stale run ownership, any explicitly declared validation-toolchain contract/capability, every root-referenced external-validation contract path/blob identity, and every optional lifecycle-observation contract path/blob identity. Do not infer those three values from `enabled` or prose. Do not provision a validation cache, select an external route, arm a lifecycle window, create sink storage, push, or create a pull request during activation.
 5. Read back lease/current state and require the same run/contract/task.
 6. Reconcile the complete live backlog and umbrella scheduling notes without selecting an issue.
 7. Record `IDLE` and return exactly:
