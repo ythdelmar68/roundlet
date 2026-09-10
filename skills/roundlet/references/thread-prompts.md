@@ -15,7 +15,7 @@ These contracts bind Roundlet roles to one immutable activation bundle and expli
 
 ## Shared context envelope
 
-Begin every Worker and Supervisor turn with:
+Begin every populated Worker and Supervisor turn with the envelope below; the metadata-only first turn remains governed by its separate action-free request. Resolve delegation as specified in `repository-authority.md`, copy applicable clauses and prohibitions rather than a blanket "owner authorized" assertion, and verify the source against authoritative policy before dispatch. Carry the same scope through continuation and compacted context without expanding it. A host denial uses the Execution blockers procedure in `operator-guide.md`, not a replacement task or repeated permission request.
 
 ```text
 ROUNDLET_CONTEXT
@@ -38,6 +38,9 @@ stable_environment_identity: <creator-verified-value-or-unavailable>
 binding_source: creator-immutable-readback
 target: <owner/repository>
 authoritative_checkout: <absolute-path>
+authority_source: <authoritative-origin/main-commit;AGENTS.md-blob>
+role_delegation: <source-backed-applicable-clauses;allowed-local-actions;explicit-prohibitions>
+delegation_owner_source: <verified-owner-instruction-reference-or-none-standing-policy-only>
 active_leaf: <issue-number-and-url>
 umbrella: <issue-number-and-url-or-none>
 pull_request: <number-and-url-or-none>
@@ -198,6 +201,8 @@ target: <owner/repository>
 authoritative_checkout: <absolute-path>
 owner_allowlist: <exact-list>
 authority: <exact-resolved-Booleans-including-enabled/allow_create_remote_branch/allow_update_remote_branch/allow_create_draft_pr>
+authority_source: <authoritative-origin/main-commit;AGENTS.md-blob>
+delegation_policy: <source-backed-role-delegation-clauses-and-restrictions>
 lease_path: <absolute-path>
 current_path: <absolute-path>
 heartbeat: none-before-binding

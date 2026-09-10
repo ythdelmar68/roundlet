@@ -137,6 +137,8 @@ Authority switches can permit:
 
 The branch-create, branch-update, and draft-PR switches are required independently and are never inferred from the master `enabled` value or prose. Matching `true` values avoid repetitive per-candidate approval only after exact candidate/state/ancestry and semantic read-back gates pass. All switches may narrow Roundlet but never override repository, host, or platform policy. Umbrella issues remain open.
 
+Roundlet remains the formal Orchestrator while its verified Worker performs only source edits, validation, and ordinary local commits delegated by authoritative repository policy. Populated role turns carry the policy commit/blob, applicable scope, prohibitions, and any verified owner-instruction source. Supervisors remain read-only; Workers never acquire independent GitHub authority. Host policy denials are recorded separately from missing authorization and technical failures: repeating an already adequate owner grant or switching execution routes is not a remedy. This context improves diagnosis but cannot guarantee a host approval or override platform policy.
+
 ### Local state exclusion
 
 Add exactly:
