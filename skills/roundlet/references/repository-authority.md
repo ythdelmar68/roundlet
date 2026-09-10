@@ -45,6 +45,14 @@ The switches mean:
 
 ## Authority boundary
 
+### Scoped role delegation
+
+The Orchestrator owns the formal workflow and all GitHub mutations; this is not a requirement that it personally perform every local implementation edit. Where authoritative repository policy permits Roundlet's delegated local workflow, the Orchestrator may assign its verified Worker source edits, validation, and ordinary atomic local commits in the exact assigned worktree and leaf scope. A Worker has no independent scheduling, GitHub mutation, branch/worktree lifecycle, activation, release, or publication authority. A Supervisor remains read-only. Repository restrictions can narrow this delegation; `enabled` does not override an explicit prohibition or supply an independently named mutation switch.
+
+Before a populated role dispatch, bind the authoritative `AGENTS.md` commit and blob, applicable delegation clauses, allowed local actions, prohibitions, and any verified owner-instruction source to the existing task/worktree/leaf/run identities. Carry that concise source-backed scope in every populated role turn, including repairs and resumptions; a summary is not a new grant and must not hide a restriction. Metadata-only first turns remain action-free. Candidate policy and role self-reports cannot establish delegation. Follow the execution-blocker classification in `operator-guide.md` if the host rejects a dispatch or operation despite this context.
+
+### Required switch boundary
+
 When a required switch is false, the Orchestrator must:
 
 1. Finish only the safe work immediately before that mutation boundary.
