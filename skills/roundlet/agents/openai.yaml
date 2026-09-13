@@ -1,7 +1,7 @@
 interface:
   display_name: "Roundlet"
   short_description: "Prompt-native single-repository issue orchestration"
-  default_prompt: "Use $roundlet to preflight and launch a lightweight outer loop for this GitHub repository."
+  default_prompt: "Use $roundlet in this owner-created repository task to perform the complete root activation, remain as the sole Orchestrator, create and boundedly replace isolated Workers when the recovery contract permits, create fresh read-only Supervisors, perform repository-authorized GitHub lifecycle and final task/worktree/branch cleanup, stop on denials or ambiguous effects, and otherwise continue unattended through the pinned heartbeat until STOPPED."
 
 policy:
   allow_implicit_invocation: false

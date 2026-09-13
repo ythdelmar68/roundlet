@@ -43,6 +43,14 @@
     ],
     "max_lightweight_ticks_before_full_reconciliation": 12
   },
+  "task_creation": {
+    "reconciliation_seconds": 120
+  },
+  "worker_recovery": {
+    "max_replacements_per_leaf": 1,
+    "max_replacements_per_run": 2,
+    "terminal_confirmation_observations": 2
+  },
   "cleanup": {
     "settlement_seconds": 120
   },

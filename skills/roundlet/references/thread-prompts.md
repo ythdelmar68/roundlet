@@ -5,10 +5,12 @@ These contracts bind Roundlet roles to one immutable activation bundle and expli
 ## Contents
 
 - [Shared context envelope](#shared-context-envelope)
+- [Root activation binding](#root-activation-binding)
 - [Role metadata report and creator binding attestation](#role-metadata-report-and-creator-binding-attestation)
+- [Asynchronous task creation intent](#asynchronous-task-creation-intent)
 - [GitHub access recovery](#github-access-recovery)
 - [Orchestrator GitHub publication contract](#orchestrator-github-publication-contract)
-- [Long-lived Orchestrator bootstrap](#long-lived-orchestrator-bootstrap)
+- [Root Orchestrator activation record](#root-orchestrator-activation-record)
 - [Heartbeat tick](#heartbeat-tick)
 - [Worker contract](#worker-contract)
 - [Supervisor contract](#supervisor-contract)
@@ -25,6 +27,8 @@ contract_bundle: <absolute-verified-bundle-path>
 role: <WORKER|SUPERVISOR>
 role_task: <creator-verified-task-id>
 creator_task: <creator-verified-source-task-id>
+creation_intent: <stable-intent-id>
+creation_operation: <stable-client-or-operation-id>
 execution_profile: model=<exact-model>;reasoning_effort=<exact-effort>
 task_route: <LOCAL_PROJECT|PROJECT_WORKTREE|PROJECTLESS_NONREPOSITORY>
 requested_saved_project: <creator-resolved-project-id-and-canonical-path-or-not-applicable>
@@ -45,6 +49,12 @@ active_leaf: <issue-number-and-url>
 umbrella: <issue-number-and-url-or-none>
 pull_request: <number-and-url-or-none>
 phase: <phase>
+logical_worker: <stable-logical-worker-id-or-not-applicable>
+worker_generation: <positive-integer-or-not-applicable>
+worker_replacements_consumed_leaf: <nonnegative-integer-or-not-applicable>
+worker_replacements_remaining_leaf: <nonnegative-integer-or-not-applicable>
+worker_replacements_consumed_run: <nonnegative-integer-or-not-applicable>
+worker_replacements_remaining_run: <nonnegative-integer-or-not-applicable>
 review_epoch: <positive-integer-or-0-before-review>
 review_round: <positive-integer-or-0-before-review>
 review_mode: <COMPLETE|CONVERGING|NOT_APPLICABLE>
@@ -58,6 +68,9 @@ worktree: <absolute-path>
 last_durable_event: <event-id-or-none>
 last_supervisor_result_event: <verified-event-id-or-none>
 last_worker_repair_handoff_event: <verified-event-id-or-none>
+preserved_worker_checkpoint: <checkpoint-id-or-none>
+pending_effect: <exact-operation-and-readback-state-or-none>
+last_provider_activity_utc: <rfc3339-utc-or-unavailable>
 owner_instruction: <exact-scope-or-none>
 validation_toolchain_contract: <repository-defined-summary-or-not-applicable>
 validation_cache_root: <absolute-path-or-not-applicable>
@@ -77,17 +90,21 @@ lifecycle_observation_head: <append-sequence/event-head/entry-head/seal/retentio
 END_ROUNDLET_CONTEXT
 ```
 
-The Orchestrator populates the envelope from live evidence. The `role` field must equal the attestation's `requested_role`; the other creator-binding fields must equal the same recorded attestation exactly. For a repository role, `task_route` is `PROJECT_WORKTREE`; the creator-requested saved project, actual task CWD, Git common directory, starting ref, and starting SHA form one binding. `starting_ref` is the existing ref requested by the creator and proven to resolve to `starting_sha`; it does not imply the App checkout is attached to that ref. Require detached `HEAD`. An immutable task record may omit its project ID; preserve that field as unavailable instead of inventing it, while requiring the creator request and Git/CWD/SHA read-back to reconcile. `external_validation_schema_binding` and `external_validation_sequence` come only from the exact repository-owned executor binding and typed receipts. Lifecycle observation fields come only from the exact repository-owned sink receipts. Neither external sequence may populate or alter `review_epoch`, `review_round`, `review_mode`, `review_mode_source`, or `supervisor_attempt`, which remain the formal Supervisor tuple and pinned-config projection. The role rereads the pinned bundle, root repository instructions, and relevant GitHub/Git state before acting. Return `CONTEXT_MISMATCH` without mutation when the envelope conflicts with live evidence.
+The Orchestrator populates the envelope from live evidence. The `role` field must equal the attestation's `requested_role`; creation intent/operation and every creator-binding field must equal the same recorded creation and attestation exactly. Worker turns require one stable logical Worker and the current physical generation; Supervisor fields use `not-applicable`. For a repository role, `task_route` is `PROJECT_WORKTREE`; the creator-requested saved project, actual task CWD, Git common directory, starting ref, and starting SHA form one binding. `starting_ref` is the existing ref requested by the creator and proven to resolve to `starting_sha`; it does not imply the App checkout is attached to that ref. Require detached `HEAD`. An immutable task record may omit its project ID; preserve that field as unavailable instead of inventing it, while requiring the creator request and Git/CWD/SHA read-back to reconcile. `external_validation_schema_binding` and `external_validation_sequence` come only from the exact repository-owned executor binding and typed receipts. Lifecycle observation fields come only from the exact repository-owned sink receipts. Neither external sequence nor a Worker replacement may populate or alter `review_epoch`, `review_round`, `review_mode`, `review_mode_source`, `supervisor_attempt`, or final-repair state. The role rereads the pinned bundle, root repository instructions, and relevant GitHub/Git state before acting. Return `CONTEXT_MISMATCH` without mutation when the envelope conflicts with live evidence.
+
+## Root activation binding
+
+The owner-created root task records the exact `ROUNDLET_ROOT_ACTIVATION_BINDING` schema from `launcher.md`. This is direct owner provenance for activation and continuing Orchestrator work. It is not a child-role attestation, cannot be self-generated from a role assertion, and cannot be transferred automatically to a replacement root. Copy its bounded identity/digest into lease/current state and the activation record; do not store the raw owner conversation.
 
 ## Role metadata report and creator binding attestation
 
-Create a Launcher, Orchestrator, Worker, or Supervisor with only this first prompt:
+Create a route probe, Worker generation, or Supervisor with only this first prompt:
 
 ```text
 ROUNDLET_ROLE_METADATA_REPORT_REQUEST
-requested_role: <LAUNCHER|ORCHESTRATOR|WORKER|SUPERVISOR>
+requested_role: <WORKER|SUPERVISOR>
 requested_profile: model=<MODEL>;reasoning_effort=<EFFORT>
-requested_route: <LOCAL_PROJECT|PROJECT_WORKTREE|PROJECTLESS_NONREPOSITORY>
+requested_route: PROJECT_WORKTREE
 requested_saved_project: <PROJECT_ID_AND_CANONICAL_PATH_OR_NOT_APPLICABLE>
 requested_starting_ref: <EXISTING_REF_OR_NOT_APPLICABLE>
 requested_starting_sha: <FULL_SHA_OR_NOT_APPLICABLE>
@@ -116,11 +133,13 @@ Before the first populated role prompt, the creator independently reads immutabl
 
 ```text
 CREATOR_TASK_BINDING_ATTESTATION
+creation_intent: <stable-intent-id>
+creation_operation: <stable-client-or-operation-id>
 role_task: <exact-created-task-id>
 creator_task: <exact-creator-or-source-task-id>
-requested_role: <LAUNCHER|ORCHESTRATOR|WORKER|SUPERVISOR>
+requested_role: <WORKER|SUPERVISOR>
 execution_profile: model=<exact-configured-model>;reasoning_effort=<exact-configured-effort>
-task_route: <LOCAL_PROJECT|PROJECT_WORKTREE|PROJECTLESS_NONREPOSITORY>
+task_route: PROJECT_WORKTREE
 requested_saved_project: <exact-creator-request-or-not-applicable>
 task_workspace: <exact-project-or-workspace>
 task_cwd: <exact-canonical-cwd>
@@ -137,9 +156,37 @@ If a report explicitly contradicts the proposed envelope, perform exactly one bo
 
 The verified attestation remains stable and is copied into later role envelopes. Recovery/restart normally reuses it without duplicate task creation, binding, dispatch, or trace. Only contradictory immutable creator-side evidence triggers exactly one bounded re-read against the recorded attestation. An unchanged complete match preserves it; an unresolved difference fails closed without creating another task, attestation, dispatch, or trace. Do not repeat discovery on every turn.
 
-For a top-level new-activation or recovery Launcher, the external creator copies the complete verified attestation into the fixed `Creator binding authority` block of the populated Launcher prompt. That prompt carries the creator's authoritative read-back across the task boundary. The Launcher validates one complete block and exact equality with the prompt's expected fields; it never rediscovers or requires a role-side immutable self-metadata route. A Launcher or Orchestrator that creates a later role remains that role's creator and performs the same creator-side read-back before copying the resulting attestation into the child role envelope and advisory state.
+The root Orchestrator creates every child role and performs creator-side read-back before copying the attestation into the child role envelope and advisory state. It never sends a populated role prompt until the creation intent is `BOUND` to exactly one final task ID.
 
-The Launcher and Orchestrator use the authoritative checkout through `LOCAL_PROJECT`. Every Git-repository Worker uses one persistent `PROJECT_WORKTREE` task, and every Supervisor uses a fresh read-only `PROJECT_WORKTREE` task. Their physical worktrees are distinct; the saved-project request, Git common directory, and exact full SHA establish shared candidate identity. `PROJECTLESS_NONREPOSITORY` is never a repository fallback and requires a separately proven caller-controlled CWD capability.
+The root Orchestrator uses the authoritative checkout through `LOCAL_PROJECT`. Every Git-repository Worker generation and every fresh Supervisor uses a separate read-only-at-start `PROJECT_WORKTREE` task. Their physical worktrees are distinct; the saved-project request, Git common directory, and exact full SHA establish shared candidate identity. `PROJECTLESS_NONREPOSITORY` is never a repository fallback and requires a separately proven caller-controlled CWD capability.
+
+## Asynchronous task creation intent
+
+Persist before every child-task creation request:
+
+```text
+ROUNDLET_TASK_CREATION_INTENT
+intent_id: <stable-unguessable-id>
+run_id: <run-id-or-route-probe-scope>
+creator_task: <root-orchestrator-task-id>
+requested_role: <WORKER|SUPERVISOR>
+execution_profile: model=<model>;reasoning_effort=<effort>
+task_route: PROJECT_WORKTREE
+requested_saved_project: <project-id-and-canonical-path>
+git_common_dir: <canonical-common-dir>
+starting_ref: <existing-ref>
+starting_sha: <full-sha>
+active_leaf: <issue-number-or-none-for-probe>
+logical_worker: <stable-id-or-not-applicable>
+worker_generation: <positive-integer-or-not-applicable>
+formal_review_tuple: <epoch/round/mode/attempt/profile-or-not-applicable>
+request_state: <INTENT|REQUESTED|PENDING|BOUND|OUTCOME_UNKNOWN>
+creation_operation: <client-or-operation-id-or-none-before-request>
+role_task: <final-task-id-or-none-before-bound>
+END_ROUNDLET_TASK_CREATION_INTENT
+```
+
+Transition the same record monotonically. Never create a second task for the same intent. `OUTCOME_UNKNOWN` requires stable operation reconciliation or stops with `TASK_CREATION_CAPABILITY_GAP`; title, time, worktree, or a guessed task ID is not enough.
 
 ## GitHub access recovery
 
@@ -152,7 +199,7 @@ Only the Orchestrator publishes. It must use the authoritative event-to-destinat
 ```text
 ROUNDLET_TRACE_WRITE
 event_id: <stable-event-id>
-event_class: <selection|scope-owner|initial-worker|draft-pr|post-pr-worker|candidate-validation|supervisor|merge-gate|merge-result|leaf-lifecycle|cleanup>
+event_class: <selection|scope-owner|initial-worker|worker-recovery|draft-pr|post-pr-worker|candidate-validation|supervisor|merge-gate|merge-result|leaf-lifecycle|cleanup>
 leaf_issue: <issue-number>
 pull_request: <pull-request-number-or-none>
 authoritative_binding: <ISSUE|PR>
@@ -174,29 +221,17 @@ For external validation, publish `VALIDATION_READY` only after the exact reposit
 
 Before a pull request exists, selection, scope/owner decisions, the initial Worker handoff, and draft-PR creation target the issue. After it exists, Worker repair, candidate push/read-back, validation, Supervisor availability/results, and terminal review target the PR Conversation. Merge gates/results bind to PR metadata, with accompanying trace in its Conversation. Leaf closure, cleanup, `STOPPED`, `NEEDS_OWNER_INPUT`, and abort decisions return to the issue. Preserve misrouted historical comments; recovery may add one bounded pointer on the current canonical surface but never edits, deletes, moves, or bulk-reposts them.
 
-## Long-lived Orchestrator bootstrap
+## Root Orchestrator activation record
 
-The Launcher sends:
+After preflight and bundle finalization, the root Orchestrator records:
 
 ```text
 ROUNDLET_ORCHESTRATOR_BOOTSTRAP
 run_id: <stable-run-id>
 contract_id: <activation-contract-id>
 contract_bundle: <absolute-verified-bundle-path>
-role_task: <creator-verified-orchestrator-task-id>
-creator_task: <creator-verified-launcher-task-id>
-requested_role: ORCHESTRATOR
-execution_profile: model=<configured-model>;reasoning_effort=<configured-effort>
-task_route: LOCAL_PROJECT
-requested_saved_project: <creator-resolved-project-id-and-canonical-path>
-task_workspace: <authoritative-writable-project>
-task_cwd: <authoritative-checkout>
-git_common_dir: <creator-verified-common-dir>
-starting_ref: not-applicable
-starting_sha: not-applicable
-stable_host_identity: <creator-verified-value-or-unavailable>
-stable_environment_identity: <creator-verified-value-or-unavailable>
-binding_source: creator-immutable-readback
+root_task: <root-activation-bound-task-id>
+root_activation_binding: <exact-verified-binding-identity-and-owner-instruction-digest>
 target: <owner/repository>
 authoritative_checkout: <absolute-path>
 owner_allowlist: <exact-list>
@@ -217,7 +252,7 @@ END_ROUNDLET_ORCHESTRATOR_BOOTSTRAP
 
 The Orchestrator must:
 
-1. Require the envelope to equal the creator binding attestation.
+1. Require the record to equal its root activation binding and direct owner instruction; never require or fabricate a creator attestation for itself.
 2. Read `SKILL.md`, all required references, the exact configuration, and manifest only from the named bundle.
 3. Recompute and verify bundle paths/hashes, tree digest, contract ID, source identity, and configured profiles.
 4. Verify target/origin/default branch, clean aligned checkout, `.git/info/exclude`, every required authority Boolean (including independent `allow_create_remote_branch`, `allow_update_remote_branch`, and `allow_create_draft_pr` values), owner identity/allowlist, task/heartbeat/Git/GitHub capabilities, absence of stale run ownership, any explicitly declared validation-toolchain contract/capability, every root-referenced external-validation contract path/blob identity, and every optional lifecycle-observation contract path/blob identity. Do not infer those three values from `enabled` or prose. Do not provision a validation cache, select an external route, arm a lifecycle window, create sink storage, push, or create a pull request during activation.
@@ -229,7 +264,7 @@ The Orchestrator must:
 ACTIVATION_READY run=<run-id> contract=<contract-id> orchestrator=<task-id> target=<owner/repository> state=IDLE
 ```
 
-After the Launcher creates the heartbeat, the Orchestrator receives its identity, verifies the target/schedule and advisory binding, then returns exactly:
+After it creates the heartbeat, the same Orchestrator verifies the target/schedule and advisory binding, then records exactly:
 
 ```text
 HEARTBEAT_BOUND run=<run-id> contract=<contract-id> orchestrator=<task-id> heartbeat=<heartbeat-id> interval=<minutes>m
@@ -252,7 +287,7 @@ END_ROUNDLET_TICK
 
 The Orchestrator:
 
-1. Verifies its stable creator binding attestation, run/contract/heartbeat/advisory identity, and complete bundle.
+1. Verifies its stable root activation binding, run/contract/heartbeat/advisory identity, and complete bundle.
 2. Uses a lightweight observation only in a phase where the operator guide permits it.
 3. Performs full live reconciliation in the same tick when anything changes, is incomplete, the phase is action-ready, or the full-audit bound is due.
 4. Applies at most one externally meaningful transition and uses the publication contract for every trace belonging to it.
@@ -270,6 +305,20 @@ transition: <name-or-none>
 active_leaf: <number-or-none>
 pull_request: <number-or-none>
 candidate_sha: <full-sha-or-none>
+logical_worker: <stable-id-or-none>
+worker_generation: <positive-integer-or-none>
+worker_task: <task-id-or-none>
+worker_task_state: <host-ui-state-or-none>
+worker_business_state: <objective-state-or-none>
+last_durable_transition_utc: <rfc3339-utc>
+last_provider_activity_utc: <rfc3339-utc-or-unavailable>
+pending_task_creation: <intent/operation/state-or-none>
+pending_effect: <operation/readback-state-or-none>
+awaited_condition: <bounded-condition-or-none>
+next_wake_or_check: <rfc3339-utc-or-direct-owner-only>
+replacement_budget: <leaf-consumed/leaf-remaining/run-consumed/run-remaining-or-not-applicable>
+retained_work: <checkpoint/retention-status-or-none>
+cleanup_status: <resource-inventory-summary-or-not-applicable>
 heartbeat_interval: <minutes-or-paused>
 blocking_condition: <value-or-none>
 last_durable_event: <event-id-or-none>
@@ -286,7 +335,7 @@ END_ROUNDLET_TICK_RESULT
 
 The Worker:
 
-- mutates only its assigned linked worktree and issue scope;
+- acts only as the populated physical generation of one logical Worker and mutates only its assigned linked worktree and issue scope;
 - may affect an exact repository-declared shared validation cache only through the candidate's reviewed resolver and explicit cache-root argument; never edits that cache directly or treats it as source;
 - never mutates GitHub;
 - never creates/removes worktrees or deletes branches;
@@ -299,6 +348,7 @@ The Worker:
 - invokes only the populated repository-owned executor entrypoint; it never creates a candidate-specific wrapper, inspects private product attributes, rewrites a plan, or substitutes a second validate/execute path;
 - never invokes or writes the lifecycle observation sink; it returns ordinary structured handoffs to the Orchestrator, which alone appends verified generic transition facts;
 - performs no disposable-target mutation. The Orchestrator remains the sole GitHub mutator and independently applies any authorized external mutation/read-back transition.
+- never creates or selects its replacement. A generation receiving a stale fence returns `CONTEXT_MISMATCH` without mutation.
 
 ### Native Windows Worker mutation route
 
@@ -383,6 +433,57 @@ without rebase or force-push, resolve only in-scope conflicts, validate, commit 
 and return WORKER_HANDOFF kind=MAIN_INTEGRATION. Do not push or mutate GitHub.
 ```
 
+### Replacement continuation prompt
+
+Only after the old generation reaches `REPLACEMENT_READY`, begin the new generation's first populated turn with the shared envelope and:
+
+```text
+WORKER_REPLACEMENT_CONTINUE
+logical_worker: <stable-logical-worker-id>
+worker_generation: <positive-integer-greater-than-1>
+replaces_generation: <prior-generation>
+replacement_fence: <stable-fence-id>
+checkpoint: <verified-roundlet-worker-checkpoint-id>
+preserved_candidate_sha: <full-sha>
+resume_objective: <INITIAL|REPAIR|FINAL_REPAIR|MAIN_INTEGRATION|CLEANUP_PREFLIGHT>
+
+Read only first. Verify the checkpoint, preserved commits/files, exact detached candidate,
+formal review/final-repair state, pending-effect disposition, and replacement fence. Complete
+any missing validation. Return CONTEXT_MISMATCH without mutation on any conflict. Otherwise
+continue only the named objective and return the ordinary structured result with this exact
+logical Worker and generation. Do not reset review, retry an effect, or act on a stale prompt.
+```
+
+The Orchestrator constructs and reads back the checkpoint from live evidence before archiving the old generation:
+
+```text
+ROUNDLET_WORKER_CHECKPOINT
+checkpoint_id: <stable-id>
+run_id: <stable-run-id>
+active_leaf: <issue-number>
+logical_worker: <stable-logical-worker-id>
+retired_generation: <positive-integer>
+retired_task: <task-id>
+replacement_fence: <stable-fence-id>
+objective: <INITIAL|REPAIR|FINAL_REPAIR|MAIN_INTEGRATION|CLEANUP_PREFLIGHT>
+formal_review_tuple: <epoch/round/mode/attempt/profile-or-not-applicable>
+final_repair_state: <NOT_ENTERED|PENDING|COMPLETED>
+branch: <exact-candidate-ref>
+candidate_sha: <full-sha>
+commits: <ordered-full-sha-summary-or-none>
+dirty_index_untracked: <exact-bounded-inventory-or-none>
+preservation: <ref-or-retained-artifact-identities-and-digests>
+validation: <completed/missing-evidence-summary>
+pending_effects: <ordered-operation/readback-state-summary-or-none>
+pending_effects_reconciled: <true|false>
+old_generation_terminal_evidence: <configured-observation-identities>
+old_generation_cleanup_result: <receipt-id-or-pending-before-archive>
+status: <PRESERVED|RECONCILED|REPLACEMENT_READY|BLOCKED>
+END_ROUNDLET_WORKER_CHECKPOINT
+```
+
+Only `REPLACEMENT_READY` authorizes one replacement creation intent. The checkpoint is local bounded recovery evidence, not a Supervisor result or GitHub authorization.
+
 ### Cleanup-preflight prompt
 
 After the shared envelope:
@@ -409,6 +510,12 @@ kind: <INITIAL|REPAIR|FINAL_REPAIR|MAIN_INTEGRATION>
 run_id: <stable-run-id>
 contract_id: <activation-contract-id>
 role_task: <verified-task-id>
+creation_intent: <stable-intent-id>
+creation_operation: <stable-client-or-operation-id>
+logical_worker: <stable-logical-worker-id>
+worker_generation: <positive-integer>
+replacement_fence: <current-fence-id>
+resumed_checkpoint: <checkpoint-id-or-none-for-generation-1>
 execution_profile: model=<model>;reasoning_effort=<effort>
 active_leaf: <issue-number>
 branch: <exact-candidate-ref; checkout-is-detached>
@@ -449,6 +556,9 @@ WORKER_CLEANUP_RESULT
 run_id: <stable-run-id>
 contract_id: <activation-contract-id>
 role_task: <verified-task-id>
+logical_worker: <stable-logical-worker-id>
+worker_generation: <positive-integer>
+replacement_fence: <current-fence-id>
 active_leaf: <issue-number>
 branch: <exact-branch>
 worktree: <absolute-path>
@@ -474,6 +584,10 @@ scope_id: <stable-run-id-or-activation-probe-id>
 active_leaf: <issue-number-or-none>
 role: <WORKER|SUPERVISOR|ROUTE_PROBE>
 role_task: <creator-verified-task-id>
+creation_intent: <stable-intent-id>
+creation_operation: <stable-client-or-operation-id>
+logical_worker: <stable-id-or-not-applicable>
+worker_generation: <positive-integer-or-not-applicable>
 worktree: <exact-app-managed-absolute-path>
 task_state_after_wait: <ARCHIVED_AND_NONACTIVE|ACTIVE|AMBIGUOUS>
 wait_bound_seconds: <activation-pinned-cleanup-settlement-seconds>
@@ -515,7 +629,7 @@ END_ROUNDLET_AUXILIARY_RETENTION_RESULT
 
 ## Supervisor contract
 
-Every Supervisor is fresh and read-only. Its creator verifies the configured attempt profile and creator binding attestation once before review. The Supervisor's metadata report is never attempt-validity evidence. Before creating the task, the Orchestrator derives mode from the activation-pinned review bounds and semantically reads back the exact candidate dispatch basis described in the operator guide. Missing or contradictory basis evidence creates no task and consumes no formal attempt or round. The Supervisor:
+Every Supervisor is a fresh read-only sibling created by the root Orchestrator, never a child of a Worker. Its creator records/reconciles one creation intent and verifies the configured attempt profile and creator binding attestation once before review. The Supervisor's metadata report is never attempt-validity evidence. Before creating the task, the Orchestrator derives mode from the activation-pinned review bounds and semantically reads back the exact candidate dispatch basis described in the operator guide. Missing or contradictory basis evidence creates no task and consumes no formal attempt or round. A later heartbeat/wake may create the next fresh Supervisor from the same root after prior cleanup; no Worker-to-Supervisor messaging topology is required. The Supervisor:
 
 - reads the pinned contract, issue, PR, root instructions, exact candidate diff/tree, relevant tests/checks, prior findings, and Worker handoffs;
 - reviews only the named full candidate SHA;
@@ -523,6 +637,8 @@ Every Supervisor is fresh and read-only. Its creator verifies the configured att
 - never invokes or writes a lifecycle observation sink; it returns only its structured read-only result to the Orchestrator;
 - returns `INVALID_CONTEXT` when required context is missing/conflicting;
 - reports actionable findings with evidence and severity, or PASS.
+
+Its structured result returns only to the root Orchestrator. The Orchestrator validates and publishes it, then sends a separate verified repair packet to the current Worker generation when required.
 
 ### Review prompt
 
@@ -583,6 +699,8 @@ SUPERVISOR_RESULT
 run_id: <stable-run-id>
 contract_id: <activation-contract-id>
 role_task: <verified-task-id>
+creation_intent: <stable-intent-id>
+creation_operation: <stable-client-or-operation-id>
 execution_profile: model=<model>;reasoning_effort=<effort>
 attempt: <one-based-attempt>
 attempt_profile: <configured-name>
@@ -618,4 +736,4 @@ END_SUPERVISOR_RESULT
 
 `context_status: INVALID_CONTEXT` requires `verdict: NOT_APPLICABLE`, no findings, and `validation_toolchain_receipt: INVALID_CONTEXT`, `external_validation_executor_receipt: INVALID_CONTEXT`, or `external_validation_reviewed: INVALID_CONTEXT` when its required evidence is missing or conflicting. A valid PASS requires `context_status: VALID`, `verdict: PASS`, no findings, correct formal SHA/profile/round/mode, `read_only: true`, a matching `VERIFIED` receipt whenever the repository toolchain contract requires one, and matching executor/identity/evidence-time/read-back evidence whenever the selected external-validation route is not `none`. External-validation sequence values are evidence reviewed by the Supervisor, never replacements for the result's formal review fields. This post-result validation remains mandatory and separate from the pre-dispatch attestation; passing one cannot substitute for the other.
 
-A schema-valid PASS or FINDINGS at the exact formal Supervisor tuple is an accepted formal-round result. The Orchestrator publishes and reads back its event before any state change. Stop or archive a Supervisor created with a stale, external-validation, or otherwise wrong formal tuple without accepting or tracing its verdict; interrupt it first when it is still running. Retain it only as unaccepted local diagnostic evidence, then create a fresh Supervisor at the mechanically correct formal tuple without changing epoch or accepted-round count. FINDINGS returns to the same Worker; only after repair, exact candidate push/read-back, and a verified repair-handoff event does the Orchestrator increment the formal round and reset `supervisor_attempt` to 1. Invalid or unavailable attempts alone may increment `supervisor_attempt` while epoch, round, mode, and candidate remain fixed.
+A schema-valid PASS or FINDINGS at the exact formal Supervisor tuple is an accepted formal-round result. The Orchestrator publishes and reads back its event before any state change. Stop or archive a Supervisor created with a stale, external-validation, or otherwise wrong formal tuple without accepting or tracing its verdict; interrupt it first when it is still running. Retain it only as unaccepted local diagnostic evidence, then create a fresh Supervisor at the mechanically correct formal tuple without changing epoch or accepted-round count. FINDINGS returns through the Orchestrator to the current generation of the same logical Worker; only after repair, exact candidate push/read-back, and a verified repair-handoff event does the Orchestrator increment the formal round and reset `supervisor_attempt` to 1. A permitted Worker generation replacement preserves that tuple and the accepted result. Invalid or unavailable Supervisor attempts alone may increment `supervisor_attempt` while epoch, round, mode, and candidate remain fixed.
