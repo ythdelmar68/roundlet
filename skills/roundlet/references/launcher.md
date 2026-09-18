@@ -1,207 +1,103 @@
-# Launcher prompts
+# Root activation and recovery
 
-The Launcher is short-lived. It preflights one target, creates exactly one long-lived Orchestrator, binds exactly one heartbeat to that Orchestrator, sends one initial tick, reports the activation, and archives itself. It never selects or implements an issue.
+Normal activation happens in the allowlisted owner's existing repository task. That task performs the complete preflight and then remains the sole Orchestrator. There is no child Launcher, activation handoff, or Launcher self-archive. The file name remains `launcher.md` only because it is one of the seven versioned bundle inputs.
 
-Replace every `<PLACEHOLDER>` before use. Do not change any other value or add an implementation request.
+The direct owner turn that invokes `$roundlet` is the root-lifecycle grant. The UI `default_prompt` is a concise owner-visible starting prompt, not proof that a host will permit a later action. Repository authority, source-backed role delegation, and each visible host decision remain independent gates.
 
 ## New activation
 
-Create the Launcher directly against the exact authoritative checkout as its writable local project and use the requested Launcher model/effort. Its first prompt is only:
+Use this protocol only in the same owner-created task that directly received the `$roundlet` activation request. Do not copy a second long authorization prompt into another task.
+
+### Root activation binding
+
+Before repository, GitHub, Git, task, heartbeat, or filesystem mutation, construct exactly one local binding from the direct owner turn and current task/project evidence:
 
 ```text
-ROUNDLET_ROLE_METADATA_REPORT_REQUEST
-requested_role: LAUNCHER
-requested_profile: model=<MODEL>;reasoning_effort=<EFFORT>
-requested_route: LOCAL_PROJECT
-requested_saved_project: <PROJECT_ID_AND_ABSOLUTE_PATH>
-requested_starting_ref: not-applicable
-requested_starting_sha: not-applicable
-requested_workspace: <ABSOLUTE_PATH>
-requested_cwd: <ABSOLUTE_PATH>
-Return any role-visible metadata as a non-authoritative ROUNDLET_ROLE_METADATA_REPORT. Perform no activation, repository, GitHub, Git, heartbeat, or filesystem action.
-END_ROUNDLET_ROLE_METADATA_REPORT_REQUEST
-```
-
-Treat any response as a non-authoritative role report. Independently read the creator-side immutable task record and build the exact `CREATOR_TASK_BINDING_ATTESTATION` from `thread-prompts.md`, including this creator task, requested Launcher role, task ID, model, effort, route `LOCAL_PROJECT`, requested saved project, writable project/workspace, canonical CWD, Git common directory, and available stable host/environment identity. A missing, short, noncanonical, or task-ID-free report does not block matching creator read-back. On an explicit contradiction, perform one bounded creator-side re-read; archive and stop only when authoritative evidence is missing, stale, malformed, mismatched, or still conflicting. Independently resolve the installed Roundlet skill used to read this prompt to one canonical absolute root and verify its required file set. Only after both checks succeed, replace the placeholders below, including `<LAUNCHER_TASK_ID>` and `<INSTALLED_SKILL_ROOT>`, copy the complete attestation into the fixed block, and send this entire populated activation prompt to the same task:
-
-```text
-Act as a short-lived Launcher for exactly one completely fresh Roundlet run, using only the creator-supplied installed Roundlet skill root below.
-
-Target:
-- GitHub repository: <OWNER/REPOSITORY>
-- Authoritative local checkout: <ABSOLUTE_PATH>
-- Installed Roundlet skill root: <INSTALLED_SKILL_ROOT>
-- Expected primary branch: main
-- Roundlet configuration: use `references/roundlet-config.json` beneath the installed skill root above without changing, defaulting, or overriding any value
-- Expected Launcher task ID: <LAUNCHER_TASK_ID>
-- Expected Launcher creator/source task ID: <CREATOR_TASK_ID>
-- Expected Launcher model/effort: <MODEL> / <EFFORT>
-- Expected stable host/environment identity: <STABLE_HOST_IDENTITY_OR_UNAVAILABLE> / <STABLE_ENVIRONMENT_IDENTITY_OR_UNAVAILABLE>
-- Authenticated and allowlisted owner: <OWNER_LOGIN>
-
-Creator binding authority:
-CREATOR_TASK_BINDING_ATTESTATION
-role_task: <LAUNCHER_TASK_ID>
-creator_task: <CREATOR_TASK_ID>
-requested_role: LAUNCHER
-execution_profile: model=<MODEL>;reasoning_effort=<EFFORT>
+ROUNDLET_ROOT_ACTIVATION_BINDING
+owner_instruction_source: <direct-owner-turn-id-or-unavailable>
+owner_instruction_digest: <sha256-of-exact-direct-activation-request>
+root_task: <current-task-id>
+requested_role: ORCHESTRATOR
+requested_profile: model=<configured-model>;reasoning_effort=<configured-effort>
+observed_profile: model=<immutable-observed-model-or-unavailable>;reasoning_effort=<immutable-observed-effort-or-unavailable>
 task_route: LOCAL_PROJECT
-requested_saved_project: <PROJECT_ID_AND_ABSOLUTE_PATH>
-task_workspace: <ABSOLUTE_PATH>
-task_cwd: <ABSOLUTE_PATH>
-git_common_dir: <ABSOLUTE_GIT_COMMON_DIR>
-starting_ref: not-applicable
-starting_sha: not-applicable
-stable_host_identity: <STABLE_HOST_IDENTITY_OR_UNAVAILABLE>
-stable_environment_identity: <STABLE_ENVIRONMENT_IDENTITY_OR_UNAVAILABLE>
-binding_source: creator-immutable-readback
-END_CREATOR_TASK_BINDING_ATTESTATION
-
-Do not recover, resume, reuse, migrate, adopt, or replace any former run or Orchestrator. Read `SKILL.md` and every required reference only from the exact installed skill root above before acting. Do not invoke or require a role-side skill catalog. Do not select or implement an issue in this Launcher.
-
-Before creating any run resource, fail closed unless every item below is freshly proven:
-
-1. Immutable Launcher identity
-   - Read exactly one complete `CREATOR_TASK_BINDING_ATTESTATION` from this populated prompt. Do not discover or require a role-side immutable self-metadata route; the creator already performed that read-back before sending this prompt.
-   - Require its task ID, creator/source task, requested role, model/effort, route, requested saved project, project/workspace, canonical CWD, Git common directory, starting-ref/SHA non-applicability, stable host/environment identity, and `binding_source: creator-immutable-readback` to equal every corresponding expected value above.
-   - Require the attested canonical CWD and writable local-project workspace to equal the authoritative checkout.
-   - Missing, duplicate, malformed, stale, or mismatched attestation fields fail closed before any repository, GitHub, Git, lease, contract, Orchestrator, or heartbeat action.
-   - The creator binding attestation is the authority. A role metadata report is never sufficient and cannot invalidate matching creator evidence; a projectless task, unrelated project, read-only route, or removable linked worktree in Launcher creator read-back fails closed. The Launcher itself uses `LOCAL_PROJECT`; later repository Workers and Supervisors use the separately preflighted `PROJECT_WORKTREE` route.
-   - Before any repository, GitHub, or Git access, canonicalize the literal installed-skill-root value above and require it to be absolute and unchanged. Require exactly the seven bundle inputs `SKILL.md`, `agents/openai.yaml`, `references/launcher.md`, `references/operator-guide.md`, `references/repository-authority.md`, `references/roundlet-config.json`, and `references/thread-prompts.md` present strictly beneath that root, with no path escape or ambiguous resolution. Record the exact path set and per-file byte identity for later comparison. A missing, relative, noncanonical, incomplete, escaped, or ambiguous root fails closed here. Do not consult the role-side skill catalog or scan another path.
-
-2. Repository and Git identity
-   - Fetch and resolve the exact GitHub repository, origin URL, default branch, local main, origin/main, and HEAD.
-   - Require a clean authoritative checkout and `HEAD == main == origin/main`.
-   - Require origin and GitHub identity to equal the target exactly.
-   - Read root AGENTS.md from authoritative origin/main. Require exactly one valid Roundlet authority block, every documented key exactly once as a lowercase Boolean, and `roundlet.enabled: true`. In particular, bind `allow_create_remote_branch`, `allow_update_remote_branch`, and `allow_create_draft_pr` independently without deriving them from `enabled` or prose; record every false switch as its exact later mutation boundary.
-   - Bind the same authoritative commit and AGENTS.md blob plus applicable role-delegation clauses and restrictions for the Orchestrator bootstrap. Do not infer owner-instruction provenance from a role's assertion or exercise a mutation to test authority during activation.
-   - Resolve every external-validation operations contract or repository-owned skill referenced by root instructions to an exact path and Git blob on authoritative origin/main. Record only bounded identities; do not select a route, invoke a toolbox, inspect credentials, or contact a disposable target during activation.
-   - Resolve every optional lifecycle-observation contract referenced by root instructions to an exact path and Git blob on authoritative origin/main. Record only bounded identities; do not select a leaf sink, create a window/store, or invoke prepare/append/seal/verify during activation.
-   - Require `.roundlet/` excluded only through this checkout's local `.git/info/exclude`; never commit the exclusion or any runtime state.
-
-3. Freshness and cleanup
-   - Reconcile `.roundlet/`, every retained contract/state file, prior run and activation evidence, Roundlet GitHub trace, active Roundlet pull requests, issue branches, linked worktrees, relevant Codex tasks, Workers, Supervisors, leases, and heartbeats.
-   - When root instructions declare `.roundlet/validation-tools/` as a repository validation cache, classify it separately as host-owned reusable state. A valid cache does not prove stale run ownership and ordinary activation cleanup must not remove or rewrite it.
-   - Classify repository-declared retained issue evidence separately from leases, advisory state, contracts, branches, and worktrees. A complete digest-readable retention area from a stopped run does not prove stale ownership and must not be removed or adopted by activation.
-   - Require all former runs fully stopped and all former run-owned resources absent.
-   - Treat a retained typed empty task-worktree tombstone separately from a live Roundlet worktree. It does not block activation only when its ledger and fresh read-back prove the task archived/non-active, Git registration absent, `.git` absent, directory exactly empty, path under the App-managed worktree root, and no reuse. Any content, registration, ambiguity, or missing ledger evidence remains stale ownership.
-   - If any live, stale, conflicting, or unreconciled Roundlet ownership remains, stop with `STALE_OR_ACTIVE_RUN_REQUIRES_OWNER`. Never expire, steal, replace, overwrite, or reuse it.
-
-4. Installed contract and configuration
-   - Accept only the one creator-supplied installed skill root above. Require it to be canonical, absolute, existing, and unchanged; never discover, scan for, or substitute a role-side skill-catalog entry or another filesystem root.
-   - Resolve every required file strictly beneath that root, reject path escape, ambiguity, missing files, or extra generated inputs, and require the same canonical root, exact seven-path set, and per-file byte-identity map before and after bundle construction.
-   - Classify the source as `git` only after verifying the containing repository root, canonical `owner/repository` origin, exact lowercase 40-character commit OID, and the skill root's exact tree prefix at that commit. Require every bundled relative path to map uniquely to an existing blob below that prefix. Otherwise use `installed-tree` and make no Git provenance claim.
-   - Require every required reference present and internally consistent.
-   - Parse the exact configuration without defaults or overrides.
-   - Require unique Supervisor profile names; ordered profile count equal to `max_supervisor_attempts_per_round`; positive review limits; valid merge method; heartbeat arrays beginning at `active_minutes`, strictly increasing, and positive; positive full-reconciliation bound; a positive-integer `cleanup.settlement_seconds`; and the authenticated owner in `owner_allowlist`. Pin that cleanup value in the activation contract without default or override.
-   - Derive and verify the exact content-addressed bundle inputs from that same bound root without persisting a bundle during preflight. Do not include mutable or generated files.
-
-5. Host and service capabilities
-   - Verify exact configured task models/efforts, asynchronous task create/address/wait/archive/inspect controls, recurring-heartbeat create/inspect/update/pause/resume/remove controls, Git, filesystem/worktree routes, GitHub issue/PR access, authenticated identity, branch/rule/check inspection, and merge-commit capability. Verify that the three explicit remote-branch/draft-PR authority values can be carried unchanged into the resolved authority and Orchestrator bootstrap; do not exercise those mutations during activation.
-   - List saved local projects and resolve the target authoritative checkout by canonical path. Require exactly one writable Git project whose canonical repository path and Git common directory match the target. Record its creator-request identity for later role creation. A missing, duplicate, display-name-only, unrelated, or non-Git project fails preflight. Do not use projectless creation as a repository fallback.
-   - Before creating a run ID, perform exactly one metadata-only route capability probe. Create one unguessable unpublished local `codex/roundlet-route-probe-*` ref at exact `origin/main`, then asynchronously create one project/worktree task from that existing ref using the first configured Supervisor profile. Send only the role metadata request with requested role `SUPERVISOR`; perform no implementation, source edit, commit, push, GitHub action, external validation, or lifecycle capture.
-   - Wait for immutable creator metadata and require a distinct App-managed CWD outside the authoritative checkout and outside every unresolved tombstone path, matching canonical Git common directory, detached `HEAD == origin/main`, exact requested starting ref/SHA, clean porcelain-v2 status, and stable registration. Archive the probe, then for at most the activation-pinned `cleanup.settlement_seconds` value observe the combined task state, Git registration, physical path, `.git`, directory-entry count, and prior-tombstone reuse until the complete cleanup predicate in `operator-guide.md` reaches `REMOVED` or `RETAINED_EMPTY_TOMBSTONE`. Task archival alone never ends this wait. Interim observations are read-only and nonterminal; persist exactly one terminal registration/path snapshot and `ROUNDLET_TASK_WORKTREE_CLEANUP_RESULT` in the retained local route-probe ledger, with the pinned bound, actual elapsed wait, and observation count. Delete the unpublished probe ref only by exact old-SHA comparison. State still outside a success predicate at the deadline, ref conflict, path reuse, drift, or ambiguous read-back fails activation without a run, Worker, GitHub trace, or owner-input request.
-   - If root repository instructions explicitly declare a validation-toolchain contract, read its exact named document/lock/resolver/cache boundary. System-discover an available bootstrap interpreter satisfying the declared version and prove the resolver can be invoked, while treating that interpreter as bootstrap-only. Verify that later Worker turns can pass the authoritative checkout's exact shared cache root. Do not provision merely for activation and do not accept host build tools as evidence.
-   - If root instructions declare external-validation routing, prove that the generic `none`, `toolbox`, and `toolbox+disposable-target` vocabulary, referenced path/blob identities, executor-declared schema/retention routes, and exact `allow_external_validation_read_only` / `allow_external_validation_disposable_target_mutation` Boolean switches can be read deterministically. Do not require live login or execute a gate before a leaf is selected.
-   - If root instructions declare an optional lifecycle observation sink, prove that its referenced contract path/blob and declared prepare, append/read-back, seal/verify, closed-event, and retention capability identities can be read deterministically. Do not arm a window or require the external implementation before a leaf explicitly selects ephemeral capture.
-   - When `gh` is required, run a representative read-only request. If it fails before GitHub is reachable, request the narrowest scoped network approval for the same command and retry boundedly. Never substitute browser authentication or browser automation. Reachable GitHub authentication rejection, explicit approval denial, unavailable approval, or exhausted connectivity recovery fails closed.
-   - Absence of branch protection is not itself an activation blocker. Existing rules and required checks remain mandatory.
-
-6. Backlog reconciliation
-   - Scan the complete newly prepared live backlog, formal parent/sub-issue and blocking relationships, and every umbrella Canonical scheduling note.
-   - When root instructions declare external-validation routing, classify every actionable issue's declaration and reject an unknown, missing, floating, or conflicting route. Do not infer mutation authority from the route itself. Otherwise bind `none` without loading an external contract.
-   - When a leaf declares ephemeral lifecycle capture, require one exact root-referenced sink contract and an explicit arm-before boundary. Otherwise classify the sink as `NOT_SELECTED`. A missing or conflicting required sink makes the leaf non-runnable; it does not create storage or owner input during Launcher preflight.
-   - Treat umbrellas as scheduling context only, never as implementation candidates or dependencies.
-   - Treat runnable dependencies only as exact leaf or standalone issue numbers recorded in live scheduling context.
-   - Do not select, claim, or implement an issue in this Launcher.
-
-If and only if every preflight item passes:
-
-1. Reserve a new unguessable run ID that differs from every former run ID.
-2. Prepare and atomically finalize `.roundlet/contracts/<contract-id>/` from the current installed skill and exact resolved configuration:
-   - immediately re-read the creator-supplied canonical root and every derived file identity; require an exact match with preflight before materializing any contract path;
-   - when source kind is `git`, select every file directly from the verified commit object; never copy or hash working-tree bytes, even when the checkout is clean;
-   - include exact bytes for SKILL.md, every required reference, and agents/openai.yaml;
-   - use unique POSIX relative paths sorted by unsigned UTF-8 bytes;
-   - record SHA-256 of exact bytes;
-   - compute `tree_digest` from ASCII `roundlet-tree/v1\n` followed for each file by UTF-8 path, NUL, 64 lowercase hash hex bytes, and LF;
-   - build `roundlet-contract/v1` with exact source identity, resolved configuration, ordered files, and tree digest;
-   - serialize with RFC 8785 JCS, no BOM, trailing newline, or floats;
-   - derive lowercase-hex contract ID from the canonical manifest with `contract_id` omitted, add only that ID, and reserialize without persisting the final contract path;
-   - materialize the exact selected files and manifest into one new unfinalized staging path below `.roundlet/contracts/`;
-   - before finalizing any contract path or advisory state, re-read the bound installed root and require its canonical identity, exact seven-path set, and every per-file byte identity to equal preflight; also require each materialized bundle file to equal that preflight identity. Any same-path content drift or mixed-generation bundle fails closed without finalizing the bundle.
-   - if the final contract path is absent, atomically finalize the verified staging path there; if it exists, reuse it only after exact equality and remove the redundant staging path, otherwise stop with `CONTRACT_BUNDLE_CONFLICT`;
-   - read back every finalized byte, path, hash, role profile, source identity, tree digest, and contract ID; on any failure remove only the new unfinalized staging path after exact path validation and leave no lease/current state.
-3. Create fresh `.roundlet/lease.json` and `.roundlet/current.md` for this run and read them back. Bind the exact target, checkout, owner, resolved saved-project request identity, Git common directory, repository role route `PROJECT_WORKTREE`, verified route-probe receipt/cleanup-ledger identity, run ID, contract ID/bundle, activation time, state `ACTIVATING`, and empty Orchestrator/heartbeat fields. Do not add an expiry.
-4. Create exactly one long-lived Orchestrator using the configured Orchestrator model and effort from the pinned bundle. Give it only the role metadata report request from `thread-prompts.md` as its first prompt. Before its populated bootstrap:
-   - treat its returned report as advisory and independently build the creator binding attestation from immutable task ID, creator task, requested role, model, effort, project/workspace, canonical CWD, and available stable host/environment identity;
-   - on an explicit report contradiction, perform one bounded immutable re-read; never reject a matching creator attestation because the report is missing, short, noncanonical, or omits its own task ID;
-   - require task/profile equality with configuration, route `LOCAL_PROJECT`, requested saved-project identity, project/CWD equality with the authoritative checkout, and matching Git common directory;
-   - write the verified Orchestrator task ID and complete creator binding attestation fields to advisory state, then read back the same run/contract/task/attestation binding.
-5. Send the Orchestrator the exact bootstrap contract from the pinned bundle, including target, checkout, resolved saved-project request identity and Git common directory for repository roles, run ID, owner allowlist, resolved authority, configuration, contract ID/path, advisory paths, complete creator binding attestation, live backlog summary, repository-defined validation-toolchain summary/cache root or `not-applicable`, bounded external-validation contract path/blob summaries or `not-applicable`, bounded lifecycle-observation contract path/blob summaries or `not-applicable`, and instruction not to select an issue. Require it to reread the bundle and live identities, repeat any representative `gh` access needed in its own task, update state to `IDLE`, and return exactly:
-   `ACTIVATION_READY run=<run-id> contract=<contract-id> orchestrator=<task-id> target=<owner/repository> state=IDLE`
-6. Independently inspect that exact populated turn and advisory state. Require the acknowledgement and lease/current files to bind the same run, contract, Orchestrator, target, and state. On any mismatch, create no heartbeat and stop with exact evidence.
-7. Create exactly one recurring heartbeat at configured `heartbeat.active_minutes`, bound only to the new Orchestrator. Its instruction is: invoke one idempotent Roundlet tick from the pinned bundle, prove the bounded observation unchanged or fully reconcile in the same tick, make at most one externally meaningful transition, maintain the configured phase-aware interval on this same heartbeat, and report the resulting state.
-8. Write the heartbeat ID and interval into both advisory files and read back the exact run/contract/Orchestrator/heartbeat binding. Then send that heartbeat identity and interval to the Orchestrator. Require exactly:
-   `HEARTBEAT_BOUND run=<run-id> contract=<contract-id> orchestrator=<task-id> heartbeat=<heartbeat-id> interval=<minutes>m`
-9. Independently verify the heartbeat target and schedule plus both advisory files. Require one identical run ID, contract ID, Orchestrator task ID, heartbeat ID, and state.
-10. Send exactly one initial Roundlet tick to the Orchestrator.
-11. Report the run ID, contract ID, Orchestrator task ID, heartbeat ID, configured role profiles, and initial state. Archive this Launcher. Leave the Orchestrator and its one heartbeat active.
-
-Never attach the heartbeat to this Launcher. Never create a second Orchestrator or heartbeat. Never reuse a former run ID. Never begin implementation here. Fail closed on stale ownership, identity conflict, incomplete cleanup, missing capability, task-profile mismatch, partial bundle, or read-back mismatch.
+requested_saved_project: <current-saved-project-id-and-canonical-path>
+task_workspace: <authoritative-writable-project>
+task_cwd: <authoritative-checkout>
+git_common_dir: <absolute-git-common-directory>
+stable_host_identity: <value-or-unavailable>
+stable_environment_identity: <value-or-unavailable>
+installed_skill_root: <canonical-absolute-skill-root>
+installed_skill_identity: <git-origin-and-commit-or-installed-tree-digest>
+binding_source: direct-owner-root-invocation
+END_ROUNDLET_ROOT_ACTIVATION_BINDING
 ```
+
+Do not represent this as `CREATOR_TASK_BINDING_ATTESTATION`: the root did not create itself. Require a direct owner instruction source/digest, exact current task identity, route, project/workspace/CWD/common-directory identity, configured Orchestrator profile, and one exact installed-skill root. An unavailable stable host/environment identity is allowed only when the host does not expose it. A missing current task ID, project/CWD mismatch, observed profile contradiction, non-direct owner request, or ambiguous skill root fails closed before activation.
+
+### Complete preflight
+
+The same root task performs every check below without selecting or implementing an issue:
+
+1. **Installed contract.** Canonicalize the installed skill root and require exactly the seven bundle inputs beneath it: `SKILL.md`, `agents/openai.yaml`, `references/launcher.md`, `references/operator-guide.md`, `references/repository-authority.md`, `references/roundlet-config.json`, and `references/thread-prompts.md`. Record paths and byte identities before repository access and require the same map around bundle materialization. For a verified Git source, read bundle bytes from the exact commit object; otherwise classify it as `installed-tree` without Git provenance.
+2. **Repository identity.** Fetch and resolve the exact origin/default branch, authoritative checkout, local `main`, `origin/main`, and `HEAD`. Require a clean checkout with `HEAD == main == origin/main`, matching GitHub identity, and `.roundlet/` excluded only by local `.git/info/exclude`.
+3. **Authority.** Read root `AGENTS.md` from authoritative `origin/main`. Require exactly one valid Roundlet authority block, every documented key exactly once as lowercase Boolean, `roundlet.enabled: true`, and the direct owner in `owner_allowlist`. Bind the authority commit/blob, applicable delegation clauses, and restrictions. Record false switches at their later boundaries; never exercise a mutation to test authority.
+4. **Freshness.** Reconcile `.roundlet/`, former contracts/state, trace, pull requests, issue refs, linked worktrees, tasks, Worker generations, Supervisors, route probes, leases, and heartbeats. Classify declared validation caches, retained issue evidence, and verified empty tombstones separately. Any live, stale, conflicting, or unreconciled ownership stops with `STALE_OR_ACTIVE_RUN_REQUIRES_OWNER`; never expire, steal, overwrite, or reuse it.
+5. **Configuration.** Parse `roundlet-config.json` without defaults or overrides. Require the configured root profile to match the current task, unique Supervisor profiles, ordered profile count equal to `review.max_supervisor_attempts_per_round`, positive review/heartbeat/cleanup/task-creation bounds, strictly increasing backoff arrays beginning at `active_minutes`, exact `worker_recovery.continuation_policy: until-active-leaf-terminal`, exact `worker_recovery.max_active_generations: 1`, positive `worker_recovery.terminal_confirmation_observations`, integer `review.max_rounds: 10`, and a supported merge method. Reject legacy numeric Worker replacement caps and never derive Supervisor limits from Worker policy.
+6. **Host/service capability.** Verify task create/address/wait/inspect/archive controls, recurring-heartbeat create/inspect/update/pause/resume/remove controls, Git/filesystem/worktree routes, GitHub issue/PR access, authenticated identity, branch/rule/check inspection, and merge-commit capability. A host denial is recorded as such and is never repaired by changing roles or routes.
+7. **Saved project and route probe.** Resolve exactly one writable saved Git project by canonical checkout path and Git common directory. Before reserving a run ID, create one unpublished local probe ref at exact `origin/main`, durably record its creation intent, and asynchronously request one metadata-only Supervisor-profile project/worktree task. Reconcile `INTENT -> REQUESTED -> PENDING -> BOUND`; keep client/operation identity separate from the final task ID. Require a distinct App-managed CWD, detached clean `HEAD == origin/main`, matching common directory/ref/SHA, and no tombstone reuse. Archive the probe, observe the combined task/registration/path predicate for at most `cleanup.settlement_seconds`, append one terminal cleanup result, and delete the probe ref only by exact old-SHA comparison. An outcome-unknown request is not retried; inability to recover it is a capability gap and blocks activation.
+8. **Repository extensions.** Resolve any declared validation-toolchain, external-validation, or lifecycle-observation contract to exact authoritative path/blob identities without provisioning, credentials, external action, route selection, or sink arming.
+9. **Backlog.** Scan all open issues, formal parent/sub-issue and blocking relationships, and Canonical scheduling notes. Classify actionable leaves and declared external-validation/lifecycle routes, but do not select one.
+
+For `gh`, a failure before GitHub is reachable is connectivity evidence. Request the narrowest scoped network approval for the same command and retry boundedly. Never substitute browser authentication or browser automation.
+
+### Activate the same root
+
+Only after the complete preflight passes:
+
+1. Reserve one new unguessable run ID.
+2. Build `.roundlet/contracts/<contract-id>/` from the exact seven inputs and resolved configuration. Use unique POSIX paths sorted by unsigned UTF-8 bytes, SHA-256 file identities, the `roundlet-tree/v1` digest, RFC 8785 canonical manifest, and a lowercase content-derived contract ID. Materialize through a new staging path, recheck the source identities, finalize atomically, and read every byte/hash/identity back. Never mix installed generations.
+3. Create and read back `.roundlet/lease.json` and `.roundlet/current.md` in state `ACTIVATING`. Bind the target, owner, root activation binding, saved project/common directory, verified route-probe receipt, run/contract, configuration, completion-bound Worker continuation policy, generation ledger, and empty heartbeat field. The lease has no expiry.
+4. In this same task, reread and verify the finalized bundle, repository, authority, task/root binding, backlog, and advisory files. Record state `IDLE` without selecting an issue and persist:
+
+   ```text
+   ACTIVATION_READY run=<run-id> contract=<contract-id> orchestrator=<root-task-id> target=<owner/repository> state=IDLE
+   ```
+
+5. Create exactly one recurring heartbeat at `heartbeat.active_minutes`, targeting this same root task. Its instruction is to read only the pinned bundle, run one idempotent tick, fully reconcile whenever required, make at most one externally meaningful transition, persist the complete short-turn status, and maintain the configured phase-aware interval.
+6. Write/read back the heartbeat identity in both advisory files, independently inspect its target and schedule, and persist:
+
+   ```text
+   HEARTBEAT_BOUND run=<run-id> contract=<contract-id> orchestrator=<root-task-id> heartbeat=<heartbeat-id> interval=<minutes>m
+   ```
+
+7. Perform exactly one initial tick in this same task. Report the run/contract/root/heartbeat identities and continue as the long-lived Orchestrator.
+
+Never create a Launcher or second Orchestrator. Never attach the heartbeat elsewhere. Never continue after partial bundle, binding, heartbeat, task-create, or cleanup read-back.
+
+## Physical Worker replacement
+
+Worker replacement is ordinary recovery inside the existing root Orchestrator, not root recovery and not an owner prompt, but only while every pinned condition holds.
+
+1. A slow turn, delayed UI, missing commentary, or task summary is insufficient. Require the configured number of fresh observations to prove the current physical task context/session is terminal and cannot accept another turn.
+2. Record `ACTIVE(g) -> QUIESCING`. Stop new dispatch, mutation, publication, and cleanup against generation `g`.
+3. Inventory the exact task/worktree/ref/SHA, commits, dirty/index/untracked state, validation evidence, current objective/findings/final-repair state, and pending creation or external effects. Preserve unique bytes/commits and a durable handoff independently; do not rely on the old Worker's final prose.
+4. Record `PRESERVED`, then reconcile every pending effect through authoritative read-back. Unknown Git/GitHub/external/task effects block without retry. Only after `RECONCILED` may the Orchestrator archive generation `g`, obtain its terminal task-worktree cleanup result, and record `REPLACEMENT_READY`.
+5. Recheck the original owner scope, current authoritative policy, no STOP/revocation, one-active-generation invariant, and that the same active leaf/PR lifecycle remains nonterminal with an authorized objective still incomplete. There is no numeric replacement exhaustion state. A host-policy denial, unresolved effect, unsafe preservation state, owner-input boundary, terminal/aborted leaf, or lack of a safe actionable continuation still blocks replacement with all work retained.
+6. Before create, record a stable generation `g+1` creation intent with logical Worker ID, role/profile/project/ref/expected SHA/run/leaf/generation and current formal review/final-repair tuple. Reconcile asynchronous creation to exactly one final task ID. Outcome unknown never causes a second create.
+7. Verify the new detached App-managed worktree at the preserved exact SHA and common directory. Copy the creator attestation plus durable checkpoint into the first populated turn. The new generation independently verifies preserved content and completes any missing validation before continuing.
+8. Record `ACTIVE(g+1)`. Late output or effects from generation `g` are stale and may not advance state. Replacement never resets run, review epoch/round/attempt, candidate history, external sequence, lifecycle window, final-repair allowance, or accepted PASS/FINDINGS.
 
 ## Explicit recovery
 
-Use recovery only after an allowlisted owner explicitly directs it. Recovery uses the existing run's immutable bundle; an installed update is never adopted. If the owner wants a newer skill, stop and clean the old run and use New activation.
+### Same-root resume
 
-Create the recovery Launcher against the authoritative checkout using the old bundle's configured Orchestrator profile. Its first prompt is only the `ROUNDLET_ROLE_METADATA_REPORT_REQUEST` from `thread-prompts.md` with requested role `LAUNCHER`, the old bundle's exact model/effort, route `LOCAL_PROJECT`, the uniquely resolved saved-project identity, and the authoritative workspace/CWD. Treat the response as advisory, independently build the creator binding attestation, use one bounded creator re-read for an explicit contradiction, and archive/stop only on failed authoritative evidence. Then replace every recovery placeholder below, including the recovery Launcher/creator task IDs and stable host/environment identities, copy the complete attestation into the fixed block, and send the populated recovery prompt to that same task:
+When the original root task and heartbeat remain addressable, a failed or compacted turn resumes in that same task. Verify `ROUNDLET_ROOT_ACTIVATION_BINDING`, the pinned bundle, heartbeat, advisory state, GitHub/Git/tasks, current Worker generation, pending effects, completion-bound continuation policy, and formal review tuple. Then perform at most one idempotent tick. Do not create another root or heartbeat.
 
-```text
-Act as a short-lived Roundlet recovery Launcher for exactly one previously activated target. Do not invoke or load the installed `$roundlet` skill.
+### Root unavailable
 
-Target:
-- GitHub repository: <OWNER/REPOSITORY>
-- Authoritative local checkout: <ABSOLUTE_PATH>
-- Existing run ID, if known: <RUN_ID_OR_UNKNOWN>
-- Expected recovery Launcher task ID: <RECOVERY_LAUNCHER_TASK_ID>
-- Expected recovery Launcher creator/source task ID: <RECOVERY_CREATOR_TASK_ID>
-- Expected recovery Launcher model/effort: <MODEL> / <EFFORT>
-- Expected recovery stable host/environment identity: <STABLE_HOST_IDENTITY_OR_UNAVAILABLE> / <STABLE_ENVIRONMENT_IDENTITY_OR_UNAVAILABLE>
-- Owner-authorized Orchestrator/heartbeat replacement: <true|false>
-- Owner recovery instruction: <EXACT_OWNER_INSTRUCTION>
+Root provenance cannot be transferred automatically. Only an allowlisted owner may create a new repository task and directly invoke `$roundlet` with an explicit instruction to recover the named target/run and replace the unavailable root/heartbeat. The new task constructs a fresh root activation binding for itself, locates the old advisory pointer and fully verifies the old immutable bundle before reading it, and treats the installed skill as unrelated candidate material.
 
-Creator binding authority:
-CREATOR_TASK_BINDING_ATTESTATION
-role_task: <RECOVERY_LAUNCHER_TASK_ID>
-creator_task: <RECOVERY_CREATOR_TASK_ID>
-requested_role: LAUNCHER
-execution_profile: model=<MODEL>;reasoning_effort=<EFFORT>
-task_route: LOCAL_PROJECT
-requested_saved_project: <PROJECT_ID_AND_ABSOLUTE_PATH>
-task_workspace: <ABSOLUTE_PATH>
-task_cwd: <ABSOLUTE_PATH>
-git_common_dir: <ABSOLUTE_GIT_COMMON_DIR>
-starting_ref: not-applicable
-starting_sha: not-applicable
-stable_host_identity: <STABLE_HOST_IDENTITY_OR_UNAVAILABLE>
-stable_environment_identity: <STABLE_ENVIRONMENT_IDENTITY_OR_UNAVAILABLE>
-binding_source: creator-immutable-readback
-END_CREATOR_TASK_BINDING_ATTESTATION
+Reconcile every role generation, task creation intent/operation/final ID, cleanup ledger, GitHub trace, ref/worktree, candidate/review tuple, validation/external/lifecycle binding, pending effect, and heartbeat. If the old root or heartbeat is live, identity is ambiguous, the bundle is incomplete, or unique work cannot be attributed, stop with `RECOVERY_OWNER_DECISION_REQUIRED` and replace nothing. When both are conclusively unavailable and the owner's direct instruction expressly permits replacement, remove only the stale heartbeat, adopt the existing run under a recorded root-recovery event, create one new heartbeat bound to the new root, and make one recovery tick. Preserve the old run/contract, completion-bound Worker policy and generation ledger, and formal review bounds/tuple; never import installed updates or manufacture a new epoch.
 
-Before reading any advisory activation pointer or contract bundle, read exactly one complete creator binding attestation from this prompt and verify it against the creator-supplied task/creator IDs, requested role, profile, workspace/CWD, stable host/environment identity, and binding source. Do not discover or require a role-side immutable self-metadata route. Missing, duplicate, malformed, stale, or mismatched fields fail closed before any recovery work.
-
-Only after that validation succeeds, read the advisory activation pointers, resolve the one immutable activation bundle, verify it completely, then read its SKILL.md and every required reference. Treat the installed skill only as an unrelated candidate that cannot enter this run.
-
-1. Perform the bundle's repository, authority, GitHub, host, and capability preflight.
-2. Reconcile lease/current state, activation bundle, saved-project request and Git common-directory identity, GitHub traces and pull requests, branches, App-managed worktrees, typed empty task-worktree tombstones, checks, exact candidate SHA, all identifiable role tasks and recorded creator binding attestations, every selected external-validation path/blob/repository/commit/action/schema/opaque-sequence/evidence-time/read-back identity, every selected lifecycle-sink contract/plan/window/sequence/head/seal/retention identity, the independent formal Supervisor tuple, and all heartbeats. Reuse each stable attestation normally. Treat any repository-declared validation cache, retained lifecycle ledger, complete retained issue-evidence area, and still-valid tombstone ledger as retained host-owned state, not run ownership; verify applicable receipt/digest evidence but do not remove, rebuild, adopt, or backfill it during recovery. If contradictory immutable creator-side, route/worktree, external-validation, lifecycle-sink, or formal-review evidence appears, perform exactly one bounded re-read against the recorded identity; unresolved conflict fails closed without a second task, attestation, dispatch, trace, substituted route, copied sequence, synthesized event, or reset review epoch.
-3. If the old Orchestrator or heartbeat is live, ownership is ambiguous, the bundle is incomplete, or unique work cannot be attributed, stop with `RECOVERY_OWNER_DECISION_REQUIRED`. Do not replace or delete anything.
-4. If both old Orchestrator and heartbeat are conclusively unavailable, reconstruct the phase from durable GitHub and Git evidence. Preserve the run ID only when identity is certain; otherwise stop for owner input.
-5. Never silently replace an active or inaccessible Worker. Return `WORKER_REPLACEMENT_REQUIRES_OWNER`.
-6. Only when `Owner-authorized Orchestrator/heartbeat replacement` is exactly `true` and the owner instruction expressly authorizes it, create exactly one replacement Orchestrator from the old pinned bundle. Give it only the role metadata report request first, record one creator binding attestation after immutable read-back, and require without advancing work:
-   `RECOVERY_READY run=<run-id> contract=<contract-id> orchestrator=<replacement-task-id> state=<reconstructed-phase> transition=none`
-7. After that acknowledgement, remove only a conclusively stale heartbeat, create one replacement heartbeat at `active_minutes`, bind it only to the replacement Orchestrator, update and read back advisory state, and send one recovery tick.
-8. Report every retained, replaced, removed, or unresolved resource and archive this recovery Launcher.
-
-Fail closed at every ambiguity. Never infer consent for abort, cleanup, merge, issue closure, task replacement, or changing the active contract.
-```
+No recovery path infers consent for abort, cleanup, merge, issue closure, Worker replacement outside the same nonterminal leaf and preserved objective, or contract migration.

@@ -18,12 +18,11 @@ Roundlet is a lightweight, prompt-native Codex skill for running one GitHub issu
 
 ```mermaid
 flowchart LR
-    O["Owner"] --> L["Short-lived Launcher"]
-    L --> C["Immutable activation bundle"]
-    L --> R["Long-lived Orchestrator"]
-    L --> H["One recurring heartbeat"]
+    O["Owner invokes $roundlet"] --> R["Root activation + long-lived Orchestrator"]
+    R --> C["Immutable activation bundle"]
+    R --> H["One recurring heartbeat"]
     H --> R
-    R --> W["Persistent Worker project worktree"]
+    R --> W["Logical Worker / current physical generation"]
     R --> S["Fresh read-only Supervisor project worktree"]
     W --> X["Exact candidate SHA"]
     S --> X
@@ -45,7 +44,7 @@ flowchart TD
     H --> A
 ```
 
-The inner loop keeps the same Worker task and App-managed worktree for implementation and repairs. Each review attempt gets a fresh, separate read-only Supervisor worktree. They share repository identity and the exact full candidate SHA, not a physical directory. A valid PASS ends review. Findings return to the same Worker. Invalid or unavailable Supervisor attempts use the next configured profile without consuming a review round.
+The inner loop keeps one logical Worker for implementation and repairs. It normally reuses the same physical task/worktree; a conclusively terminal context may be replaced without a numeric generation cap only after unique work is preserved and pending effects reconcile, and only while the same active leaf/PR lifecycle remains nonterminal. Each review attempt gets a fresh, separate read-only Supervisor sibling. They share repository identity and the exact full candidate SHA, not a physical directory. A valid PASS ends review. Findings return through the Orchestrator to the current Worker generation. Replacement never resets formal review or final-repair state, and the independent Supervisor limit remains 10 formal rounds.
 
 GitHub issues and pull requests are durable scheduling/audit state. Local `.roundlet/` files are recovery pointers only. The Orchestrator is the sole GitHub writer. The authoritative routing matrix is in [`operator-guide.md`](skills/roundlet/references/operator-guide.md#canonical-destination-matrix): selection, owner/scope, initial Worker, and draft-PR events stay on the issue; post-PR candidate, validation, repair, and review evidence uses the top-level PR Conversation; merge state comes from the PR; leaf lifecycle and cleanup return to the issue. Every write is read back from the same selected surface, and ambiguous retries search both conversations for the stable event marker first.
 
@@ -58,8 +57,8 @@ GitHub issues and pull requests are durable scheduling/audit state. Local `.roun
 - Recurring heartbeat creation, inspection, update, pause/resume, and removal.
 - Git and an authenticated GitHub route with issue, pull request, branch, review/check, and merge access.
 - Every exact model and reasoning effort in [`roundlet-config.json`](skills/roundlet/references/roundlet-config.json).
-- The creator's ability to read immutable task identity, creator/source task, configured model/effort, workspace/project, canonical CWD, and available stable host/environment identity independently of role output, then transport the resulting complete attestation into a top-level Launcher prompt. The Launcher role itself does not need an immutable self-metadata route.
-- The creator's ability to resolve the reviewed installed Roundlet skill to one canonical absolute root and place it in the populated Launcher prompt. The Launcher reads only that path and does not depend on the skill appearing in its role-side catalog.
+- The owner-created root task's ability to bind its direct owner instruction, current task/profile/project/CWD/common-directory identity, and exact installed-skill root without pretending it created itself.
+- Child-task creation that exposes a stable operation/client identity and can reconcile it to one immutable final task ID; an outcome-unknown create must not be retried.
 - A clean authoritative local checkout for the target repository.
 - When the target explicitly declares a validation-toolchain contract, any system-discoverable bootstrap interpreter satisfying that repository's stated version. It invokes only the repository resolver and is not build/test evidence.
 
@@ -95,6 +94,7 @@ Read the installed `SKILL.md` and all references. Validate:
 - distinct non-authoritative role-report and creator-authoritative binding-attestation contracts;
 - Supervisor profile count/name consistency;
 - heartbeat interval arrays and full-reconciliation bound;
+- asynchronous task-creation reconciliation and completion-bound Worker continuation;
 - review limits and merge method;
 - owner allowlist;
 - independent machine-readable normal remote-branch create/update and draft-PR authority switches;
@@ -175,24 +175,23 @@ A runnable leaf provides live scope, boundaries, acceptance intent, and dependen
 
 ## Activation
 
-Open [`launcher.md`](skills/roundlet/references/launcher.md#new-activation), resolve the reviewed installed skill to one canonical absolute root, fill only the explicit placeholders, and create one Launcher directly against the authoritative checkout using the requested Launcher model/effort.
+In an owner-created task for the authoritative saved Git project, explicitly invoke `$roundlet` using its owner-visible default prompt. That same task follows [`New activation`](skills/roundlet/references/launcher.md#new-activation), performs preflight, and remains the Orchestrator. Do not create a Launcher or copy a separate full authorization prompt into a child task.
 
-The Launcher receives one complete creator-verified binding attestation and the exact installed-skill root in its populated prompt, validates both without role-side immutable self-metadata or skill-catalog discovery, and binds the root's exact seven-file identity map before repository access and again around bundle materialization, then:
+The root records a distinct `ROUNDLET_ROOT_ACTIVATION_BINDING` from the direct owner turn and current task/project evidence, resolves one exact installed-skill root, and binds its seven-file identity map before repository access and around bundle materialization. It then:
 
-1. validates the creator-attested immutable profile and writable-checkout binding;
-2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities, including one metadata-only project/worktree route probe with detached exact-SHA read-back and a terminal cleanup receipt produced only after the combined task/registration/path predicate settles or its activation-pinned cleanup bound (120 seconds in the reviewed configuration) expires, before any run ID exists;
+1. validates direct owner provenance, configured Orchestrator profile, and writable-checkout binding;
+2. proves repository/GitHub/owner/authority/model/task/heartbeat/Git/filesystem/approval capabilities, including one metadata-only project/worktree route probe whose creation operation is reconciled to one final task and whose detached exact-SHA cleanup receipt settles before any run ID exists;
 3. discovers and checks any explicitly declared repository validation-toolchain capability, external-validation contract, and optional lifecycle-observation contract path/blob identities without provisioning or invoking them;
 4. reconciles every old local/remote Roundlet resource and fails closed on stale ownership;
 5. scans the complete backlog and Canonical scheduling notes without selecting an issue;
 6. reserves a new run ID;
 7. builds and reads back one immutable activation bundle;
 8. creates and reads back advisory lease/current state;
-9. creates exactly one configured Orchestrator and records its creator-authoritative task-binding attestation independently of any role metadata report;
-10. requires exact `ACTIVATION_READY` without issue selection;
-11. creates exactly one heartbeat bound only to the Orchestrator and requires exact `HEARTBEAT_BOUND`;
-12. verifies all identities, sends one initial tick, reports the activation, and archives itself.
+9. records exact `ACTIVATION_READY` in the same root task without issue selection;
+10. creates exactly one heartbeat bound to that same task and records exact `HEARTBEAT_BOUND`;
+11. verifies all identities, performs one initial tick, reports the activation, and remains the Orchestrator.
 
-The Launcher never implements an issue and never owns the heartbeat.
+The activation phase never implements an issue. The root task owns both the activation provenance and the heartbeat target.
 
 ## Operation
 
@@ -206,13 +205,13 @@ Use the copyable prompts in [`operator-guide.md`](skills/roundlet/references/ope
 - stop-after-current;
 - active-issue abort decisions.
 
-If the original Orchestrator or heartbeat is inaccessible, use [`Explicit recovery`](skills/roundlet/references/launcher.md#explicit-recovery). Recovery uses the old bundle; it never imports an installed update.
+If the original root Orchestrator or heartbeat is inaccessible, use [`Explicit recovery`](skills/roundlet/references/launcher.md#explicit-recovery) from a new owner-created repository task with a fresh direct recovery instruction. Recovery uses the old bundle; it never imports an installed update.
 
 ### Scheduling and claim
 
 On full reconciliation, Roundlet scans all open issues, formal relationships, blocking edges, canonical notes, labels, comments, active branches, and pull requests. It ranks ready leaf/standalone candidates by canonical order, priority, stated blocker-removal value, then oldest issue number.
 
-Selection remains read-only while provisioning. The Orchestrator resolves the unique saved project, creates an unpublished candidate ref, and creates the persistent Worker through the App-managed project/worktree task route. It publishes and reads back selection on the leaf issue only after detached `HEAD`, actual worktree CWD, canonical Git common directory, exact starting SHA, non-reuse of retained tombstones, clean base, and Worker identity read back correctly.
+Selection remains read-only while provisioning. The Orchestrator resolves the unique saved project, creates an unpublished candidate ref and logical Worker ID, records one generation-1 creation intent, and creates the physical Worker once through the App-managed project/worktree route. It reconciles the async operation to one final task and publishes selection only after detached `HEAD`, actual worktree CWD, canonical Git common directory, exact starting SHA, non-reuse of retained tombstones, clean base, and logical/generation/task identity read back correctly.
 
 ### Review and merge
 
@@ -221,7 +220,7 @@ Selection remains read-only while provisioning. The Orchestrator resolves the un
 - Before creating a Supervisor, the Orchestrator semantically reads back the exact initial-candidate basis or, after FINDINGS, the accepted result, same-Worker repair, remote head, and canonical candidate-movement trace. Missing or conflicting evidence remains pending and creates no review task.
 - Every Supervisor starts in a fresh detached worktree at the exact candidate. The Orchestrator independently requires matching clean pre/post worktree and exact-candidate-ref snapshots, excluding unrelated refs in the shared common directory; the Supervisor's own `read_only` claim is not proof.
 - After creator metadata exists and immediately before review work, the Orchestrator validates one fully populated shared envelope, dispatch attestation, review block, and required structured-result schema. Marker, placeholder, task/profile, tuple/mode, repository, leaf, PR, base, candidate, and trace mismatches return to reconciliation without consuming review accounting.
-- A valid FINDINGS consumes its formal round. After the same Worker repairs and the candidate changes, review continues in the same epoch at the next round's attempt 1; a changed candidate is never a fallback attempt in the prior round.
+- A valid FINDINGS consumes its formal round. After the current generation of the same logical Worker repairs and the candidate changes, review continues in the same epoch at the next round's attempt 1; a changed candidate is never a fallback attempt in the prior round.
 - Repository-owned external-validation sequence values remain separate from the formal Supervisor epoch/round/attempt. They cannot dispatch a Supervisor, satisfy review, or enter the merge gate. A misbound review is interrupted before verdict acceptance or trace and is recreated at the correct formal tuple.
 - A selected lifecycle-observation window remains separate from formal review accounting and must be sealed/verified for the terminal candidate before its evidence can satisfy a merge gate.
 - Supervisor-result and Worker-repair-handoff traces must be published and read back on the canonical surface before review state advances. A retryable missing trace remains pending rather than becoming owner input.
@@ -254,19 +253,19 @@ Each append receipt is read back before Roundlet advances that transition. Candi
 
 ### Cleanup
 
-The same Worker performs read-only cleanup preflight. The Orchestrator then:
+The current Worker generation performs read-only cleanup preflight when reachable; otherwise the Orchestrator performs the same checks independently from refreshed authoritative evidence. Cleanup never depends on an exhausted Worker context. The Orchestrator then:
 
 1. reads the live merge/leaf identities, fetches exact remote main and issue refs, and proves the merge commit locally before ancestry review;
-2. verifies merge/leaf/remote/Worker-worktree/unique-work state through the same Worker;
-3. archives the Worker, observes the combined task/registration/path cleanup predicate for at most the activation-pinned `cleanup.settlement_seconds` value, stops immediately when cleanup succeeds, and appends exactly one terminal task-worktree cleanup result with the pinned bound, actual elapsed wait, and observation count;
-4. consumes the run-local cleanup ledger for every Worker and Supervisor, inventories every Orchestrator-created auxiliary worktree/state root, and hash-retains unique evidence-bearing artifacts under the repository-declared retention boundary;
+2. verifies merge/leaf/remote/all-Worker-generation/unique-work state and reconciles every pending effect;
+3. archives the current generation, observes the combined task/registration/path cleanup predicate for at most the pinned bound, and appends exactly one terminal result; retired generations already have their own immutable results;
+4. consumes the run-local ledger for every Worker generation, Supervisor, creation operation, and route probe, inventories all auxiliary resources, and hash-retains unique evidence-bearing artifacts under the repository-declared retention boundary;
 5. removes any remaining exact linked-worktree registrations non-force only after unique-work and retention proof;
 6. verifies registrations and physical paths are absent, or records a strictly empty, unregistered, no-`.git`, archived/non-active App-managed path as a typed local tombstone when the bounded cleanup-settlement observation reaches that complete predicate;
-7. deletes exact local/remote issue branches when authorized and safe;
+7. deletes exact local/remote issue branches only when current refs/SHAs, ancestry, inactive ownership, authority, and retention all reconcile;
 8. fetches and fast-forwards authoritative `main`;
 9. proves a clean `HEAD == main == origin/main`;
 10. retains issue evidence, every sealed or diagnostic lifecycle window, and any repository-declared shared validation cache;
-11. returns to IDLE or stops after current.
+11. records per-generation worktree, local-branch, remote-branch, heartbeat, and advisory-state results; returns to IDLE or records/read-backs `STOPPED` before root self-archive.
 
 Task archival is not itself cleanup completion: Codex App may remove registration and path state asynchronously. Interim read-only observations are nonterminal; Roundlet records only the final combined snapshot when removal/tombstone succeeds or the deadline expires. If ref refresh, retention, registration removal, a non-empty path, or any ownership/read-back check remains unresolved at that deadline, stop cleanup, diagnose the exact conflict, and preserve evidence. A verified typed empty task-worktree tombstone is local host-lifecycle evidence and does not block the next issue; it is never reused or silently forgotten. Never infer ancestry, kill Codex or Node, force-remove unknown work, or broaden the cleanup target.
 
@@ -297,10 +296,11 @@ WSL, Linux, macOS, and other hosts use the same repository project/worktree topo
 - Every run reads one immutable activation bundle; Git-sourced bundles use exact commit-object bytes, not filterable checkout bytes.
 - Repository-declared validation uses candidate/lock/receipt-bound tools; a discovered bootstrap interpreter cannot satisfy validation evidence, and the shared cache is retained separately from run state.
 - Installed drift never silently changes a live run.
-- Every task has at most one creator-authoritative binding attestation covering immutable task ID, creator/source task, requested role, profile, project/workspace, CWD, and available stable host/environment identity. The external creator transports the top-level Launcher's complete attestation in its populated prompt; later creators copy child attestations into their role envelopes and advisory state. Role metadata reports are advisory and cannot satisfy, alter, or invalidate that binding.
+- The owner-created root has one direct root activation binding; it never fabricates a creator attestation for itself. Every child task has one stable creation intent/operation, final task ID, and creator-authoritative binding attestation. Role metadata reports are advisory and cannot satisfy, alter, or invalidate those records.
 - GitHub is the durable trace; local files never override live Git/GitHub evidence.
 - Lightweight observations never authorize mutation.
-- Only one active leaf and Worker exist per run.
+- Only one active leaf and logical Worker exist per run, with at most one active physical generation.
+- Worker replacement requires confirmed terminal context, preserved unique work, reconciled pending effects, the same nonterminal active leaf/PR, and an incomplete authorized objective. It has no numeric generation cap, permits only one active generation, and cannot bypass a denial or reset review/final-repair state. Supervisor review remains independently capped at 10 formal rounds; Worker continuation cannot create round 11.
 - Only the Orchestrator mutates GitHub.
 - Supervisors are fresh and read-only.
 - Normal remote branch creation, normal fast-forward update, and draft-PR creation each require their own live machine-readable authority switch; none is inferred from `enabled` or prose.
@@ -325,5 +325,5 @@ For every skill change:
 5. run the current system `skill-creator/scripts/quick_validate.py skills/roundlet`;
 6. parse JSON/YAML and check links, source layout, prohibited artifacts, Markdown fences, and `git diff --check`;
 7. independently review the exact candidate;
-8. when mutation behavior changes, run one owner-authorized complete forward cycle through Launcher, Orchestrator, Worker, Supervisor, draft PR, ready, merge commit, leaf close, and cleanup;
+8. when mutation behavior changes, run one separately owner-authorized complete forward cycle through same-root activation, Orchestrator, Worker, Supervisor, draft PR, ready, merge commit, leaf close, and cleanup, including later-wake Supervisor creation and a controlled terminal-Worker replacement scenario when applicable;
 9. use a focused draft PR, merge commit, and ordered branch/worktree cleanup.
