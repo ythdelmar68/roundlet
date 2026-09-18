@@ -325,5 +325,5 @@ For every skill change:
 5. run the current system `skill-creator/scripts/quick_validate.py skills/roundlet`;
 6. parse JSON/YAML and check links, source layout, prohibited artifacts, Markdown fences, and `git diff --check`;
 7. independently review the exact candidate;
-8. when mutation behavior changes, run one separately owner-authorized complete forward cycle through same-root activation, Orchestrator, Worker, Supervisor, draft PR, ready, merge commit, leaf close, and cleanup, including later-wake Supervisor creation and a bounded Worker-replacement scenario when applicable;
+8. when mutation behavior changes, run one separately owner-authorized complete forward cycle through same-root activation, Orchestrator, Worker, Supervisor, draft PR, ready, merge commit, leaf close, and cleanup, including later-wake Supervisor creation and a controlled terminal-Worker replacement scenario when applicable;
 9. use a focused draft PR, merge commit, and ordered branch/worktree cleanup.
