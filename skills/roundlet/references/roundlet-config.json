@@ -47,8 +47,8 @@
     "reconciliation_seconds": 120
   },
   "worker_recovery": {
-    "max_replacements_per_leaf": 1,
-    "max_replacements_per_run": 2,
+    "continuation_policy": "until-active-leaf-terminal",
+    "max_active_generations": 1,
     "terminal_confirmation_observations": 2
   },
   "cleanup": {

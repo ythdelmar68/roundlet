@@ -51,10 +51,9 @@ pull_request: <number-and-url-or-none>
 phase: <phase>
 logical_worker: <stable-logical-worker-id-or-not-applicable>
 worker_generation: <positive-integer-or-not-applicable>
-worker_replacements_consumed_leaf: <nonnegative-integer-or-not-applicable>
-worker_replacements_remaining_leaf: <nonnegative-integer-or-not-applicable>
-worker_replacements_consumed_run: <nonnegative-integer-or-not-applicable>
-worker_replacements_remaining_run: <nonnegative-integer-or-not-applicable>
+worker_continuation_policy: <until-active-leaf-terminal-or-not-applicable>
+worker_total_generations: <positive-integer-or-not-applicable>
+worker_max_active_generations: <1-or-not-applicable>
 review_epoch: <positive-integer-or-0-before-review>
 review_round: <positive-integer-or-0-before-review>
 review_mode: <COMPLETE|CONVERGING|NOT_APPLICABLE>
@@ -316,7 +315,7 @@ pending_task_creation: <intent/operation/state-or-none>
 pending_effect: <operation/readback-state-or-none>
 awaited_condition: <bounded-condition-or-none>
 next_wake_or_check: <rfc3339-utc-or-direct-owner-only>
-replacement_budget: <leaf-consumed/leaf-remaining/run-consumed/run-remaining-or-not-applicable>
+worker_continuation: <until-active-leaf-terminal/current-generation/total-generations/max-active-1-or-not-applicable>
 retained_work: <checkpoint/retention-status-or-none>
 cleanup_status: <resource-inventory-summary-or-not-applicable>
 heartbeat_interval: <minutes-or-paused>

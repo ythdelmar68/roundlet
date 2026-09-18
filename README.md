@@ -44,7 +44,7 @@ flowchart TD
     H --> A
 ```
 
-The inner loop keeps one logical Worker for implementation and repairs. It normally reuses the same physical task/worktree; a conclusively terminal context may be replaced within strict per-leaf and per-run budgets only after unique work is preserved and pending effects reconcile. Each review attempt gets a fresh, separate read-only Supervisor sibling. They share repository identity and the exact full candidate SHA, not a physical directory. A valid PASS ends review. Findings return through the Orchestrator to the current Worker generation. Replacement never resets formal review or final-repair state.
+The inner loop keeps one logical Worker for implementation and repairs. It normally reuses the same physical task/worktree; a conclusively terminal context may be replaced without a numeric generation cap only after unique work is preserved and pending effects reconcile, and only while the same active leaf/PR lifecycle remains nonterminal. Each review attempt gets a fresh, separate read-only Supervisor sibling. They share repository identity and the exact full candidate SHA, not a physical directory. A valid PASS ends review. Findings return through the Orchestrator to the current Worker generation. Replacement never resets formal review or final-repair state, and the independent Supervisor limit remains 10 formal rounds.
 
 GitHub issues and pull requests are durable scheduling/audit state. Local `.roundlet/` files are recovery pointers only. The Orchestrator is the sole GitHub writer. The authoritative routing matrix is in [`operator-guide.md`](skills/roundlet/references/operator-guide.md#canonical-destination-matrix): selection, owner/scope, initial Worker, and draft-PR events stay on the issue; post-PR candidate, validation, repair, and review evidence uses the top-level PR Conversation; merge state comes from the PR; leaf lifecycle and cleanup return to the issue. Every write is read back from the same selected surface, and ambiguous retries search both conversations for the stable event marker first.
 
@@ -94,7 +94,7 @@ Read the installed `SKILL.md` and all references. Validate:
 - distinct non-authoritative role-report and creator-authoritative binding-attestation contracts;
 - Supervisor profile count/name consistency;
 - heartbeat interval arrays and full-reconciliation bound;
-- asynchronous task-creation reconciliation and finite Worker-replacement bounds;
+- asynchronous task-creation reconciliation and completion-bound Worker continuation;
 - review limits and merge method;
 - owner allowlist;
 - independent machine-readable normal remote-branch create/update and draft-PR authority switches;
@@ -300,7 +300,7 @@ WSL, Linux, macOS, and other hosts use the same repository project/worktree topo
 - GitHub is the durable trace; local files never override live Git/GitHub evidence.
 - Lightweight observations never authorize mutation.
 - Only one active leaf and logical Worker exist per run, with at most one active physical generation.
-- Worker replacement requires confirmed terminal context, preserved unique work, reconciled pending effects, and remaining pinned per-leaf/per-run budgets. It cannot bypass a denial or reset review/final-repair state.
+- Worker replacement requires confirmed terminal context, preserved unique work, reconciled pending effects, the same nonterminal active leaf/PR, and an incomplete authorized objective. It has no numeric generation cap, permits only one active generation, and cannot bypass a denial or reset review/final-repair state. Supervisor review remains independently capped at 10 formal rounds; Worker continuation cannot create round 11.
 - Only the Orchestrator mutates GitHub.
 - Supervisors are fresh and read-only.
 - Normal remote branch creation, normal fast-forward update, and draft-PR creation each require their own live machine-readable authority switch; none is inferred from `enabled` or prose.
